@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appConfigSchema, createReviewEvent, type AppConfig, type ReviewEvent } from "@aicr/core";
-import { closeStoreDb, createStoreDb, findImReviewRequest, claimDueImReviewRequests, updateImReviewRequest, type SqliteStoreDb } from "@aicr/store";
+import { closeStoreDb, createStoreDb, findImReviewRequest, claimDueImReviewRequests, updateImReviewRequest, prepareImDispatch, type SqliteStoreDb } from "@aicr/store";
 import type { VcsAdapter } from "@aicr/vcs";
 
 import { admitImCommand, parseImCommand } from "../src/im/command-service.js";
@@ -113,6 +113,25 @@ async function seedRequest(revision: string = REPO_SHA): Promise<string> {
 }
 
 describe("R10–R16: worker scan→validate→dispatch→execute→finish", () => {
+  it("rejects revoked authorization before any VCS operation", async () => {
+    const requestId = await seedRequest();
+    const createAdapter = vi.fn(() => mockAdapter()); const executeReview = vi.fn();
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config, reauthorize: async () => false,
+      createAdapter, executeReview, dispatch: async handoff => handoff.execute() });
+    await service.scan();
+    expect(createAdapter).not.toHaveBeenCalled(); expect(executeReview).not.toHaveBeenCalled();
+    expect(await findImReviewRequest(store, "ns-w", requestId)).toMatchObject({ state: "rejected", errorCode: "im.authorization_revoked" });
+  });
+  it("persists each actual phase start once, regardless of journal checkpoint count", async () => {
+    const requestId = await seedRequest();
+    const checkpoint = { phase: "publication_pending" as const, publication: { output: { problems: [], summaries: [] }, receipts: [] } };
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config, createAdapter: () => mockAdapter(),
+      dispatch: async handoff => handoff.execute(), executeReview: async ({ hooks }) => {
+        await hooks.saveCheckpoint(checkpoint); await hooks.saveCheckpoint(checkpoint); return { state: "succeeded" };
+      } });
+    await service.scan();
+    expect(JSON.parse((await findImReviewRequest(store, "ns-w", requestId))!.attemptsByPhaseJson)).toEqual({ validating: 1, analysis: 1, publication: 1 });
+  });
   it.each(["scan", "wake"] as const)("shutdown aborts and drains %s execution without marking it terminal", async entry => {
     const requestId = await seedRequest();
     const started = Promise.withResolvers<void>();
@@ -321,13 +340,13 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
     await service.scan();
     expect((await findImReviewRequest(store, "ns-w", requestId))?.state).toBe("retry_wait");
 
-    // Crash each re-attempt when it becomes due; the attempt budget (default
-    // 3 re-attempts) is exhausted and the request terminates as failed.
+    // Emulate two more actual analysis starts. Three total attempts include
+    // the initial execution, rather than granting three additional retries.
     let due = new Date(request!.nextAttemptAt!.getTime() + 1000);
-    for (let round = 0; round < 3; round += 1) {
+    for (let round = 0; round < 2; round += 1) {
       const reclaimer = (await claimDueImReviewRequests(store, { namespace: "ns-w", now: due, leaseMs: 1, owner: `lost-${round}`, limit: 10 }))
         .find(entry => entry.request.requestId === requestId)!;
-      await updateImReviewRequest(store, { requestId, fence: reclaimer.fence, state: "running", releaseLease: true, now: due });
+      await updateImReviewRequest(store, { requestId, fence: reclaimer.fence, state: "running", attemptsByPhaseJson: JSON.stringify({ analysis: round + 2 }), releaseLease: true, now: due });
       const next = new ManualReviewService({
         store, namespace: "ns-w", getConfig: config, now: () => due,
         createAdapter: () => mockAdapter(),
@@ -336,7 +355,7 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
       });
       await next.scan();
       const after = await findImReviewRequest(store, "ns-w", requestId);
-      if (round < 2) {
+      if (round < 1) {
         expect(after?.state).toBe("retry_wait");
         expect(JSON.parse(after!.attemptsByPhaseJson)).toEqual({ analysis: round + 2 });
         due = new Date(after!.nextAttemptAt!.getTime() + 1000);
@@ -400,6 +419,56 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
 });
 
 describe("R10–R12: queue wake-up handoff", () => {
+  it("reuses a queued handoff after a fresh worker recovers an expired lease", async () => {
+    const requestId = await seedRequest();
+    const clock = new Date(Date.now() + 1000);
+    const firstClaim = (await claimDueImReviewRequests(store, { namespace: "ns-w", now: clock, leaseMs: 1, owner: "lost", limit: 1 }))[0]!;
+    for (let seq = 1; seq <= 7; seq++) expect(await prepareImDispatch(store, requestId, firstClaim.fence, clock)).toBe(seq);
+    await updateImReviewRequest(store, { requestId, fence: firstClaim.fence, state: "queued", resolvedRevision: REPO_SHA, now: clock });
+    const handoffs: string[] = [];
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config, now: () => new Date(clock.getTime() + 2),
+      createAdapter: () => { throw new Error("queued request must not validate again"); },
+      dispatch: async handoff => { handoffs.push(handoff.jobId); await handoff.execute(); }, executeReview: async () => ({ state: "succeeded" }) });
+    await service.scan();
+    expect(handoffs).toEqual([`im-review-${requestId}-7`]);
+    expect((await findImReviewRequest(store, "ns-w", requestId))?.dispatchSeq).toBe(7);
+  });
+
+  it("waits outside the execution window without calling VCS, dispatch or counting an attempt", async () => {
+    const requestId = await seedRequest();
+    let clock = new Date(Date.now() + 1000);
+    const days = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+    const pinned = appConfigSchema.parse({ ...config(), review: { auto_commit: { schedule: { timezone: "UTC", rules: [{ days: [days[(clock.getUTCDay() + 1) % 7]], windows: [{ start: "00:00", end: "24:00" }] }] } } } });
+    const createAdapter = vi.fn(() => mockAdapter()); const executeReview = vi.fn(async () => ({ state: "succeeded" as const }));
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: () => pinned, now: () => clock, createAdapter,
+      dispatch: async handoff => handoff.execute(), executeReview });
+    await service.scan();
+    const waiting = (await findImReviewRequest(store, "ns-w", requestId))!;
+    expect(waiting.state).toBe("accepted"); expect(waiting.leaseOwner).toBeNull();
+    expect(JSON.parse(waiting.attemptsByPhaseJson)).toEqual({});
+    expect(waiting.nextAttemptAt.getTime()).toBeGreaterThan(clock.getTime());
+    expect(createAdapter).not.toHaveBeenCalled(); expect(executeReview).not.toHaveBeenCalled();
+    clock = waiting.nextAttemptAt;
+    await service.scan();
+    expect(createAdapter).toHaveBeenCalledTimes(1); expect(executeReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off transient revision IO and counts only the actual validation attempts", async () => {
+    const requestId = await seedRequest(); let clock = new Date(Date.now() + 1000);
+    const describeSource = vi.fn().mockRejectedValueOnce(Object.assign(new Error("connection timed out"), { code: "ETIMEDOUT" })).mockResolvedValue({ author_username: "dev", title: "T" });
+    const executeReview = vi.fn(async () => ({ state: "succeeded" as const }));
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config, now: () => clock,
+      createAdapter: () => ({ ...mockAdapter(), describeSource }), dispatch: async handoff => handoff.execute(), executeReview });
+    await service.scan();
+    const waiting = (await findImReviewRequest(store, "ns-w", requestId))!;
+    expect(waiting).toMatchObject({ state: "retry_wait", resumePhase: "validation_retry", leaseOwner: null });
+    expect(JSON.parse(waiting.attemptsByPhaseJson)).toEqual({ validating: 1 });
+    await service.scan(); expect(describeSource).toHaveBeenCalledTimes(1); expect(executeReview).not.toHaveBeenCalled();
+    clock = waiting.nextAttemptAt;
+    await service.scan();
+    expect(describeSource).toHaveBeenCalledTimes(2); expect(executeReview).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((await findImReviewRequest(store, "ns-w", requestId))!.attemptsByPhaseJson)).toEqual({ validating: 2, analysis: 1 });
+  });
   it("hands each dispatch over with a stable job identity and the request's pinned snapshot (R10)", async () => {
     const requestId = await seedRequest();
     const handoffs: { jobId: string; dispatchSeq: number; workspaceId: string; triggerName: string; configSnapshotId: string; permitHeld: boolean }[] = [];

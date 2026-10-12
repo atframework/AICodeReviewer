@@ -99,6 +99,7 @@ function routeOptions(overrides: Partial<ImCallbackRoutesOptions> = {}): ImCallb
     store,
     namespace: "ns-routes",
     getConfig: baseConfig,
+    getConfigGeneration: () => ({ config: (overrides.getConfig ?? baseConfig)() as ReturnType<typeof baseConfig>, snapshotId: "snap-routes", fileDigest: "digest-routes" }),
     env: (name) => (name === "AICR_ROUTE_TOKEN" ? "envtoken" : undefined),
     now: () => 1759000000_000,
     ...overrides,

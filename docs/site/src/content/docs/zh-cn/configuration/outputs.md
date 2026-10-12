@@ -122,6 +122,9 @@ GitHub/Gitea 托管 issue 按事件 login、`outputs.author_resolution.email_map
 
 | Kind | 说明 |
 | --- | --- |
+| `slack_app` | Bot API 推送到已加入的 Slack 频道；见[接入与命令](/zh-cn/integrations/slack/)。 |
+| `discord_bot` | Bot API 推送到 guild 普通文字频道；见[接入与命令](/zh-cn/integrations/discord/)。 |
+| `telegram_bot` | Bot API 推送到 private/group/supergroup；见[接入与命令](/zh-cn/integrations/telegram/)。 |
 | `gitea_pr_review` | Gitea/Forgejo PR 上的行内评论。 |
 | `github_pr_review` | GitHub PR 上的行内评论。 |
 | `gitlab_mr_review` | GitLab MR 上的行内评论。 |

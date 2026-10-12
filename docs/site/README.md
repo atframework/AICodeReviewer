@@ -27,6 +27,10 @@ packages. `docs:build` and `docs:check` run the validation scripts in
 `scripts/` before Astro; each one is also invocable on its own via
 `pnpm --filter @aicr/docs-site validate:<name>`.
 
+Dev and preview bind to `127.0.0.1` (set via `server.host` in
+`astro.config.mjs`), so the printed URL works even on hosts with a broken IPv6
+loopback; pass `--host` on the CLI to expose the server on the LAN.
+
 ## Validation gates
 
 | Script | Enforces |
@@ -57,9 +61,37 @@ docs/site/
         zh-cn/            Simplified Chinese content (served at /zh-cn/...)
       i18n/
         zh-CN.json        Chinese UI-string overrides
-    styles/custom.css     Minimal theme overrides
+    styles/custom.css     Brand colors, font stacks, wide-screen layout
   public/                 Static assets served as-is
 ```
+
+## Wide-screen layout
+
+`src/styles/custom.css` raises Starlight's content column from the default
+`--sl-content-width: 45rem` to `96rem` (1536px at the 16px root size) on docs
+pages and `120rem` (1920px) on the splash landing page, so 2.5K/4K/ultra-wide
+viewports are actually used instead of turning into empty gutters. Starlight's
+flex math keeps the table of contents glued to the column's right edge and
+distributes excess space to the outer gutters. True 100% full-bleed was tested
+and rejected: at ultrawide widths it produced ~211 CJK characters per line
+inside asides and ~550px link cards.
+
+Paragraphs, lists, blockquotes and description lists follow their containing
+section's width, as do asides, code blocks and card grids. Lists retain their
+marker indentation, and tables retain their natural column widths and local
+horizontal scrolling. There is no separate character-based width cap on
+text: at wide viewports, lines grow with the bounded content container instead
+of leaving a narrow text strip beside full-width components. The root font
+size stays unchanged so navigation and sidebars retain their proportions.
+Aside titles use normal inline layout so titles containing code can wrap on
+narrow screens while keeping their icon and inline code styling.
+
+When touching these rules, verify both landing pages and ordinary docs pages
+at mobile and desktop widths (390, 1280, 1920, 2560, 3250, 3440 px) in both
+locales and themes. Inspect screenshots and rendered element bounds: prose
+must fill its parent after padding and list indentation, and wide tables and
+code blocks must scroll locally without widening the page. Also check system
+font fallbacks when font CDNs are unavailable.
 
 ## Internationalization
 
@@ -72,6 +104,12 @@ Every locale is URL-prefixed for a symmetric structure:
 both `src/content/docs/en/<path>.md` and `src/content/docs/zh-cn/<path>.md`.
 Sidebar labels are localized via the `translations` map keyed by BCP-47 lang
 tag (e.g. `"zh-CN"`) in `astro.config.mjs`.
+
+Starlight renders the browser tab as `<page title> | <site title>`, so the two
+landing pages use `title: Home` / `title: 首页` in frontmatter; repeating the
+site title there would render `AICodeReviewer | AICodeReviewer`. The visible
+hero heading comes from the separate `hero.title` field and stays
+`AICodeReviewer`.
 
 Content pages use `.md`. The two localized landing pages (`en/index.mdx` and
 `zh-cn/index.mdx`) use `.mdx` so they can render Starlight components — hero

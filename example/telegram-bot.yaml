@@ -1,0 +1,27 @@
+# Valid output configuration. Replace synthetic IDs and set the token environment variable.
+# Merge your LLM/provider and VCS credentials before enabling review commands.
+# Command setup: docs/site/src/content/docs/en/integrations/telegram.md
+im:
+  connections:
+    bot:
+      kind: telegram_bot
+      bot_id: "123456789"
+      token_env: AICR_TELEGRAM_TOKEN
+triggers:
+  - name: git
+    kind: github
+    repos: [org/demo]
+workspaces:
+  instances:
+    ws:
+      source_repo: { trigger: git, repo: org/demo }
+      outputs:
+        summary: [report]
+outputs:
+  channels:
+    - name: report
+      kind: telegram_bot
+      connection: bot
+      chat_id: "-1001234567890"
+      no_problems: { action: publish_if_summary }
+

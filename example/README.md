@@ -2,9 +2,14 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
-The [Slack, Discord and Telegram design examples](slack-discord-telegram-design.md)
-describe planned fields. They are not runnable configuration; implementation and
-user-guide deliverables are tracked in [Plan.md](../Plan.md).
+Use [slack-app.yaml](slack-app.yaml), [discord-bot.yaml](discord-bot.yaml) or
+[telegram-bot.yaml](telegram-bot.yaml) for Bot API reports. Replace synthetic IDs
+and set the token environment variable; merge your existing VCS/LLM configuration
+before enabling review commands. The [Slack](../docs/site/src/content/docs/en/integrations/slack.md),
+[Discord](../docs/site/src/content/docs/en/integrations/discord.md) and
+[Telegram](../docs/site/src/content/docs/en/integrations/telegram.md) guides cover
+HTTP callbacks and persistent command execution. Registration is a separate
+dry-run/apply operation through `scripts/register-social-im.mjs`.
 
 For Feishu custom application reports, merge [feishu-app.yaml](feishu-app.yaml).
 It configures the application credentials, report recipient, source group and

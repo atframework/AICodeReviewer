@@ -1,0 +1,29 @@
+# Valid output configuration. Replace synthetic IDs and set the token environment variable.
+# Merge your LLM/provider and VCS credentials before enabling review commands.
+# Command setup: docs/site/src/content/docs/en/integrations/slack.md
+im:
+  connections:
+    bot:
+      kind: slack_app
+      app_id: A123
+      team_id: T123
+      bot_user_id: U123
+      token_env: AICR_SLACK_TOKEN
+triggers:
+  - name: git
+    kind: github
+    repos: [org/demo]
+workspaces:
+  instances:
+    ws:
+      source_repo: { trigger: git, repo: org/demo }
+      outputs:
+        summary: [report]
+outputs:
+  channels:
+    - name: report
+      kind: slack_app
+      connection: bot
+      channel_id: C123
+      no_problems: { action: publish_if_summary }
+

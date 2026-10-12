@@ -526,10 +526,11 @@ export const STORE_MIGRATION_STEPS: readonly MigrationStep[] = [
   `),
   pgSqlStep("011_im_tables", 10, 11, MIGRATION_011_IM_TABLES),
   pgSqlStep("012_review_event", 11, 12, "ALTER TABLE review_runs ADD COLUMN review_event_json TEXT;"),
+  pgSqlStep("013_im_reply_payload", 12, 13, "ALTER TABLE im_reply_outbox ADD COLUMN payload_json TEXT;"),
 ];
 
 export const STORE_MIGRATION_PLAN: NamespaceMigrationPlan = {
   namespace: STORE_MIGRATION_NAMESPACE,
-  targetVersion: 12,
+  targetVersion: 13,
   steps: STORE_MIGRATION_STEPS,
 };

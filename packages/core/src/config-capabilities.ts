@@ -234,6 +234,9 @@ export const CHANNEL_KINDS = [
   "feishu_app",
   "wecom_bot",
   "wecom_app",
+  "slack_app",
+  "discord_bot",
+  "telegram_bot",
 ] as const;
 
 /** Passthrough keys shared by every channel kind (rendering/token/repoRef). */
@@ -291,10 +294,15 @@ export const CHANNEL_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
   // Connection reference and the send target are schema-declared (discriminated
   // union); the passthrough surface carries only the reference name here.
   wecom_app: { connection: nonEmptyString },
+  slack_app: { connection: nonEmptyString },
+  discord_bot: { connection: nonEmptyString },
+  telegram_bot: { connection: nonEmptyString },
 };
 
 /** Declared channel fields allowed per kind (consumer-verified matrix). */
 export const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  channel_id: ["slack_app", "discord_bot"],
+  chat_id: ["telegram_bot"],
   app_id: ["feishu_app"],
   app_secret: ["feishu_app"],
   app_secret_env: ["feishu_app"],

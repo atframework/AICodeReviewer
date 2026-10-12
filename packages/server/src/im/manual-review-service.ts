@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AppConfig, BatchExecutionCheckpoint, PublicationReceipt, RemotePublicationOperation } from "@aicr/core";
-import { computeBackoffDelay, createReviewEvent, resolveAutoCommitPolicy, type ReviewEvent } from "@aicr/core";
+import { computeBackoffDelay, createReviewEvent, resolveAutoCommitPolicy, isAllowedInstant, nextAllowedInstant, type ReviewEvent, type ImPrincipal } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
 import {
   claimDueImReviewRequests,
@@ -18,12 +18,15 @@ import {
   type ClaimedImReviewRequest,
   type ImTerminalState,
   type ImReviewRequestRow,
+  type ImNotificationInput,
 } from "@aicr/store";
 import type { VcsAdapter } from "@aicr/vcs";
 
 import { resolveImRevision, type ResolvedImRevision } from "./revision-resolver.js";
 import { readResumePublication, receiptStatusForDispatch, type ResumePublicationOutput } from "../auto-commit-runtime.js";
 import type { ReviewOrchestrationResult } from "../review-orchestrator.js";
+import { socialReplyNotification } from "./social-command-service.js";
+import type { SocialReplyPayload } from "./social-identity.js";
 
 export function classifyImReviewResult(result: Pick<ReviewOrchestrationResult, "status" | "skipReason" | "dispatchResults">, receipts: readonly PublicationReceipt[] = []): {
   readonly state: ImTerminalState;
@@ -69,6 +72,7 @@ export interface ImReviewResume {
 export type ImReviewCheckpoint = BatchExecutionCheckpoint & { readonly target?: ResolvedImRevision };
 
 export interface ImReviewExecutionHooks {
+  readonly isAuthorized?: () => Promise<boolean>;
   /**
    * Fenced checkpoint persist (state→publishing + payload). `false` means the
    * lease was lost — the executor must stop before further remote writes;
@@ -196,6 +200,9 @@ export interface ManualReviewWorkerOptions {
   readonly now?: () => Date;
   readonly leaseMs?: number;
   readonly batchLimit?: number;
+  readonly reauthorize?: (request: ImReviewRequestRow) => Promise<boolean>;
+  readonly canScan?: () => boolean;
+  readonly blockedWorkspaceIds?: () => readonly string[];
 }
 
 export class ManualReviewService {
@@ -212,6 +219,9 @@ export class ManualReviewService {
       now: options.now ?? (() => new Date()),
       leaseMs: options.leaseMs ?? 60_000,
       batchLimit: options.batchLimit ?? 1,
+      reauthorize: options.reauthorize ?? (async () => true),
+      canScan: options.canScan ?? (() => true),
+      blockedWorkspaceIds: options.blockedWorkspaceIds ?? (() => []),
     };
   }
 
@@ -220,18 +230,18 @@ export class ManualReviewService {
    * machine accepted→validating→queued→running→publishing→terminal.
    * Idempotent — safe to call from the queue wake-up or a periodic timer.
    */
-  async scan(handoffOptions: { readonly permitHeld?: boolean } = {}): Promise<number> {
+  async scan(handoffOptions: { readonly permitHeld?: boolean; readonly detached?: boolean } = {}): Promise<number> {
     if (this.stopped) return 0;
     return this.track(() => this.scanPass(handoffOptions));
   }
 
-  private async scanPass(handoffOptions: { readonly permitHeld?: boolean }): Promise<number> {
+  private async scanPass(handoffOptions: { readonly permitHeld?: boolean; readonly detached?: boolean }): Promise<number> {
     if (this.running) return 0;
     this.running = true;
     try {
       const configs = new Map<string, AppConfig>();
       await this.expireQueued(configs);
-      if (this.stopped) return 0;
+      if (this.stopped || !this.options.canScan()) return 0;
       const now = this.options.now();
       const claimed = await claimDueImReviewRequests(this.options.store, {
         namespace: this.options.namespace,
@@ -239,9 +249,11 @@ export class ManualReviewService {
         leaseMs: this.options.leaseMs,
         owner: `im-worker-${randomUUID()}`,
         limit: this.options.batchLimit,
+        excludeWorkspaceIds: this.options.blockedWorkspaceIds(),
       });
       for (const claim of claimed) {
-        await this.driveClaim(claim, configs, handoffOptions.permitHeld === true);
+        if (handoffOptions.detached === true) void this.track(() => this.driveClaim(claim, configs, handoffOptions.permitHeld === true));
+        else await this.driveClaim(claim, configs, handoffOptions.permitHeld === true);
       }
       return claimed.length;
     } finally {
@@ -379,6 +391,10 @@ export class ManualReviewService {
     const request = claim.request;
     const now = this.options.now();
     const { fence } = claim;
+    if (!await this.options.reauthorize(request)) {
+      await finishImReviewRequest(this.options.store, { requestId: request.requestId, fence, state: "rejected", errorCode: "im.authorization_revoked", now });
+      return;
+    }
 
     // Terminal-state guard: a request that reached a terminal state between
     // the claim scan and this call must not be resurrected.
@@ -387,6 +403,11 @@ export class ManualReviewService {
     }
 
     const config = configs.get(request.configSnapshotId) ?? await this.options.getConfig(request.configSnapshotId);
+    const schedule = resolveAutoCommitPolicy(config.review.auto_commit, config.workspaces.defaults.review?.auto_commit, config.workspaces.instances[request.workspaceId]?.review?.auto_commit).schedule;
+    if (!isAllowedInstant(schedule, now.getTime())) {
+      await updateImReviewRequest(this.options.store, { requestId: request.requestId, fence, nextAttemptAt: new Date(nextAllowedInstant(schedule, now.getTime())), releaseLease: true, now });
+      return;
+    }
 
     // Crash-recovery triage (R14/R15): a claim over `running`/`publishing`
     // means the previous owner's lease expired mid-flight. Publication with a
@@ -399,6 +420,14 @@ export class ManualReviewService {
 
     // validating: resolve the revision through the trusted adapter.
     if (request.state === "accepted" || request.state === "validating" || request.resolvedRevision === null) {
+      const attempts = parseAttempts(request);
+      const validating = (attempts.validating ?? 0) + 1;
+      const policy = retryPolicy(config);
+      if (validating > policy.attempts) {
+        await finishImReviewRequest(this.options.store, { requestId: request.requestId, fence, state: "failed", errorCode: "im.validation_attempts_exhausted", now });
+        return;
+      }
+      if (!await updateImReviewRequest(this.options.store, { requestId: request.requestId, fence, attemptsByPhaseJson: JSON.stringify({ ...attempts, validating }), now })) return;
       const adapter = await this.options.createAdapter(config, request);
       if (adapter === undefined) {
         await finishImReviewRequest(this.options.store, {
@@ -408,11 +437,21 @@ export class ManualReviewService {
         return;
       }
 
+      if (!await this.options.reauthorize(request)) {
+        await finishImReviewRequest(this.options.store, { requestId: request.requestId, fence, state: "rejected", errorCode: "im.authorization_revoked", now: this.options.now() });
+        return;
+      }
+
       await updateImReviewRequest(this.options.store, {
         requestId: request.requestId, fence, state: "validating", now,
       });
       const resolution = await resolveImRevision(adapter, request.requestedRevision);
       signal.throwIfAborted();
+      if (resolution.kind === "retryable") {
+        await updateImReviewRequest(this.options.store, { requestId: request.requestId, fence, state: "retry_wait", resumePhase: "validation_retry",
+          nextAttemptAt: new Date(now.getTime() + computeBackoffDelay(validating, policy.backoff)), releaseLease: true, now });
+        return;
+      }
       if (resolution.kind === "rejected") {
         await finishImReviewRequest(this.options.store, {
           requestId: request.requestId, fence, state: "rejected", errorCode: `im.${resolution.reason}`,
@@ -453,9 +492,8 @@ export class ManualReviewService {
         });
         return;
       }
-      const publicationAttempts = (attempts.publication ?? 0) + 1;
-      const attemptsByPhaseJson = JSON.stringify({ ...attempts, publication: publicationAttempts });
-      if (publicationAttempts > policy.attempts) {
+      const publicationAttempts = attempts.publication ?? 1;
+      if (publicationAttempts >= policy.attempts) {
         await finishImReviewRequest(this.options.store, {
           requestId: request.requestId, fence, state: "publication_unknown", errorCode: "im.publication_attempts_exhausted",
           notifications: [buildTerminalNotification(request, "publication_unknown", "im.publication_attempts_exhausted")].filter((value): value is NonNullable<typeof value> => value !== undefined),
@@ -463,8 +501,6 @@ export class ManualReviewService {
         });
         return;
       }
-      // Persist the consumed attempt so a crash loop cannot retry unbounded.
-      if (!await updateImReviewRequest(this.options.store, { requestId: request.requestId, fence, attemptsByPhaseJson, now })) return;
       await this.dispatchExecution(claim, config, signal, permitHeld, resume);
       return;
     }
@@ -472,9 +508,8 @@ export class ManualReviewService {
     // `running`: the analysis crashed mid-flight. No remote write can have
     // started (publication transitions the row to `publishing` first), so a
     // bounded re-analysis is safe; the due time persists and is not re-sampled.
-    const analysisAttempts = (attempts.analysis ?? 0) + 1;
-    const attemptsByPhaseJson = JSON.stringify({ ...attempts, analysis: analysisAttempts });
-    if (analysisAttempts > policy.attempts) {
+    const analysisAttempts = attempts.analysis ?? 1;
+    if (analysisAttempts >= policy.attempts) {
       await finishImReviewRequest(this.options.store, {
         requestId: request.requestId, fence, state: "failed", errorCode: "im.analysis_attempts_exhausted",
         notifications: [buildTerminalNotification(request, "failed", "im.analysis_attempts_exhausted")].filter((value): value is NonNullable<typeof value> => value !== undefined),
@@ -485,7 +520,7 @@ export class ManualReviewService {
     const nextAttemptAt = new Date(now.getTime() + computeBackoffDelay(analysisAttempts, policy.backoff));
     await updateImReviewRequest(this.options.store, {
       requestId: request.requestId, fence, state: "retry_wait", resumePhase: "analysis_retry",
-      attemptsByPhaseJson, nextAttemptAt, releaseLease: true, now,
+      attemptsByPhaseJson: JSON.stringify({ ...attempts, analysis: analysisAttempts }), nextAttemptAt, releaseLease: true, now,
     });
   }
 
@@ -514,6 +549,10 @@ export class ManualReviewService {
     const request = await findImReviewRequest(this.options.store, this.options.namespace, requestId);
     if (request === undefined || request.fence !== fence || request.dispatchSeq !== dispatchSeq) return;
     const now = this.options.now();
+    if (!await this.options.reauthorize(request)) {
+      await finishImReviewRequest(this.options.store, { requestId, fence, state: "rejected", errorCode: "im.authorization_revoked", now });
+      return;
+    }
 
     const event = createReviewEvent({
       triggerName: request.sourceTrigger,
@@ -529,9 +568,21 @@ export class ManualReviewService {
         kind: "im_command",
         requestId: request.requestId,
         connectionIdentity: request.connectionIdentity,
-        requestedBy: { type: request.requestedByType as "wecom_userid" | "wecom_encrypted_userid" | "feishu_open_id", id: request.requestedById },
+        requestedBy: { type: request.requestedByType as ImPrincipal["type"], id: request.requestedById },
       },
     });
+
+    let phaseAttempts = parseAttempts(request);
+    const phase = resume === undefined ? "analysis" : "publication";
+    const attempt = (phaseAttempts[phase] ?? 0) + 1;
+    if (attempt > retryPolicy(config).attempts) {
+      await finishImReviewRequest(this.options.store, { requestId, fence, state: resume === undefined ? "failed" : "publication_unknown",
+        errorCode: `im.${phase}_attempts_exhausted`, now });
+      return;
+    }
+    phaseAttempts = { ...phaseAttempts, [phase]: attempt };
+    if (!await updateImReviewRequest(this.options.store, { requestId, fence, attemptsByPhaseJson: JSON.stringify(phaseAttempts), now })) return;
+    let publicationCounted = resume !== undefined;
 
     // A fresh analysis transitions the row to `running`; a resumed publication
     // keeps `publishing` (set by the checkpoint write) so the recovery
@@ -541,6 +592,7 @@ export class ManualReviewService {
     })) return;
 
     const hooks: ImReviewExecutionHooks = {
+      isAuthorized: () => this.options.reauthorize(request),
       saveCheckpoint: async checkpoint => {
         const target = readResolvedTarget(request);
         const json = JSON.stringify({ ...checkpoint, ...(target !== undefined ? { target } : {}) });
@@ -550,9 +602,12 @@ export class ManualReviewService {
           console.warn(JSON.stringify({ msg: "im_checkpoint_oversized", requestId: request.requestId }));
           return "oversized";
         }
+        if (!publicationCounted) phaseAttempts = { ...phaseAttempts, publication: (phaseAttempts.publication ?? 0) + 1 };
         const accepted = await updateImReviewRequest(this.options.store, {
-          requestId: request.requestId, fence, state: "publishing", resumePhase: checkpoint.phase, checkpointJson: json, now: this.options.now(),
+          requestId: request.requestId, fence, state: "publishing", resumePhase: checkpoint.phase, checkpointJson: json,
+          attemptsByPhaseJson: JSON.stringify(phaseAttempts), now: this.options.now(),
         });
+        if (accepted) publicationCounted = true;
         return accepted;
       },
     };
@@ -583,7 +638,7 @@ function buildTerminalNotification(
   state: string,
   errorCode: string | undefined,
   operationKind: "review_terminal" | "review_cancelled" = "review_terminal",
-): { readonly operationId: string; readonly destinationIdentity: string; readonly operationKind: string; readonly payloadDigest: string; readonly compactReceipt: string } | undefined {
+): ImNotificationInput | undefined {
   let connectionName = "";
   try {
     const version = JSON.parse(request.configVersionJson) as { connectionName?: unknown };
@@ -593,6 +648,15 @@ function buildTerminalNotification(
     connectionName = request.connectionIdentity.split(":").pop() ?? "";
   }
   if (connectionName === "") return undefined;
+  if (["slack_user_id", "discord_user_id", "telegram_user_id"].includes(request.requestedByType)) {
+    try {
+      const version = JSON.parse(request.configVersionJson) as { bindingId?: string };
+      const payload: SocialReplyPayload = { version: 1, connectionName, connectionIdentity: request.connectionIdentity,
+        bindingId: version.bindingId ?? "", conversation: JSON.parse(request.conversationJson), actor: { type: request.requestedByType as ImPrincipal["type"], id: request.requestedById },
+        commandKind: "review", requestId: request.requestId, text: `Request ${request.requestId}: ${state}. Use /aicr status ${request.requestId}.` };
+      return { ...socialReplyNotification(payload, `imn-${request.requestId}-${operationKind}`, new Date()), operationKind };
+    } catch { return undefined; }
+  }
   const receipt = JSON.stringify({
     connectionName,
     conversation: request.conversationJson,

@@ -18,6 +18,8 @@ export { resolveFeishuMention, feishuDirectoryUsers, renderFeishuAuthorMention, 
 export { channelIdentityCapability, matchChannelAuthor, memberDirectoryChannelUsers, renderMemberDirectoryMention, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds, DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS, type ChannelUser, type ChannelUserDirectory, type ChannelAuthorInput, type ChannelAuthorOptions, type ChannelAuthorMatch, type ChannelAuthorGuesser, type MemberDirectoryChannelUser } from "./channel-identity.js";
 
 export const outputsPackageName = "@aicr/outputs";
+export { SocialImClient, type SocialImConnection, type SocialImSendResult, type SocialImReceipt, type SocialImMessage, type TelegramMessageEntity } from "./social-im.js";
+export { toDiscordMarkdown, toTelegramMessage, toBoundedSlackMarkdown, boundSocialMarkdown } from "./social-im-markdown.js";
 
 export {
 	clearTemplateCache,

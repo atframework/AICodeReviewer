@@ -87,6 +87,9 @@ registry (Zod validates the shape; the dispatcher resolves the kind).
 
 | Kind | Problem output | Summary output | Notes |
 | --- | --- | --- | --- |
+| `slack_app` | Buffered for one report | Bounded Slack mrkdwn | Exact connection/channel; [guide](/en/integrations/slack/) |
+| `discord_bot` | Buffered for one report | Bounded Markdown with mentions disabled | Exact application/guild/channel; [guide](/en/integrations/discord/) |
+| `telegram_bot` | Buffered for one report | Plain text and explicit entities | Exact Bot/chat; [guide](/en/integrations/telegram/) |
 | `gitea_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Problems are buffered and flushed as one Markdown body; falls back to one issue comment on 403/422 |
 | `github_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Same buffer-and-flush as `gitea_pr_review`; falls back to issue comment on 403/422 |
 | `gitlab_mr_review` | MR discussion when `baseSha`/`headSha` available | MR note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |

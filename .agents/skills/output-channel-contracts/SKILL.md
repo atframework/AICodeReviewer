@@ -13,6 +13,13 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 
 ## Shared invariants
 
+- For Slack/Discord/Telegram, read [the protocol contract](../../../docs/design/slack-discord-telegram.md)
+  and [official sources](../../../docs/ai/sources/slack-discord-telegram.md).
+  Trace config → `SocialImClient` → raw HTTP → journal/outbox, and callback →
+  current authorization → durable worker. ACK is admission only; missing receipts
+  or expired `sending` leases remain unknown. Registration defaults to dry-run
+  and never runs during bootstrap. Keep live-account evidence separate from fixtures.
+
 - Resolve empty-result policy per channel: built-in → `outputs.no_problems` →
   channel → workspace defaults → instance. `review.skip_lgtm` is review guidance,
   not output routing. Errors and managed lifecycle checks have separate rules.

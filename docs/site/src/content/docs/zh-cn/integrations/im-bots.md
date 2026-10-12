@@ -1,11 +1,16 @@
 ---
 title: IM 机器人
-description: 把聚合后的评审摘要推送到飞书和企业微信群机器人。
+description: 配置飞书、企业微信、Slack、Discord 和 Telegram 的报告推送及授权命令。
 ---
 
 AICodeReviewer 可以通过自定义机器人 webhook 或飞书自建应用机器人发送聚合后的评审问题。
 这些都是**摘要** channel，接收汇总后的评审结果。在 `outputs.routes`
 或按 workspace 的 `outputs.summary` 中配置路由。
+
+Slack、Discord 和 Telegram 支持 Bot API 报告和四种授权审查命令，见
+[Slack](/zh-cn/integrations/slack/)、[Discord](/zh-cn/integrations/discord/)、
+[Telegram](/zh-cn/integrations/telegram/) 指南。连接统一配置在 `im.connections`，
+目的地显式指定，命令通过 HTTP callback 接收。
 
 ## 飞书
 

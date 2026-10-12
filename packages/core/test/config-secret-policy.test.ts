@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { assertConfigSecretPolicy, assertNoConfigCredentialLiterals, collectConfigSecretReferences } from "../src/config-secret-policy.js";
 
 describe("deployment-owned secret purposes (A06)", () => {
+  it.each([
+    { kind: "slack_app", app_id: "A123", team_id: "T123", bot_user_id: "U123", token_env: "BOT_TOKEN" },
+    { kind: "discord_bot", application_id: "123", guild_id: "456", token_env: "BOT_TOKEN" },
+    { kind: "telegram_bot", bot_id: "123", token_env: "BOT_TOKEN" },
+  ])("binds $kind token references to the exact application domain", connection => {
+    const file = { im: { connections: { bot: connection } } };
+    expect(() => assertConfigSecretPolicy(file, {}, file)).not.toThrow();
+    const key = connection.kind === "slack_app" ? "team_id" : connection.kind === "discord_bot" ? "guild_id" : "bot_id";
+    expect(() => assertConfigSecretPolicy(file, {}, { im: { connections: { bot: { ...connection, [key]: "999" } } } })).toThrow(/not authorized/);
+  });
   const provider = { id: "main", kind: "openai_compatible", api_key_env: "LLM_KEY", base_url: "https://approved.example/v1" };
   const file = { llm: { providers: [provider] } };
   it("accepts the same reference and rejects a changed endpoint, name or entity", () => {

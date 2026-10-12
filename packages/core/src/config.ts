@@ -12,7 +12,7 @@ import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-
 import { REVIEW_DEFAULT_MAX_FILES, REVIEW_DEFAULT_MAX_PATCH_BYTES } from "./review-policy.js";
 import { isPlainObject } from "./utils.js";
 import { validateConfigNamespace, workspaceRootKeys } from "./config-format.js";
-import { channelMemberDirectorySchema, imConfigSchema, wecomAppTargetSchema } from "./im-config.js";
+import { channelMemberDirectorySchema, imConfigSchema, wecomAppTargetSchema, isSocialImKind, decimalPlatformIdSchema, telegramChatIdSchema, slackPlatformIdSchema } from "./im-config.js";
 
 import {
   assertNoSecretEnvIssues,
@@ -432,6 +432,8 @@ export const outputChannelSchema = z
      * reference forms are mutually exclusive (IM design §2).
      */
     connection: z.string().min(1).optional(),
+    channel_id: z.string().min(1).optional(),
+    chat_id: z.string().min(1).optional(),
     /** WeCom application send target: recipients or appchat, exclusively. */
     target: wecomAppTargetSchema.optional(),
     member_directory: channelMemberDirectorySchema.optional(),
@@ -459,13 +461,27 @@ export const outputChannelSchema = z
             });
           }
         }
-      } else if (channel.kind !== "wecom_app") {
+      } else if (channel.kind !== "wecom_app" && !isSocialImKind(channel.kind)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `connection references are only supported by wecom_app/feishu_app channels, not kind "${channel.kind}".`,
           path: ["connection"],
         });
       }
+    }
+    if (isSocialImKind(channel.kind)) {
+      const allowed = new Set(["name", "kind", "connection", "channel_id", "chat_id", "trigger", "templates", "no_problems",
+        "mention_author", "mention_fallback", "commit_url_template", "revision_url_template", "change_url_template"]);
+      for (const key of Object.keys(channel)) {
+        if (!allowed.has(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `${channel.kind} does not support ${key}.` });
+      }
+      if (channel.connection === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["connection"], message: "social IM channels require a connection reference." });
+      const targetKey = channel.kind === "telegram_bot" ? "chat_id" : "channel_id";
+      const targetSchema = channel.kind === "telegram_bot" ? telegramChatIdSchema : channel.kind === "discord_bot" ? decimalPlatformIdSchema : slackPlatformIdSchema;
+      if (!targetSchema.safeParse(channel[targetKey]).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [targetKey], message: "an exact platform destination ID is required." });
+      const wrongKey = targetKey === "chat_id" ? "channel_id" : "chat_id";
+      if (channel[wrongKey] !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [wrongKey], message: "destination field does not match platform." });
+      if (channel.mention_author === true || channel.mention_fallback === "all") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["mention_author"], message: "social IM native mentions are unsupported." });
     }
     if (channel.kind === "wecom_app" && channel.connection === undefined) {
       ctx.addIssue({

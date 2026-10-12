@@ -522,6 +522,9 @@ No summary provided.
 `;
 
 const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> = {
+  slack_app: { summary: BUILTIN_WECOM_SUMMARY_TEMPLATE, problem: BUILTIN_PROBLEM_TEMPLATE },
+  discord_bot: { summary: BUILTIN_WECOM_SUMMARY_TEMPLATE, problem: BUILTIN_PROBLEM_TEMPLATE },
+  telegram_bot: { summary: BUILTIN_WECOM_SUMMARY_TEMPLATE, problem: BUILTIN_PROBLEM_TEMPLATE },
 	gitea_pr_review: {
 		summary: BUILTIN_SUMMARY_TEMPLATE,
 		problem: BUILTIN_PROBLEM_TEMPLATE,
@@ -559,6 +562,9 @@ const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> =
 // ---- File-based builtin template name mapping ----
 
 const BUILTIN_TEMPLATE_FILE_NAMES: Readonly<Record<string, Record<TemplateKind, string>>> = {
+  slack_app: { summary: "wecom-summary.hbs", problem: "problem.hbs" },
+  discord_bot: { summary: "wecom-summary.hbs", problem: "problem.hbs" },
+  telegram_bot: { summary: "wecom-summary.hbs", problem: "problem.hbs" },
 	gitea_pr_review: { summary: "summary.hbs", problem: "problem.hbs" },
 	gitea_issue: { summary: "gitea-issue-summary.hbs", problem: "problem.hbs" },
 	gitea_problem_issue: { summary: "gitea-issue-summary.hbs", problem: "problem.hbs" },

@@ -1,4 +1,5 @@
 import type { VcsAdapter } from "@aicr/vcs";
+import { isTransientIoError } from "@aicr/core";
 
 /**
  * IM-13 fixed-revision resolver (design §7.2, acceptance V01–V08): validates
@@ -19,6 +20,7 @@ export interface ResolvedImRevision {
 }
 
 export type ImRevisionResolution =
+  | { readonly kind: "retryable" }
   | { readonly kind: "resolved"; readonly revision: ResolvedImRevision }
   | { readonly kind: "rejected"; readonly reason: "invalid_format" | "not_found" | "not_commit" | "metadata_unavailable" };
 
@@ -65,7 +67,8 @@ export async function resolveImRevision(adapter: VcsAdapter, revision: string): 
   let metadata: Readonly<Record<string, string | null>>;
   try {
     metadata = await adapter.describeSource(normalized);
-  } catch {
+  } catch (error) {
+    if (isTransientIoError(error)) return { kind: "retryable" };
     return { kind: "rejected", reason: "not_found" };
   }
 

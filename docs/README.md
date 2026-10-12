@@ -14,6 +14,9 @@
 | 配置管理、暂存、预览与版本恢复 | [管理面板](site/src/content/docs/zh-cn/start/dashboard.md) | [Dashboard](site/src/content/docs/en/start/dashboard.md) |
 | 数据库、缓存与升级 | [存储](site/src/content/docs/zh-cn/configuration/storage.md) | [Storage](site/src/content/docs/en/configuration/storage.md) |
 | 路由与输出 | [输出配置](site/src/content/docs/zh-cn/configuration/outputs.md) | [Outputs](site/src/content/docs/en/configuration/outputs.md) |
+| Slack | [接入指南](site/src/content/docs/zh-cn/integrations/slack.md) | [Slack](site/src/content/docs/en/integrations/slack.md) |
+| Discord | [接入指南](site/src/content/docs/zh-cn/integrations/discord.md) | [Discord](site/src/content/docs/en/integrations/discord.md) |
+| Telegram | [接入指南](site/src/content/docs/zh-cn/integrations/telegram.md) | [Telegram](site/src/content/docs/en/integrations/telegram.md) |
 | 配置字段 | [字段参考](site/src/content/docs/zh-cn/reference/config-fields.md) | [Config fields](site/src/content/docs/en/reference/config-fields.md) |
 | Workspace 路径变量 | [模板变量](site/src/content/docs/zh-cn/reference/template-variables.md) | [Template variables](site/src/content/docs/en/reference/template-variables.md) |
 | 命令与迁移操作 | [CLI](site/src/content/docs/zh-cn/reference/cli.md) | [CLI](site/src/content/docs/en/reference/cli.md) |
@@ -30,7 +33,7 @@
 | [设计决策](ai/decisions.md) | 方案取舍；Workspace 与动态配置相关规则见 D37–D47 |
 | [输出渠道规范](output-channels.md) | 输出渠道、模板、目标选择及发布语义 |
 | [IM 开发计划](../Plan.md) / [集成设计](design/im-integrations.md) / [文件成员目录](design/member-directory.md) | 企业微信应用、通讯录热加载与回调重新评审；进度见计划，接口见[实施规范](design/im-implementation-spec.md)，断言见[验收矩阵](design/im-acceptance.md) |
-| [Slack、Discord、Telegram 接入](design/slack-discord-telegram.md) / [执行步骤](design/slack-discord-telegram-execution.md) / [验收矩阵](design/slack-discord-telegram-acceptance.md) | 待实施的结果推送与命令审查；含官方接口依据、配置草案和最终双语使用指南的交付要求 |
+| [Slack、Discord、Telegram 接入](design/slack-discord-telegram.md) / [执行步骤](design/slack-discord-telegram-execution.md) / [验收矩阵](design/slack-discord-telegram-acceptance.md) | Bot API 结果推送与 HTTP 命令；本地及真实平台验收分别记录 |
 | [评审提示词设计依据](prompt-research.md) | 默认评审提示词的目标、约束和参考依据 |
 | [AI 维护导航](ai/index.md) | 从代码主题定位设计章节、易错点和维护技能 |
 

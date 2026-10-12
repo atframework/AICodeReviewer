@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import type { AppConfig } from "@aicr/core";
 
-import { WeComAppClient, type FetchLike } from "@aicr/outputs";
+import { WeComAppClient, SocialImClient, type SocialImConnection, type FetchLike } from "@aicr/outputs";
 
 /**
  * IM connection runtime (execution spec §3): resolves credentials per
@@ -50,8 +51,23 @@ function wecomAppCacheKey(credentials: ResolvedWeComAppCredentials): string {
 
 export class ImConnectionRegistry {
 	private readonly clients = new Map<string, WeComAppClient>();
+  private readonly socialClients = new Map<string, SocialImClient>();
 
 	constructor(private readonly options: ImConnectionRuntimeOptions = {}) {}
+
+  social(connection: SocialImConnection): SocialImClient {
+    const token = resolveSecret(connection, "token", "token_env", this.options.env ?? (() => undefined));
+    if (!token) throw new Error("Social IM connection requires a resolvable token.");
+    const fingerprint = createHash("sha256").update(token).digest("hex");
+    const { token: _token, token_env: _env, callback: _callback, ...identity } = connection;
+    const key = JSON.stringify([identity, fingerprint]);
+    let client = this.socialClients.get(key);
+    if (!client) {
+      client = new SocialImClient(connection, token, this.options);
+      this.socialClients.set(key, client);
+    }
+    return client;
+  }
 
 	/** Returns the cached client for this credential version, creating it once. */
 	wecomApp(connection: {
@@ -79,5 +95,60 @@ export class ImConnectionRegistry {
 	/** Drops every cached client; in-flight sends finish on their own handles. */
 	dispose(): void {
 		this.clients.clear();
+    this.socialClients.clear();
 	}
+}
+
+const registries = new WeakMap<AppConfig, ImConnectionRegistry>();
+export function imConnectionRegistryFor(config: AppConfig, options: ImConnectionRuntimeOptions): ImConnectionRegistry {
+  let registry = registries.get(config);
+  if (!registry) { registry = new ImConnectionRegistry(options); registries.set(config, registry); }
+  return registry;
+}
+
+/** Prewarm only operator-configured destinations. This owns no platform registration side effects. */
+export class SocialImReadinessService {
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private refreshing = false;
+  private stopped = false;
+  constructor(private readonly options: ImConnectionRuntimeOptions & { readonly getConfig: () => AppConfig }) {}
+  client(config: AppConfig, name: string): SocialImClient | undefined {
+    const connection = config.im?.connections?.[name];
+    if (!connection || connection.enabled === false || (connection.kind !== "slack_app" && connection.kind !== "discord_bot" && connection.kind !== "telegram_bot")) return undefined;
+    try { return imConnectionRegistryFor(config, this.options).social(connection); } catch { return undefined; }
+  }
+  start(): void {
+    this.stopped = false;
+    void this.refresh();
+    this.timer = setInterval(() => { void this.refresh(); }, 30_000);
+    this.timer.unref();
+  }
+  dispose(): void { this.stopped = true; if (this.timer) clearInterval(this.timer); this.timer = undefined; }
+  async refresh(): Promise<void> {
+    if (this.refreshing || this.stopped) return;
+    this.refreshing = true;
+    try {
+      const config = this.options.getConfig();
+      const targets = new Map<string, Set<string>>();
+      const add = (name: string, target: string) => { const values = targets.get(name) ?? new Set<string>(); values.add(target); targets.set(name, values); };
+      for (const channel of config.outputs.channels) {
+        if (channel.connection && ["slack_app", "discord_bot", "telegram_bot"].includes(channel.kind)) add(channel.connection, channel.chat_id ?? channel.channel_id!);
+      }
+      for (const binding of Object.values(config.im?.command_bindings ?? {})) {
+        if (binding.enabled !== true) continue;
+        for (const conversation of binding.conversations) {
+          if ("id" in conversation) add(binding.connection, conversation.id);
+          else if (conversation.kind === "bot_direct") for (const actor of binding.actors) if (!("kind" in actor) && actor.type === "telegram_user_id") add(binding.connection, actor.id);
+        }
+      }
+      await Promise.allSettled([...targets].map(async ([name, destinations]) => {
+        const client = this.client(config, name);
+        if (!client) return;
+        for (const destination of destinations) {
+          if (this.stopped) return;
+          if (!client.isReady(destination)) await client.refreshReadiness(destination);
+        }
+      }));
+    } finally { this.refreshing = false; }
+  }
 }

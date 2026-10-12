@@ -4,6 +4,15 @@ import { scrubDiff, scrubPromptMessages, scrubText } from "../src/secret-scrubbe
 
 describe("secret-scrubber", () => {
 	describe("scrubText", () => {
+    it.each([
+      "Authorization: Bot short-bot-credential",
+      "Authorization: Bearer short-bearer-credential",
+      "https://api.telegram.org/bot123:telegram-credential/sendMessage",
+      "https://hooks.slack.com/commands/T123/slack-credential",
+      "https://discord.com/api/v10/webhooks/123/discord-credential",
+    ])("redacts transport credentials even when they are short: %s", text => {
+      expect(scrubText(text).text).not.toContain("credential");
+    });
 		it("redacts AWS access key IDs", () => {
 			const result = scrubText('env AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"');
 			expect(result.text).toContain("<REDACTED:AWS_KEY>");

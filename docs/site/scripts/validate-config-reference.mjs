@@ -103,11 +103,11 @@ function unwrap(schema) {
 function isPrimitiveLike(schema) {
   const inner = unwrap(schema);
   const typeName = inner._def.typeName;
-  if (typeName === "ZodUnion" || typeName === "ZodIntersection") {
+  if (typeName === "ZodUnion" || typeName === "ZodIntersection" || typeName === "ZodDiscriminatedUnion") {
     const options =
-      typeName === "ZodUnion"
-        ? inner.options
-        : [inner._def.left, inner._def.right];
+      typeName === "ZodIntersection"
+        ? [inner._def.left, inner._def.right]
+        : inner.options;
     return options.every(isPrimitiveLike);
   }
   return PRIMITIVE_TYPES.has(typeName);
@@ -160,13 +160,13 @@ function collectSchemaPaths(schema, path, nodes, enums) {
     collectSchemaPaths(recordValueSchema(inner), `${path}.<id>`, nodes, enums);
     return;
   }
-  if (typeName === "ZodUnion" || typeName === "ZodIntersection") {
+  if (typeName === "ZodUnion" || typeName === "ZodIntersection" || typeName === "ZodDiscriminatedUnion") {
     if (isPrimitiveLike(inner)) {
       nodes.add(path);
       return;
     }
     const options =
-      typeName === "ZodUnion" ? inner.options : [inner._def.left, inner._def.right];
+      typeName === "ZodIntersection" ? [inner._def.left, inner._def.right] : inner.options;
     for (const option of options) {
       if (!isPrimitiveLike(option)) {
         collectSchemaPaths(option, path, nodes, enums);

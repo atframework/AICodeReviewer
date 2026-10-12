@@ -1,12 +1,17 @@
 ---
 title: IM bots
-description: Push aggregated review summaries to Feishu (飞书) and WeCom (企业微信) group bots.
+description: Send review reports and configure authorized commands for Feishu, WeCom, Slack, Discord and Telegram.
 ---
 
 AICodeReviewer can push aggregated review problems to a Feishu or WeCom group
 via a custom-bot webhook or a Feishu custom application's bot. These are **summary** channels — they receive the
 rolled-up review result, not per-line comments. Configure routing in
 `outputs.routes` or per-workspace `outputs.summary`.
+
+Slack, Discord and Telegram support Bot API reports and four authorized review commands.
+See the [Slack](/en/integrations/slack/), [Discord](/en/integrations/discord/)
+and [Telegram](/en/integrations/telegram/) setup guides. These kinds require a named
+`im.connections` entry and exact destinations; their command callbacks use HTTP.
 
 ## Feishu (飞书)
 

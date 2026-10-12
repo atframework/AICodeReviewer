@@ -529,6 +529,17 @@ describe("readonlyReason coverage", () => {
 // ---------------------------------------------------------------------------
 
 describe("page and section sanity", () => {
+  it("exposes social Bot credentials and restricts callback verification fields by kind", () => {
+    const token = findField("im-connections", "im_connection:token");
+    expect(token.control).toBe("secret-value");
+    expect(token.kinds).toEqual(["slack_app", "discord_bot", "telegram_bot"]);
+    expect(findField("im-connections", "im_connection:callback.signing_secret").kinds).toEqual(["slack_app"]);
+    expect(findField("im-connections", "im_connection:callback.public_key").control).toBe("text");
+    expect(findField("im-connections", "im_connection:callback.public_key").kinds).toEqual(["discord_bot"]);
+    expect(findField("im-connections", "im_connection:callback.secret_token").kinds).toEqual(["telegram_bot"]);
+    expect(findField("channels", "channel:channel_id").kinds).toEqual(["slack_app", "discord_bot"]);
+    expect(findField("channels", "channel:chat_id").kinds).toEqual(["telegram_bot"]);
+  });
   it("orders nav per the design doc", () => {
     expect(spec.pages.map((page) => page.id)).toEqual([
       "providers",

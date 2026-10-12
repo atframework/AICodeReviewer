@@ -7,6 +7,12 @@
 
 ## 1. 范围和默认决策
 
+Slack/Discord/Telegram 的 Bot API 输出、HTTP 四命令和新增 outbox 协议见
+[接入规范](slack-discord-telegram.md)。共享 worker 接收 review 时要求持久 snapshot，
+实际 bootstrap 校验数据库配置模式和 worker readiness；验证、分析、新的 journal POST
+复查当前授权，执行参数仍使用原 snapshot。阶段计数在实际开始前持久化，执行窗口外
+释放 lease 并写入下一时刻；queued 交接恢复复用已有 dispatch 序号。
+
 这些决策用于减少开发模型自行选择方案。发现源码或官方协议与之冲突时，先提交具体冲突和替代方案，
 不通过兼容分支、静默降级或修改测试掩盖冲突。普通命名、内部私有函数拆分不需要再次确认。
 

@@ -53,8 +53,8 @@ The output channel `kind` field is a free-form string constrained by the
 output registry, not a closed enum. Built-in channel kinds include
 `gitea_pr_review`, `github_pr_review`, `gitlab_mr_review`, `gitea_issue`,
 `gitea_problem_issue`, `github_issue`, `github_problem_issue`,
-`gitlab_problem_issue`, `feishu_bot`,
-and `wecom_bot`. The removed `gitea_finding_issue` kind is rejected by
+`gitlab_problem_issue`, `feishu_bot`, `feishu_app`, `wecom_bot`, `wecom_app`,
+`slack_app`, `discord_bot` and `telegram_bot`. The removed `gitea_finding_issue` kind is rejected by
 validation; use `gitea_problem_issue`. See
 [Output channels](/en/configuration/outputs/).
 :::
@@ -377,12 +377,12 @@ These fields apply to `feishu_app`; see the [IM bots guide](/en/integrations/im-
 
 `member_directory` accepts the historical Feishu API form (`chat_id`, optionally
 `cache_ttl_seconds`), an explicit `source: feishu_api` form with the same fields,
-and a `source: file` form backed by a strict YAML/JSON member file. The `file`
-source, `author_mappings`, `connection` and `target` are schema-validated while
-their sender/directory wiring lands progressively (see the [IM bots
-guide](/en/integrations/im-bots/)); database publishing still rejects channel
-records that have no runtime consumer, so these fields do not form a working
-integration on their own.
+and a `source: file` form backed by a strict YAML/JSON member file. The supported
+WeCom/Feishu channel kinds consume their corresponding directory and target
+fields; see the [IM bots guide](/en/integrations/im-bots/). Named connections
+are consumed by the application/Bot senders. Slack, Discord and Telegram require
+named connections and exact destinations, and reject member-directory and
+author-mapping fields.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -396,33 +396,98 @@ integration on their own.
 | `outputs.channels[].member_directory.poll_interval_seconds` | int 5–300 | — | `file` only: periodic content-digest check interval; runtime default 30 |
 | `outputs.channels[].member_directory.allowed_root` | string | — | `file` only: trusted root for real-path boundary checks; defaults to the config base directory |
 | `outputs.channels[].author_mappings.<id>` | string | — | Exact author/workspace identifier to a file member key; mutually exclusive with `user_mappings` |
-| `outputs.channels[].connection` | string | — | Reference into `im.connections`; required for `wecom_app` channels and replaces inline credentials on `feishu_app` channels |
+| `outputs.channels[].connection` | string | — | Reference into `im.connections`; required for `wecom_app`, `slack_app`, `discord_bot`, `telegram_bot`; replaces inline credentials on `feishu_app` |
 | `outputs.channels[].target` | object | — | `wecom_app` only: `{kind: recipients, users/parties/tags}` or `{kind: appchat, chat_id}` — recipients lists and appchat targets are mutually exclusive |
+| `outputs.channels[].target.kind` | enum | — | WeCom only: `recipients` or `appchat` |
+| `outputs.channels[].target.users` | string[] | — | `recipients` only: up to 1000 exact user IDs; at least one recipient list must be non-empty |
+| `outputs.channels[].target.parties` | string[] | — | `recipients` only: up to 100 department IDs |
+| `outputs.channels[].target.tags` | string[] | — | `recipients` only: up to 100 tag IDs |
+| `outputs.channels[].target.chat_id` | string | — | `appchat` only: exact application group ID |
 
 ## `im`
 
 IM connections and command bindings ([IM bots guide](/en/integrations/im-bots/)).
-The schema accepts this namespace while the senders, callbacks and workers land
-progressively; every binding is disabled by default and database publishing keeps
-rejecting consumer-less records, so configuring `im` alone does not enable chat
-commands. `review` commands additionally require a persistent config store.
+Bindings are disabled by default. Enable the connection callback and an exact
+binding to receive commands. `review` additionally requires a durable SQLite or
+PostgreSQL store, database config snapshots and a ready worker. The three new
+platforms use HTTP callbacks; their identities and credentials are listed below.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `im.connections.<id>` | object | — | Named connection map; connection ids match `[A-Za-z0-9][A-Za-z0-9_-]*`; `kind` selects `wecom_app` (`corp_id`, `agent_id`, `app_secret`/`app_secret_env`), `wecom_aibot` (`corp_id`; callback mode adds `callback` and an optional `aibot_id`, long-connection mode adds `aibot_id` plus `secret`/`secret_env`) or `feishu_app` (`app_id`, `app_secret`/`app_secret_env`, optional `base_url`, `tenant_key`), each with an optional `callback` (`enabled` defaults to false at runtime; WeCom `token`/`encoding_aes_key` and Feishu `verification_token`/`encrypt_key`, each as a literal or `*_env` pair that enabled callbacks must provide). Both `wecom_aibot` and `feishu_app` pick their receive mode by `callback.enabled`: `true` serves the event callback (`GET/POST /callbacks/im/<id>`); without an enabled callback the server dials out instead (WeCom needs `aibot_id`+`secret`, Feishu needs `app_id`+`app_secret` via the official SDK long connection) |
-| `im.command_bindings.<id>.enabled` | boolean | — | Runtime default false; disabled drafts stay savable while wiring lands |
+| `im.connections.<id>` | object | — | Named connection map; connection ids match `[A-Za-z0-9][A-Za-z0-9_-]*`; `kind` selects `wecom_app` (`corp_id`, `agent_id`, `app_secret`/`app_secret_env`), `wecom_aibot` (`corp_id`; callback mode adds `callback` and an optional `aibot_id`, long-connection mode adds `aibot_id` plus `secret`/`secret_env`) or `feishu_app` (`app_id`, `app_secret`/`app_secret_env`, optional `base_url`, `tenant_key`), each with an optional `callback` (`enabled` defaults to false at runtime; WeCom `token`/`encoding_aes_key` and Feishu `verification_token`/`encrypt_key`, each as a literal or `*_env` pair that enabled callbacks must provide). Both `wecom_aibot` and `feishu_app` pick their receive mode by `callback.enabled`: `true` serves the event callback (`GET/POST /callbacks/im/<id>`); without an enabled callback the server dials out instead (WeCom needs `aibot_id`+`secret`, Feishu needs `app_id`+`app_secret` via the official SDK long connection) Additional kinds `slack_app`, `discord_bot`, `telegram_bot` use the HTTP-only credentials listed in the next section. |
+| `im.connections.<id>.kind` | enum | — | `wecom_app`, `wecom_aibot`, `feishu_app`, `slack_app`, `discord_bot` or `telegram_bot` |
+| `im.connections.<id>.enabled` | boolean | — | Runtime default true; false disables the connection |
+| `im.connections.<id>.corp_id` | string | — | WeCom corporate identity domain; required for both WeCom kinds |
+| `im.connections.<id>.agent_id` | positive int | — | Required WeCom application agent ID |
+| `im.connections.<id>.app_secret` | string | — | WeCom/Feishu application secret; sealed on persistence; mutually exclusive with `app_secret_env` |
+| `im.connections.<id>.app_secret_env` | string | — | WeCom/Feishu application secret environment reference; one of the credential pair is required |
+| `im.connections.<id>.aibot_id` | string | — | WeCom API bot ID; required for long connection, optional for HTTP callback |
+| `im.connections.<id>.secret` | string | — | WeCom API bot long-connection secret; sealed; mutually exclusive with `secret_env` |
+| `im.connections.<id>.secret_env` | string | — | WeCom API bot long-connection secret environment reference |
+| `im.connections.<id>.app_id` | string | — | Required Feishu or Slack application ID |
+| `im.connections.<id>.base_url` | string | — | Feishu only: `https://open.feishu.cn` or `https://open.larksuite.com`; runtime default is the Feishu origin |
+| `im.connections.<id>.tenant_key` | string | — | Feishu tenant identity; required when callbacks are enabled |
+| `im.connections.<id>.callback.enabled` | boolean | — | Runtime default false; enabled callbacks require kind-specific verification credentials |
+| `im.connections.<id>.callback.token` | string | — | WeCom callback verification token; sealed; mutually exclusive with `token_env` |
+| `im.connections.<id>.callback.token_env` | string | — | WeCom callback verification token environment reference |
+| `im.connections.<id>.callback.encoding_aes_key` | string | — | WeCom callback AES key; sealed; mutually exclusive with `encoding_aes_key_env` |
+| `im.connections.<id>.callback.encoding_aes_key_env` | string | — | WeCom callback AES key environment reference |
+| `im.connections.<id>.callback.verification_token` | string | — | Feishu callback verification token; sealed; mutually exclusive with `verification_token_env` |
+| `im.connections.<id>.callback.verification_token_env` | string | — | Feishu callback verification token environment reference |
+| `im.connections.<id>.callback.encrypt_key` | string | — | Feishu callback encryption key; sealed; mutually exclusive with `encrypt_key_env` |
+| `im.connections.<id>.callback.encrypt_key_env` | string | — | Feishu callback encryption key environment reference |
+| `im.command_bindings.<id>.enabled` | boolean | — | Runtime default false; disabled drafts can be saved; enabled review needs persistent snapshots and a ready worker |
 | `im.command_bindings.<id>.connection` | string | — | Named reference into `im.connections`; enabling a binding requires an existing, enabled connection |
 | `im.command_bindings.<id>.actors[]` | object | — | Matcher array; any hit authorizes. Scope matchers discriminate on `kind`: `any` (any authenticated actor), `wecom_department` (`recursive` defaults to true), `wecom_tag` (the role/user-group carrier), `wecom_position`, `wecom_extattr` (name+value custom field), `feishu_chat` (chat_id membership), `feishu_department`, `feishu_job_title`; matchers adapt to the connection's platform and resolve against server-side directory snapshots — a missing directory fails that dimension closed |
-| `im.command_bindings.<id>.actors[].type` | enum | — | Exact-principal form: `wecom_userid`, `wecom_encrypted_userid` or `feishu_open_id`; the identity namespace comes from the connection |
+| `im.command_bindings.<id>.actors[].type` | enum | — | Exact principal: `wecom_userid`, `wecom_encrypted_userid`, `feishu_open_id`, `slack_user_id`, `discord_user_id`, `telegram_user_id`; identity namespace comes from the connection |
 | `im.command_bindings.<id>.actors[].id` | string | — | Exact typed platform id; no fuzzy or directory-derived authorization |
 | `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 timestamp; an expired matcher (exact principals and `any` alike) stops matching on its own — the general temporary-authorization mechanism |
+| `im.command_bindings.<id>.actors[].kind` | enum | — | Scope matcher discriminator listed above; omitted for exact typed principals; scope matchers are unsupported on Slack/Discord/Telegram |
+| `im.command_bindings.<id>.actors[].recursive` | boolean | — | `wecom_department` only: runtime default true, includes child departments |
+| `im.command_bindings.<id>.actors[].value` | string | — | Exact position, custom-field value or job title for the corresponding scope matcher |
+| `im.command_bindings.<id>.actors[].name` | string | — | `wecom_extattr` only: exact custom-field name |
+| `im.command_bindings.<id>.actors[].chat_id` | string | — | `feishu_chat` only: group ID used for membership authorization |
 | `im.command_bindings.<id>.conversations[]` | object | — | `app_direct` (WeCom/Feishu applications), `bot_direct` (WeCom API bot) or `group` with a non-empty `id`; kinds must match the connection protocol |
+| `im.command_bindings.<id>.conversations[].kind` | enum | — | `app_direct`, `bot_direct`, `group` or `channel`; Slack/Discord use `channel`, Telegram uses `bot_direct` or `group` |
+| `im.command_bindings.<id>.conversations[].id` | string | — | Exact group/channel ID; required for `group` and `channel`, absent for direct conversations |
 | `im.command_bindings.<id>.allow_all_repositories` | boolean | — | Runtime default false; when enabled, repo aliases additionally resolve by exact workspace id or full repo name against observed projects (the projects table), applying to query and review commands |
 | `im.command_bindings.<id>.commands` | enum[] | — | Unique subset of `help`, `chat-id`, `review`, `status`, `cancel` plus the query commands `projects`, `reviews`, `commits`, `prs`, `detail`, `prdetail`, `queue`, `running` |
 | `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | Repo alias target: workspace id, validated against routing/VCS scope at publish |
 | `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | Repo alias target: source trigger name, validated against routing/VCS scope at publish |
 | `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | Repo alias target: repository reference, validated against routing/VCS scope at publish |
 | `im.command_bindings.<id>.report_policy` | enum | — | `workspace_routes` only; runtime default |
+
+### Slack, Discord and Telegram connection fields
+
+These kinds use Bot API outputs and HTTP callbacks only. See the
+[Slack](/en/integrations/slack/), [Discord](/en/integrations/discord/) and
+[Telegram](/en/integrations/telegram/) guides. Exact principal types are
+`slack_user_id`, `discord_user_id`, `telegram_user_id`; conversation kinds are
+`channel` (Slack/Discord), `group` or `bot_direct` (Telegram).
+Only `help`, `chat-id`, `review`, `status` and explicit repository aliases are accepted;
+scope actors and `allow_all_repositories: true` are rejected.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `im.connections.<id>.team_id` | string | — | Slack workspace identity |
+| `im.connections.<id>.bot_user_id` | string | — | Slack Bot user identity; Slack also requires `app_id` |
+| `im.connections.<id>.application_id` | string | — | Discord application snowflake |
+| `im.connections.<id>.guild_id` | string | — | Discord guild snowflake |
+| `im.connections.<id>.bot_id` | string | — | Telegram Bot numeric ID |
+| `im.connections.<id>.token` | string | — | Bot API credential; mutually exclusive with `token_env`; sealed on persistence |
+| `im.connections.<id>.token_env` | string | — | Bot API credential environment reference |
+| `im.connections.<id>.callback.signing_secret` | string | — | Slack HMAC secret; mutually exclusive with its `_env` reference; sealed |
+| `im.connections.<id>.callback.signing_secret_env` | string | — | Slack signing secret reference |
+| `im.connections.<id>.callback.public_key` | string | — | Discord Ed25519 key, 64 hex characters; public data |
+| `im.connections.<id>.callback.secret_token` | string | — | Telegram webhook secret; mutually exclusive with its `_env` reference; sealed |
+| `im.connections.<id>.callback.secret_token_env` | string | — | Telegram webhook secret reference |
+| `outputs.channels[].channel_id` | string | — | Slack/Discord exact channel ID |
+| `outputs.channels[].chat_id` | string | — | Telegram signed decimal chat ID, quoted |
+
+Enabled connections require a token; enabled callbacks require their verification material.
+Output channels require a matching `connection` and reject inline credentials, custom API origins,
+directories, native mentions and thread/topic fields. File-only output is supported;
+review commands additionally require a durable config snapshot and worker.
 
 ## `prompts`
 

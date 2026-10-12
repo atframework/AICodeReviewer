@@ -22,6 +22,9 @@ export const imPrincipalTypeSchema = z.enum([
   "wecom_userid",
   "wecom_encrypted_userid",
   "feishu_open_id",
+  "slack_user_id",
+  "discord_user_id",
+  "telegram_user_id",
 ]);
 export type ImPrincipalType = z.infer<typeof imPrincipalTypeSchema>;
 
@@ -52,6 +55,7 @@ export const imConversationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("app_direct") }).strict(),
   z.object({ kind: z.literal("bot_direct") }).strict(),
   z.object({ kind: z.literal("group"), id: imPlatformIdSchema }).strict(),
+  z.object({ kind: z.literal("channel"), id: imPlatformIdSchema }).strict(),
 ]);
 export type ImConversation = z.infer<typeof imConversationSchema>;
 
@@ -59,7 +63,7 @@ export type ImConversation = z.infer<typeof imConversationSchema>;
 // Connection identity
 // ---------------------------------------------------------------------------
 
-export type ImConnectionKind = "wecom_app" | "wecom_aibot" | "feishu_app";
+export type ImConnectionKind = "wecom_app" | "wecom_aibot" | "feishu_app" | "slack_app" | "discord_bot" | "telegram_bot";
 
 /**
  * Deployment-scoped connection identity (execution contracts §3): secret

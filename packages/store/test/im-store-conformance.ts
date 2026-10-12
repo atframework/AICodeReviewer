@@ -94,7 +94,33 @@ export async function runImStoreConformance(store: StoreDb): Promise<void> {
   await targetedWakeUpClaims(store);
   await actionBindingBoundaries(store);
   await dispatchSequencesAndSnapshotReferences(store);
+  await blockedWorkspaceClaims(store);
   await retentionLifecycle(store);
+  await socialReplyAdmissionAndRecovery(store);
+}
+
+async function socialReplyAdmissionAndRecovery(store: StoreDb): Promise<void> {
+  const req = request();
+  const input = commandInput(deliveryInput(), req);
+  const operationId = `social-${randomUUID()}`;
+  const notify = () => ({ operationId, destinationIdentity: "telegram:123", operationKind: "social_command_reply", payloadDigest: "d", payloadJson: JSON.stringify({ version: 1, text: "accepted" }) });
+  await expect(acceptImDelivery(store, { ...input, notification: () => { throw new Error("transaction fault"); } })).rejects.toThrow("transaction fault");
+  expect(await findImReviewRequest(store, "ns-test", req.requestId)).toBeUndefined();
+  const accepted = await acceptImDelivery(store, { ...input, notification: notify });
+  expect(accepted.kind).toBe("created");
+  expect((await acceptImDelivery(store, { ...input, notification: notify })).kind).toBe("duplicate");
+  const claimed = (await claimDueImReplyNotifications(store, { owner: "social-1", limit: 100, now: T0 })).find(row => row.operationId === operationId)!;
+  expect(claimed.payloadJson).toBe(notify().payloadJson);
+  expect(await finishImReplyNotification(store, { operationId, fence: claimed.fence, owner: "wrong", state: "sending", now: T0 })).toBe(false);
+  expect(await finishImReplyNotification(store, { operationId, fence: claimed.fence, owner: "social-1", state: "sending", now: T0 })).toBe(true);
+  // A fresh worker must never reclaim a message that might already have been posted.
+  expect((await claimDueImReplyNotifications(store, { owner: "social-2", limit: 100, now: new Date(T0.getTime() + 61_000) })).some(row => row.operationId === operationId)).toBe(false);
+  expect(await finishImReplyNotification(store, { operationId, fence: claimed.fence, owner: "social-1", state: "delivered", now: new Date(T0.getTime() + 61_000) })).toBe(false);
+  const aborted = commandInput(deliveryInput(), request());
+  await expect(acceptImDelivery(store, { ...aborted, deadlineAt: 1, notification: notify })).rejects.toThrow();
+  expect(await findImReviewRequest(store, "ns-test", aborted.command!.request.requestId)).toBeUndefined();
+  await expect(acceptImDelivery(store, { ...aborted, notification: () => ({ ...notify(), payloadJson: "x".repeat(16_385) }) })).rejects.toThrow();
+  expect(await findImReviewRequest(store, "ns-test", aborted.command!.request.requestId)).toBeUndefined();
 }
 
 async function actionBindingBoundaries(store: StoreDb): Promise<void> {
@@ -357,11 +383,15 @@ async function dispatchSequencesAndSnapshotReferences(store: StoreDb): Promise<v
   const claimed = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: T0, leaseMs: 60_000, owner: "w1", limit: 10 }))
     .find(entry => entry.request.requestId === req.requestId)!;
 
-  // prepareDispatch increments atomically; the same seq keeps a stable job id.
+  // A new execution increments atomically; a queued handoff retains its identity.
   const first = await prepareImDispatch(store, req.requestId, claimed.fence, T0);
   const again = await prepareImDispatch(store, req.requestId, claimed.fence, T0);
   expect(first).toBe(1);
   expect(again).toBe(2);
+  expect(await updateImReviewRequest(store, { requestId: req.requestId, fence: claimed.fence, state: "queued", now: T0 })).toBe(true);
+  expect(await prepareImDispatch(store, req.requestId, claimed.fence, T0)).toBe(2);
+  expect(await updateImReviewRequest(store, { requestId: req.requestId, fence: claimed.fence, state: "running", now: T0 })).toBe(true);
+  expect(await prepareImDispatch(store, req.requestId, claimed.fence, T0)).toBe(3);
   expect(imReviewJobId(req.requestId, first!)).toBe(`im-review-${req.requestId}-1`);
 
   // finishRequest creates terminal notifications in the same transaction.
@@ -391,6 +421,19 @@ async function dispatchSequencesAndSnapshotReferences(store: StoreDb): Promise<v
   // A terminal request never re-enters the claim scan (§5 terminal rule).
   expect((await claimDueImReviewRequests(store, { namespace: "ns-test", now: new Date(T0.getTime() + 120_000), leaseMs: 60_000, owner: "w3", limit: 100 }))
     .filter(entry => entry.request.requestId === req.requestId)).toHaveLength(0);
+}
+
+async function blockedWorkspaceClaims(store: StoreDb): Promise<void> {
+  const namespace = `fair-${randomUUID()}`;
+  const busy = request({ workspaceId: "busy" });
+  const ready = request({ workspaceId: "ready" });
+  for (const req of [busy, ready]) {
+    const input = commandInput(deliveryInput({ namespace }), req, { activeTarget: { workspaceInstance: req.workspaceId, sourceIdentity: "source" } });
+    expect((await acceptImDelivery(store, input)).kind).toBe("created");
+  }
+  const claimed = await claimDueImReviewRequests(store, { namespace, now: T0, leaseMs: 60_000, owner: "fair", limit: 1, excludeWorkspaceIds: ["busy"] });
+  expect(claimed.map(row => row.request.requestId)).toEqual([ready.requestId]);
+  expect((await findImReviewRequest(store, namespace, busy.requestId))?.leaseOwner).toBeNull();
 }
 
 async function retentionLifecycle(store: StoreDb): Promise<void> {

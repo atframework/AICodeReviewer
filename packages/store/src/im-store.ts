@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, notInArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import {
@@ -109,6 +109,10 @@ export type ImTerminalState = "succeeded" | "partial" | "publication_unknown" | 
 export interface AcceptImDeliveryInput {
   readonly delivery: ImDeliveryIdentity;
   readonly now: Date;
+  /** Pure factory invoked only for a new delivery, inside the admission transaction. */
+  readonly notification?: (outcome: { readonly kind: "created" | "active_merged"; readonly requestId: string }) => ImNotificationInput;
+  readonly signal?: AbortSignal;
+  readonly deadlineAt?: number;
   /** Creates the request, active target, action consumption and quota atomically. */
   readonly command?: {
     readonly request: NewImReviewRequest;
@@ -116,6 +120,26 @@ export interface AcceptImDeliveryInput {
     readonly consumeActionId?: string | undefined;
     readonly rateLimit?: { readonly bucketKey: string; readonly windowStart: Date; readonly limit: number } | undefined;
   } | undefined;
+}
+
+export interface ImNotificationInput {
+  readonly operationId: string;
+  readonly destinationIdentity: string;
+  readonly operationKind: string;
+  readonly payloadDigest: string;
+  readonly payloadJson?: string | undefined;
+  readonly compactReceipt?: string | undefined;
+  readonly nextAttemptAt?: Date | undefined;
+  readonly expiry?: Date | undefined;
+}
+
+export function validateImNotification(notification: ImNotificationInput): void {
+  if (notification.payloadJson !== undefined && Buffer.byteLength(notification.payloadJson, "utf8") > 16 * 1024) throw new Error("IM notification payload exceeds limit.");
+}
+
+export function checkImAdmissionBudget(input: AcceptImDeliveryInput): void {
+  input.signal?.throwIfAborted();
+  if (input.deadlineAt !== undefined && Date.now() >= input.deadlineAt) throw new Error("IM admission deadline exceeded.");
 }
 
 export type AcceptImDeliveryOutcome =
@@ -153,15 +177,7 @@ export interface FinishImReviewRequestInput {
   readonly state: ImTerminalState;
   readonly errorCode?: string | undefined;
   /** Terminal notification rows created in the same transaction. */
-  readonly notifications?: readonly {
-    readonly operationId: string;
-    readonly destinationIdentity: string;
-    readonly operationKind: string;
-    readonly payloadDigest: string;
-    readonly nextAttemptAt?: Date | undefined;
-    readonly expiry?: Date | undefined;
-    readonly compactReceipt?: string | undefined;
-  }[];
+  readonly notifications?: readonly ImNotificationInput[];
   readonly now: Date;
 }
 
@@ -208,9 +224,24 @@ export class ImActionRollback extends Error {
 // ---------------------------------------------------------------------------
 
 export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryInput): Promise<AcceptImDeliveryOutcome> {
+  checkImAdmissionBudget(input);
   if (store.kind === "postgres") return acceptImDeliveryPg(store, input);
+  const busyTimeout = input.deadlineAt === undefined ? undefined : Number(store.sqlite.pragma("busy_timeout", { simple: true }));
+  if (busyTimeout !== undefined) store.sqlite.pragma(`busy_timeout = ${Math.min(busyTimeout, Math.max(1, Math.min(250, input.deadlineAt! - Date.now())))}`);
   try {
     return store.db.transaction((tx) => {
+    const notify = (kind: "created" | "active_merged", requestId: string): void => {
+      checkImAdmissionBudget(input);
+      const notification = input.notification?.({ kind, requestId });
+      if (!notification) return;
+      validateImNotification(notification);
+      tx.insert(imReplyOutbox).values({ ...notification, namespace: input.delivery.namespace,
+        requestId: requestId || null, payloadJson: notification.payloadJson ?? null, compactReceipt: notification.compactReceipt ?? null,
+        expiry: notification.expiry ?? new Date(input.now.getTime() + 86_400_000),
+        state: "pending", nextAttemptAt: notification.nextAttemptAt ?? input.now, createdAt: input.now, updatedAt: input.now,
+      }).onConflictDoNothing().run();
+      checkImAdmissionBudget(input);
+    };
     let inboxId = newImRowId();
     const inserted = tx.insert(imInbox).values({
       id: inboxId,
@@ -243,6 +274,7 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
     }
 
     if (input.command === undefined) {
+      notify("created", "");
       return { kind: "created", inboxId, requestId: "" } as AcceptImDeliveryOutcome;
     }
 
@@ -290,6 +322,7 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
         tx.update(imActions).set({ status: "consumed", consumedRequestId: existingTarget.requestId, updatedAt: input.now })
           .where(eq(imActions.actionId, action)).run();
       }
+      notify("active_merged", existingTarget?.requestId ?? "");
       return { kind: "active_merged", inboxId, requestId: existingTarget?.requestId ?? "" } as AcceptImDeliveryOutcome;
     }
 
@@ -332,12 +365,15 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
         .where(eq(imActions.actionId, action)).run();
     }
     tx.update(imInbox).set({ status: "request_created", requestId: request.requestId }).where(eq(imInbox.id, inboxId)).run();
+    notify("created", request.requestId);
     return { kind: "created", inboxId, requestId: request.requestId } as AcceptImDeliveryOutcome;
     });
   } catch (error) {
     if (error instanceof ImRateLimitRollback) return { kind: "rate_limited", count: error.count };
     if (error instanceof ImActionRollback) return { kind: "action_rejected", reason: error.reason };
     throw error;
+  } finally {
+    if (busyTimeout !== undefined) store.sqlite.pragma(`busy_timeout = ${busyTimeout}`);
   }
 }
 
@@ -370,16 +406,17 @@ export async function findImReviewRequest(store: StoreDb, namespace: string, req
 /** Claims due requests whose lease is absent or expired; CAS fence increments. */
 export async function claimDueImReviewRequests(
   store: StoreDb,
-  options: { readonly namespace: string; readonly now: Date; readonly leaseMs: number; readonly owner: string; readonly limit: number },
+  options: { readonly namespace: string; readonly now: Date; readonly leaseMs: number; readonly owner: string; readonly limit: number; readonly excludeWorkspaceIds?: readonly string[] },
 ): Promise<ClaimedImReviewRequest[]> {
   if (store.kind === "postgres") return claimDueImReviewRequestsPg(store, options);
   const due = await store.db.select().from(imReviewRequests)
     .where(and(
       eq(imReviewRequests.namespace, options.namespace),
-      or(isNull(imReviewRequests.nextAttemptAt), lt(imReviewRequests.nextAttemptAt, options.now)),
+      ...(options.excludeWorkspaceIds?.length ? [notInArray(imReviewRequests.workspaceId, [...options.excludeWorkspaceIds])] : []),
+      or(isNull(imReviewRequests.nextAttemptAt), lte(imReviewRequests.nextAttemptAt, options.now)),
       or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
       inArray(imReviewRequests.state, ["accepted", "validating", "queued", "running", "publishing", "retry_wait"]),
-    )).limit(options.limit);
+    )).orderBy(imReviewRequests.createdAt, imReviewRequests.requestId).limit(options.limit);
   const claimed: ClaimedImReviewRequest[] = [];
   for (const candidate of due) {
     if (candidate.leaseUntil !== null && candidate.leaseUntil.getTime() > options.now.getTime()) continue;
@@ -471,7 +508,7 @@ export async function renewImReviewLease(store: StoreDb, input: {
 /** Atomically increments the dispatch sequence; job id stays stable per seq. */
 export async function prepareImDispatch(store: StoreDb, requestId: string, fence: number, now: Date): Promise<number | undefined> {
   if (store.kind === "postgres") return prepareImDispatchPg(store, requestId, fence, now);
-  const rows = await store.db.update(imReviewRequests).set({ dispatchSeq: sql`${imReviewRequests.dispatchSeq} + 1`, updatedAt: now })
+  const rows = await store.db.update(imReviewRequests).set({ dispatchSeq: sql`CASE WHEN ${imReviewRequests.state} = 'queued' AND ${imReviewRequests.dispatchSeq} > 0 THEN ${imReviewRequests.dispatchSeq} ELSE ${imReviewRequests.dispatchSeq} + 1 END`, updatedAt: now })
     .where(and(eq(imReviewRequests.requestId, requestId), eq(imReviewRequests.fence, fence)))
     .returning({ dispatchSeq: imReviewRequests.dispatchSeq });
   return rows[0]?.dispatchSeq;
@@ -521,6 +558,7 @@ export async function cancelImReviewRequest(store: StoreDb, input: CancelImRevie
     tx.update(imInbox).set({ status: "request_finished" })
       .where(eq(imInbox.requestId, request.requestId)).run();
     for (const notification of input.notifications ?? []) {
+      validateImNotification(notification);
       tx.insert(imReplyOutbox).values({
         operationId: notification.operationId,
         namespace: request.namespace,
@@ -532,6 +570,7 @@ export async function cancelImReviewRequest(store: StoreDb, input: CancelImRevie
         expiry: notification.expiry ?? null,
         nextAttemptAt: notification.nextAttemptAt ?? input.now,
         compactReceipt: notification.compactReceipt ?? null,
+        payloadJson: notification.payloadJson ?? null,
         createdAt: input.now,
         updatedAt: input.now,
       }).run();
@@ -566,6 +605,7 @@ export async function finishImReviewRequest(store: StoreDb, input: FinishImRevie
     tx.update(imInbox).set({ status: "request_finished" })
       .where(eq(imInbox.requestId, request.requestId)).run();
     for (const notification of input.notifications ?? []) {
+      validateImNotification(notification);
       tx.insert(imReplyOutbox).values({
         operationId: notification.operationId,
         namespace: request.namespace,
@@ -577,6 +617,7 @@ export async function finishImReviewRequest(store: StoreDb, input: FinishImRevie
         expiry: notification.expiry ?? null,
         nextAttemptAt: notification.nextAttemptAt ?? input.now,
         compactReceipt: notification.compactReceipt ?? null,
+        payloadJson: notification.payloadJson ?? null,
         createdAt: input.now,
         updatedAt: input.now,
       }).run();
@@ -595,6 +636,8 @@ export interface ImReplyNotificationRow {
   readonly state: string;
   readonly expiry: Date | null;
   readonly compactReceipt: string | null;
+  readonly payloadJson: string | null;
+  readonly leaseOwner: string | null;
   readonly attempts: number;
   readonly fence: number;
 }
@@ -603,6 +646,9 @@ export interface ImReplyNotificationRow {
 export async function claimDueImReplyNotifications(store: StoreDb, input: { readonly owner: string; readonly limit: number; readonly now: Date }): Promise<ImReplyNotificationRow[]> {
   if (store.kind === "postgres") return claimDueImReplyNotificationsPg(store, input);
   return store.db.transaction((tx) => {
+    tx.update(imReplyOutbox).set({ state: "unknown", leaseOwner: null, leaseUntil: null,
+      fence: sql`${imReplyOutbox.fence} + 1`, updatedAt: input.now,
+    }).where(and(eq(imReplyOutbox.state, "sending"), lte(imReplyOutbox.leaseUntil, input.now))).run();
     const due = tx.select().from(imReplyOutbox).where(or(
       and(eq(imReplyOutbox.state, "pending"), lte(imReplyOutbox.nextAttemptAt, input.now)),
       and(eq(imReplyOutbox.state, "delivering"), lte(imReplyOutbox.leaseUntil, input.now)),
@@ -628,15 +674,19 @@ export async function claimDueImReplyNotifications(store: StoreDb, input: { read
 }
 
 /** Terminal update for one notification (delivered / failed / back to pending). */
-export async function finishImReplyNotification(store: StoreDb, input: { readonly operationId: string; readonly fence: number; readonly state: "delivered" | "failed" | "pending"; readonly retryAt?: Date; readonly now: Date }): Promise<boolean> {
+export async function finishImReplyNotification(store: StoreDb, input: { readonly operationId: string; readonly fence: number; readonly state: "delivered" | "failed" | "pending" | "sending" | "unknown" | "rejected"; readonly retryAt?: Date; readonly owner?: string; readonly compactReceipt?: string; readonly now: Date }): Promise<boolean> {
   if (store.kind === "postgres") return finishImReplyNotificationPg(store, input);
   const rows = store.db.update(imReplyOutbox).set({
     state: input.state,
+    ...(input.compactReceipt !== undefined ? { compactReceipt: input.compactReceipt } : {}),
+    ...(["unknown", "rejected"].includes(input.state) ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
     ...(input.state === "pending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: input.retryAt ?? input.now } : {}),
     ...(input.state === "failed" ? { leaseOwner: null, leaseUntil: null } : {}),
     ...(input.state === "delivered" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
     updatedAt: input.now,
-  }).where(and(eq(imReplyOutbox.operationId, input.operationId), eq(imReplyOutbox.fence, input.fence))).returning().all();
+  }).where(and(eq(imReplyOutbox.operationId, input.operationId), eq(imReplyOutbox.fence, input.fence),
+    ...(input.owner === undefined ? [] : [eq(imReplyOutbox.leaseOwner, input.owner), gt(imReplyOutbox.leaseUntil, input.now),
+      eq(imReplyOutbox.state, input.state === "sending" ? "delivering" : "sending")]))).returning().all();
   return rows.length > 0;
 }
 

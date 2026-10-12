@@ -57,6 +57,8 @@ export const SEALED_LITERAL_SECRET_FIELDS: ReadonlySet<string> = new Set([
   "encoding_aes_key",
   "verification_token",
   "encrypt_key",
+  "signing_secret",
+  "secret_token",
 ]);
 
 /**

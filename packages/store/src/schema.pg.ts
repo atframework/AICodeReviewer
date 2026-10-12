@@ -309,6 +309,7 @@ export const imReplyOutbox = pgTable("im_reply_outbox", {
   state: text("state").notNull(),
   expiry: epochMs("expiry"),
   sealedReplyCredential: text("sealed_reply_credential"),
+  payloadJson: text("payload_json"),
   compactReceipt: text("compact_receipt"),
   nextAttemptAt: epochMs("next_attempt_at"),
   attempts: integer("attempts").notNull().default(0),

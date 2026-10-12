@@ -12,3 +12,15 @@ ignoredBuiltDependencies:
   # pnpm auto-runs `node-gyp rebuild` for packages shipping binding.gyp;
   # skip it for better-sqlite3 — runtime loads the bundled prebuild instead.
   - better-sqlite3
+allowBuilds:
+  # Explicit decisions so installs fail closed on NEW unreviewed build scripts
+  # instead of these three (pnpm writes undecided packages here as
+  # "set this to true or false" placeholders, which then hard-fail every
+  # install with ERR_PNPM_IGNORED_BUILDS until decided).
+  # esbuild: platform binary ships via @esbuild/<platform> optional deps; the
+  #   postinstall is only a validation/download fallback.
+  esbuild: false
+  # msgpackr-extract: optional native accelerator; msgpackr falls back to JS.
+  msgpackr-extract: false
+  # protobufjs: pure JS; its postinstall is a compat check, not a build.
+  protobufjs: false

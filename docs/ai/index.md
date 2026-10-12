@@ -22,18 +22,19 @@
 
 ## 路线图
 
-Slack、Discord、Telegram 接入范围为结果推送及命令触发审查，当前待实施。
-按 [SDC 执行步骤](../design/slack-discord-telegram-execution.md)推进配置、发送恢复、三平台输出、
-HTTP 命令、管理联调、故障测试、双语指南和真实平台验收；
-默认值见[接入规范](../design/slack-discord-telegram.md)，断言见[验收矩阵](../design/slack-discord-telegram-acceptance.md)，
-外部接口见[官方来源](sources/slack-discord-telegram.md)。命令交付依赖下列已有 IM 缺口的相关验收。
+Slack、Discord、Telegram 的本地实现已落地；待完成专用账户上的公开 HTTPS 回调、
+真实命令、报告显示、长任务终态与回滚验收。按
+[执行步骤](../design/slack-discord-telegram-execution.md)和
+[验收矩阵](../design/slack-discord-telegram-acceptance.md)控制调用预算并保留未覆盖边界。
+稳定配置与恢复约定见[接入规范](../design/slack-discord-telegram.md)，外部接口见
+[官方来源](sources/slack-discord-telegram.md)，使用文档见[目录](../README.md)。
 
 IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 [IM 实施规范](../design/im-implementation-spec.md)，外部协议见[来源记录](sources/im-integrations.md)。
 主要未完成项：
 
-- IM-11、IM-17：补可执行命令的持久配置/worker readiness 校验，以及排队和发布前的当前授权复查。
-- IM-14：补同次队列交接恢复、跨 workspace 公平性、执行窗口和完整阶段尝试/退避。
+- IM-11、IM-17：补原平台动作/范围目录在真实重启组合中的授权证据；命令持久 readiness 和当前授权复查已有实现。
+- IM-14：补队列多进程交接与共享并发许可的组合证据；queued ID 复用、忙 workspace 排除、执行窗口和阶段次数/IO 退避已有本地断言。
 - IM-13、IM-19、IM-20：核验 VCS 家族与范围、真实重启及多连接竞争，完成逐项验收证据映射；
   现有测试通过不代表整个验收矩阵完成。
 
@@ -110,6 +111,7 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 | [M36](milestones/M36.md) | 运行控制与队列治理 |
 | [M37](milestones/M37.md) | Git push 完整评审单元 |
 | [M38](milestones/M38.md) | IM 回调重新评审与恢复修复 |
+| [M39](milestones/M39.md) | Slack、Discord、Telegram 本地接入 |
 | [P0–P15](milestones/local-priority-queue.md) | 本地优先执行队列 |
 
 归档规则见根 [AGENTS.md](../../AGENTS.md)；详细过程由 Git 历史追溯。

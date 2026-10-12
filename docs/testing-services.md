@@ -14,6 +14,14 @@ Debian 容器统一通过 `tests/services/debian-mirror.sh` 使用中科大国�
 
 ## 按依赖选择服务
 
+Slack、Discord、Telegram 普通测试使用 HTTP 替身，不读取真实平台凭据。
+本地入口为 `packages/{core,outputs,server}/test/social-im*.test.ts` 和两后端
+`im-store` conformance；运行命令与本轮日志见
+[接入验收](design/slack-discord-telegram-acceptance.md)。平台注册工具
+`scripts/register-social-im.mjs` 默认纯 dry-run，只有显式 `--apply` 才读取指定
+token 环境变量并写平台。真实平台验收变量、调用上限和归属清理见该矩阵 L01–L03；
+当前没有自动 live 流程，不应将上述变量存在误当作已执行验收。
+
 | 依赖 | 本地可验证 | 资源与剩余限制 |
 | --- | --- | --- |
 | Gitea | 真实 commit 作者关联、issue 发布及最终 assignees、权限失败 | 单容器 + SQLite，1 CPU / 512 MiB；关闭 SSH/Actions/邮件/注册。固定 1.25.4，不能替代其他版本/Forgejo/GitHub |

@@ -1,6 +1,7 @@
 # Slack、Discord、Telegram 接入规范
 
-状态：待实施。2026-10-12 已确认范围为发送审查结果和命令触发审查；本轮仅制定计划。
+状态：2026-10-12 已接入本地 Bot API 输出和 HTTP 四命令；真实平台验收独立保留。
+当前接口以源码为准，实际测试与剩余验收见矩阵；此前规划所列 baseline 不代表现状。
 源码基线 `d7994eb`，开始调研时工作树干净。后续实施须重新核对源码，不能把本文的拟新增接口视作已有 API。
 入口见 [Plan.md](../../Plan.md)，任务顺序见[执行步骤](slack-discord-telegram-execution.md)，
 测试断言见[验收矩阵](slack-discord-telegram-acceptance.md)，外部事实见[官方来源](../ai/sources/slack-discord-telegram.md)。
@@ -25,7 +26,11 @@
 不借现有字段 passthrough 静默启用。HTTP 方案要求可被平台访问的 HTTPS 地址；无公网入口的部署
 可先仅启用输出，不能声称命令入口可用。
 
-## 2. 已核对的实现及前置缺口
+## 2. 实施前 baseline 与前置约束
+
+下表记录规划提交 `6112f05` 的起点。当前共用实现为 outputs `social-im.ts`、
+`social-im-markdown.ts`，server `im/protocol-social.ts`、`social-callback.ts`、
+`social-command-service.ts`、`social-identity.ts`；职责和验收沿用本规范，没有增加 SDK/Gateway/polling。
 
 | 位置 | 当前证据 | 实施约束 |
 | --- | --- | --- |
@@ -45,7 +50,8 @@
 
 ### 3.1 连接和输出
 
-以下均为拟新增字段。完整片段见[草案示例](../../example/slack-discord-telegram-design.md)。
+以下字段已实现。可加载示例见 [Slack](../../example/slack-app.yaml)、
+[Discord](../../example/discord-bot.yaml)、[Telegram](../../example/telegram-bot.yaml)。
 `im` 仍 optional，旧配置解析结果不注入新默认节点。
 
 | kind | 连接字段 | callback 字段（启用时要求） | output 字段 |
@@ -81,7 +87,7 @@ corpId 保持 undefined；namespace 继续参与隔离。凭据轮换不改变�
 不能把新增 channel 走进“非 group 则发给 actor”的旧默认分支。
 
 发送 client 的 generation 缓存须含 secret 指纹；日志不输出该指纹。后台 readiness 核验 Slack auth.test
-的 team/user 及 conversations.info 的频道类型、Discord 当前应用及频道 guild/type、Telegram getMe 的
+的 team/user 及 conversations.info 的 context_team_id、频道类型、成员身份和写入限制，Discord 当前应用及频道 guild/type、Telegram getMe 的
 id/username 及 getChat 的目标类型。不能按 ID 前缀猜测会话类型。
 元数据缓存有效期 300 秒（本地设计值），按 generation/身份/目的地隔离；失败或到期且未刷新则不 ready。
 预热范围只含已配置的输出和 binding 会话；不自动发现其他频道。Slack 增加 channels:read，
@@ -149,9 +155,11 @@ Telegram transformer 将通用 Markdown 转成普通 text 与加粗/代码/安�
 
 ### 6.1 三种结果必须分开
 
-拟新增共用发送结果：`delivered(receipt)`、`rejected(code,retryAt?)`、`unknown(code)`。
+共用发送结果：`delivered(receipt)`、`rejected(code,retryAt?)`、`unknown(code)`。
 HTTP 2xx 不代表业务成功；缺回执、JSON 无法解析、超时、连接重置、可能已接收的 5xx 均不能证明未发送。
-401/403、业务拒绝等明确失败不重发；可信 429/retry_after 可按平台给出的 due time 有界重试。
+401/403、业务拒绝等明确失败不重发；可信 429/retry_after 可按平台给出的 due time 有界重试回复。
+Slack `internal_error`、`fatal_error`、`service_unavailable` 和 Telegram 5xx 业务错误保持 unknown；
+不能将所有 `ok:false` 都当作确定未写入。发布 journal 恢复也不会再次 POST 已明确拒绝的操作。
 只读身份查询可采用既有有界 IO 退避，不把其规则照搬到 POST。
 
 PublicationJournal 新 provider 使用 unqueryable 策略。发送前写 operation identity/request digest；
@@ -163,7 +171,7 @@ Discord nonce 若使用只能作额外短期保护，不改变 unknown 策略；
 
 ### 6.2 outbox 扩展
 
-复用 im_reply_outbox，新增版本化 payload 存储（建议列 `payload_json`）及必要的 remote receipt，
+复用 im_reply_outbox，通过追加迁移 `013_im_reply_payload` 新增版本化 `payload_json` 和必要 remote receipt，
 将当前 compactReceipt 混用通知输入的旧格式保留为兼容读取。SQLite/PG 追加迁移，禁止修改历史 migration/checksum。
 新 payload 含 connectionIdentity、connectionName、typed conversation、actor、requestId/command kind、
 有界返回文本和摘要；不含原始输入、完整报告或临时交互凭证。单条 JSON 上限 16 KiB，输出文本仍遵守第 5 节预算。
@@ -179,12 +187,15 @@ acceptImDelivery 扩展可选 reply 写入，使 Telegram inbox、review 请求/
 help/chat-id/status 的 reply 同样与 inbox 原子登记。终态通知仍与 finishRequest 同事务产生。
 终态源会话通知只含 request ID、状态和查询语法，不能复用当前包含 repoRef/revision 的文本模板泄露报告上下文。
 发送前检查当前授权及持久 destinationIdentity，不允许连接名重用、群迁移或配置改动把旧消息转发至新目的地。
-通知失败不改变已完成 review，也不再次调用 LLM；status 能区别 analysis/publication/reply 的状态。
+通知失败不改变已完成 review，也不再次调用 LLM。status 返回 request 的阶段/终态；
+通知自己的 pending/sending/delivered/rejected/unknown 状态独立保留在 outbox，不合并成 review 状态。
 
 ### 6.3 限流与错误脱敏
 
-遵守 S4/D5/T4，按连接身份与目的地/平台 bucket 串行化；共享 outbox 退避持久化 due time。
-初始通知最多 5 次明确可重试尝试，生命周期 24 小时（本地设计值）；Retry-After 超过期限则 expired，不能缩短平台等待时间。
+遵守 S4/D5/T4；worker 顺序发送，client 按连接/目的地及 Discord global 提示保持限流缓存；
+outbox 退避持久化 due time。缓存不提供跨进程吞吐承诺，其他 worker 仍需遵守各自收到的 429。
+初始通知最多 5 次明确可重试尝试，生命周期 24 小时（本地设计值）；due 超过期限时 rejected，
+仍 pending 而过期时 expired，不能缩短平台等待时间。
 本地队列限流不替代远端 429；多进程测试验证不会忙循环，不能承诺平台固定吞吐。
 Authorization、Slack response_url、Discord interaction token、Telegram `/bot<token>/` 路径均须脱敏，
 包括 fetch 错误、redirect、trace、管理 API 预览和平台业务 error 文本。只记录有界错误码，不记录上游原文。
@@ -199,5 +210,5 @@ Authorization、Slack response_url、Discord interaction token、Telegram `/bot<
   禁止默认 drop_pending_updates；多个副本不能争抢同一 Bot webhook。
 - 回滚先禁用新 bindings/callback admission，再停止新 claim、排空或保留可恢复请求；输出单独禁用。
   保留 outbox/unknown/receipt，不删记录后重发；恢复旧二进制前核查 schema reader 兼容性。
-- 本轮只改计划文档，公开站点仍描述现有运行能力。实际实现交付时按执行步骤同步双语使用文档、可运行示例、
-  输出规范和 AI 导航；不在主评审 prompt 加入平台操作规则。
+- 双语指南、可运行示例、输出规范和 AI 导航同步维护；主评审 prompt 无需平台操作规则，
+  传输认证、当前授权与恢复由宿主实现。

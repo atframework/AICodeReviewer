@@ -102,7 +102,7 @@ describe("checked-in configuration examples", () => {
   const CONFIG_NAMESPACES = new Set([
     "storage", "admin", "config_sources", "server", "llm", "triggers",
     "outputs", "prompts", "queue", "agent", "compression", "review",
-    "workspaces",
+    "workspaces", "im",
   ]);
   const YAML_BLOCK = /^```ya?ml\s*\r?\n([\s\S]*?)^```/gm;
 

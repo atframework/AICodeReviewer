@@ -1,9 +1,9 @@
 # Slack、Discord、Telegram 配置草案
 
-状态：待实施，不能作为当前运行配置加载。这里固定[接入规范](../docs/design/slack-discord-telegram.md)中的字段和关系，
-供后续模型实现及编写可运行样例；没有创建应用或注册回调。所有 ID/凭据都是占位值。
-实现完成后按[文档交付任务](../docs/design/slack-discord-telegram-execution.md#sdc-09最终使用文档与可运行样例)
-生成经 compiler/bootstrap 验证的独立 YAML 样例和双语指南。
+这里保留[接入规范](../docs/design/slack-discord-telegram.md)中的合并片段，本文本身不是完整配置。
+可加载样例为 [Slack](slack-app.yaml)、[Discord](discord-bot.yaml)、[Telegram](telegram-bot.yaml)，
+均已由 schema/compiler/bootstrap 测试验证；实际权限及注册见对应双语使用指南。
+没有创建真实应用或注册回调。所有 ID/凭据都是占位值。
 
 ## 仅发送结果
 

@@ -1,6 +1,6 @@
 import type { AppConfig, ImActorScopes, ImBindingActor, ImCommandBindingConfig, ImCommandName } from "@aicr/core";
 import type { ImCommand, ImConversation, ImPrincipal } from "@aicr/core";
-import type { AcceptImDeliveryOutcome, StoreDb } from "@aicr/store";
+import type { AcceptImDeliveryOutcome, AcceptImDeliveryInput, StoreDb } from "@aicr/store";
 import { acceptImDelivery, findImReviewRequest } from "@aicr/store";
 
 /**
@@ -162,7 +162,7 @@ function conversationsMatch(
 ): boolean {
   return binding.conversations.some(allowed => {
     if (allowed.kind !== conversation.kind) return false;
-    if (allowed.kind === "group" && conversation.kind === "group") return allowed.id === conversation.id;
+    if ("id" in allowed && "id" in conversation) return allowed.id === conversation.id;
     return true; // direct kinds
   });
 }
@@ -283,6 +283,9 @@ export interface ImCommandAdmitInput {
   readonly now: Date;
   readonly configSnapshotId: string;
   readonly configFileDigest: string;
+  readonly signal?: AbortSignal;
+  readonly deadlineAt?: number;
+  readonly notification?: AcceptImDeliveryInput["notification"];
   /** Resolved directory facts; scope matchers fail closed without them. */
   readonly actorScopes?: ImActorScopes | undefined;
 }
@@ -301,6 +304,9 @@ export type ImCommandAdmitOutcome =
  * (their replies are produced by IM-16's outbox). No VCS or LLM runs here.
  */
 export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput): Promise<ImCommandAdmitOutcome> {
+  if (input.command.kind === "review" && (!input.configSnapshotId || input.configSnapshotId === "file-only")) {
+    return { kind: "rejected", reason: "review_runtime_not_ready" };
+  }
   const authorized = authorizeImCommand({
     config: input.config,
     connectionName: input.connectionName,
@@ -326,6 +332,9 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
         payloadDigest: input.payloadDigest,
       },
       now: input.now,
+      ...(input.notification ? { notification: input.notification } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.deadlineAt ? { deadlineAt: input.deadlineAt } : {}),
     });
     if (outcome.kind === "conflict") return { kind: "duplicate", requestId: null };
     return { kind: "accepted", requestId: "" };
@@ -344,6 +353,9 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
       payloadDigest: input.payloadDigest,
     },
     now: input.now,
+    ...(input.notification ? { notification: input.notification } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.deadlineAt ? { deadlineAt: input.deadlineAt } : {}),
     command: {
       request: {
         requestId,
@@ -362,6 +374,7 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
           configSnapshotId: input.configSnapshotId,
           fileDigest: input.configFileDigest,
           connectionName: input.connectionName,
+          bindingId: Object.entries(input.config.im?.command_bindings ?? {}).find(([, binding]) => binding === authorized.binding)?.[0],
         }),
       },
       activeTarget: {

@@ -1278,6 +1278,31 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
   });
 });
 
+test("social Bot identity and secret fields follow kind selection and publish through the form", async ({ page, request }) => {
+  await login(page); await openConfigTab(page, "IM connections");
+  const token = await bearerToken(page); const before = await apiView(request, token);
+  const drawer = page.locator("#config-editor");
+  await page.getByRole("button", { name: "New im connection", exact: true }).click();
+  await drawer.locator("#cfg-drawer-kind").selectOption("slack_app");
+  await expect(drawer.locator('[data-field-id="im_connection:team_id"]')).toBeVisible();
+  await expect(drawer.locator('[data-field-id="im_connection:token"]')).toBeVisible();
+  await expect(drawer.locator('[data-field-id="im_connection:corp_id"]')).toBeHidden();
+  await drawer.locator("#cfg-drawer-kind").selectOption("discord_bot");
+  await expect(drawer.locator('[data-field-id="im_connection:application_id"]')).toBeVisible();
+  await expect(drawer.locator('[data-field-id="im_connection:team_id"]')).toBeHidden();
+  await drawer.locator("#cfg-drawer-kind").selectOption("telegram_bot");
+  await expect(drawer.locator('[data-field-id="im_connection:bot_id"]')).toBeVisible();
+  await setTextField(drawer, "im_connection:$name", "social-ui");
+  await setTextField(drawer, "im_connection:bot_id", "123");
+  await setTextField(drawer, "im_connection:token", "123:browser-social-secret");
+  await drawer.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await page.getByRole("button", { name: "Publish staged changes", exact: true }).click();
+  await expect.poll(async () => (await apiView(request, token)).head?.activeRevision).toBe((before.head?.activeRevision ?? 0) + 1);
+  const connections = await apiCollection(request, token, "im_connection");
+  expect(connections.find(entry => entry.name === "social-ui")?.value).toMatchObject({ kind: "telegram_bot", bot_id: "123" });
+  expect(JSON.stringify(connections)).not.toContain("browser-social-secret");
+});
+
 test("IM connections page edits kind-scoped fields, stages and publishes a WeCom connection (IM-03: C08)", async ({ page, request }) => {
   await login(page);
   await openConfigTab(page, "IM connections");

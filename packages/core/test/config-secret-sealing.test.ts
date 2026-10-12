@@ -38,6 +38,15 @@ describe("parseConfigSecretsKeyMaterial", () => {
 });
 
 describe("envelope round-trip", () => {
+  it("seals social Bot credentials while preserving Discord public verification data", () => {
+    const config = { im: { connections: { bot: { kind: "discord_bot", token: "bot-secret", callback: { signing_secret: "hmac-secret", secret_token: "webhook-secret", public_key: "11".repeat(32) } } } } };
+    const sealed = sealConfigSecretLiterals(config, sealing());
+    expect(sealed.im.connections.bot.token).not.toBe("bot-secret");
+    expect(sealed.im.connections.bot.callback.signing_secret).not.toBe("hmac-secret");
+    expect(sealed.im.connections.bot.callback.secret_token).not.toBe("webhook-secret");
+    expect(sealed.im.connections.bot.callback.public_key).toBe("11".repeat(32));
+    expect(openConfigSecretLiterals(sealed, sealing())).toEqual(config);
+  });
   it("exempts only document maps, retaining credential sealing on similarly named extensions", () => {
     const source = {
       outputs: { templates: { token: "Example text" } },

@@ -63,91 +63,57 @@
     "Noto Sans Mono CJK SC", "Noto Sans Mono SC", Consolas, monospace;
 }
 
-/* Full-bleed content width (no fixed max-width cap).
+/* ------------------------------------------------------------------ *
+ * Wide-screen layout: one content width for prose and components.
  *
- * Starlight caps the content column by default (--sl-content-width: 45rem on
- * regular pages, 67.5rem on splash pages), which leaves large empty gutters on
- * 2.5K / 4K / ultra-wide displays. We drop the cap by setting the width to
- * 100% — exactly what Starlight's own print stylesheet does. The content then
- * fills the space between the sidebar and the table of contents on regular
- * pages, and the full viewport on landing pages. On small screens the width
- * naturally collapses to the viewport, so low resolutions are unaffected.
- *
- * Two knobs keep this readable at every resolution WITHOUT reintroducing a
- * hard cap:
- *   1. --sl-content-pad-x grows with the viewport so content keeps breathing
- *      room and never hugs the screen edge.
- *   2. On very large screens the root font-size scales up, so text stays
- *      comfortably sized and line density reasonable while the whole UI grows
- *      proportionally. (Media-query `rem` is measured against the initial 16px
- *      root size, so these thresholds never shift when the root size changes.)
- */
+ * Starlight's content container owns the width of paragraphs, lists, tables
+ * and component boxes. A separate character-based cap on paragraphs or list
+ * items leaves most of a wide section empty and makes adjacent asides and
+ * cards look disconnected. Keep the shared container bounded instead.
+ * Root font size stays unchanged so rem-based navigation and sidebars retain
+ * their proportions at every viewport size.
+ * ------------------------------------------------------------------ */
 
-:root,
-html:not([data-has-sidebar]) {
-  --sl-content-width: 100%;
+:root {
+  --sl-content-width: 96rem;
 }
 
-/* Grow horizontal padding in steps so full-width content keeps breathing room
- * on progressively larger screens (laptop -> 2.5K -> 4K -> ultra-wide). */
+/* Splash pages (landing): Page.astro ships an UNLAYERED inline rule
+ * `html:not([data-has-sidebar]) { --sl-content-width: 67.5rem }` that ties our
+ * `:root` rule on specificity and wins on source order, so bump specificity
+ * with the always-present data-theme attribute. Landing content is card- and
+ * section-driven rather than long-form prose, so it gets a wider 120rem cap:
+ * true 100% full-bleed was tested and breaks down at ultrawide widths (~211
+ * CJK chars per line inside asides, ~550px link cards at 3440px). */
+html:not([data-has-sidebar])[data-theme] {
+  --sl-content-width: 120rem;
+}
+
+/* Modest horizontal padding growth; beyond the 96rem cap the gutters absorb
+ * the remaining space, so content never hugs the screen edge. */
 @media (min-width: 72rem) {
   :root {
-    --sl-content-pad-x: 2rem;
+    --sl-content-pad-x: 1.5rem;
   }
 }
 
 @media (min-width: 100rem) {
   :root {
-    --sl-content-pad-x: 3rem;
+    --sl-content-pad-x: 2rem;
   }
 }
 
-@media (min-width: 140rem) {
-  :root {
-    --sl-content-pad-x: 4rem;
-  }
+/* Aside titles may contain inline code. Flex turns those fragments into
+ * separate items that can overflow a narrow callout; normal inline layout
+ * keeps the whole title together while allowing it to wrap. */
+.starlight-aside__title {
+  display: block;
 }
 
-@media (min-width: 200rem) {
-  :root {
-    --sl-content-pad-x: 6rem;
-  }
-}
-
-/* Fluid typography for high-resolution displays. With no content-width cap,
- * scaling the root font-size (instead of capping line length) is what keeps
- * text comfortable and lines from running too long on 2.5K / 4K / 5K screens,
- * and it scales spacing and the sidebars proportionally too. Standard
- * 1080p / 1440p displays (<= 2560px = 160rem) are left completely untouched. */
-@media (min-width: 176rem) {
-  :root {
-    font-size: 106.25%; /* ~17px */
-  }
-}
-
-@media (min-width: 224rem) {
-  :root {
-    font-size: 118.75%; /* ~19px */
-  }
-}
-
-@media (min-width: 300rem) {
-  :root {
-    font-size: 131.25%; /* ~21px */
-  }
-}
-
-/* Optional reading measure for prose. Defaults to `none` (full-width, no cap),
- * so paragraphs and lists span the full column just like tables, code blocks,
- * and card grids. Set `--aicr-prose-measure` to a value such as `90ch` if you
- * later prefer to constrain long-form line length on wide screens; it will not
- * affect tables, code, or card grids. */
-:root {
-  --aicr-prose-measure: none;
-}
-
-.sl-markdown-content :where(p, li, blockquote, dd, dt) {
-  max-width: var(--aicr-prose-measure);
+.starlight-aside__title .starlight-aside__icon {
+  display: inline-block;
+  margin-inline-end: 0.5rem;
+  vertical-align: middle;
 }
 
 /* ------------------------------------------------------------------ *

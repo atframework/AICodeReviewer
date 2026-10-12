@@ -319,6 +319,7 @@ export const imReplyOutbox = sqliteTable("im_reply_outbox", {
   state: text("state").notNull(),
   expiry: integer("expiry", { mode: "timestamp_ms" }),
   sealedReplyCredential: text("sealed_reply_credential"),
+  payloadJson: text("payload_json"),
   compactReceipt: text("compact_receipt"),
   nextAttemptAt: integer("next_attempt_at", { mode: "timestamp_ms" }),
   attempts: integer("attempts").notNull().default(0),

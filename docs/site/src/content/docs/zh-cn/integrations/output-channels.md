@@ -72,6 +72,9 @@ Channel 的 `kind` 是由输出实现注册表约束的自由字符串（Zod 校
 
 | Kind | Problem 输出 | Summary 输出 | 说明 |
 | --- | --- | --- | --- |
+| `slack_app` | 缓冲为一条报告 | 有界 Slack mrkdwn | 准确 connection/channel；[指南](/zh-cn/integrations/slack/) |
+| `discord_bot` | 缓冲为一条报告 | 有界 Markdown，禁用 mention | 准确 application/guild/channel；[指南](/zh-cn/integrations/discord/) |
+| `telegram_bot` | 缓冲为一条报告 | 纯文本加显式 entities | 准确 Bot/chat；[指南](/zh-cn/integrations/telegram/) |
 | `gitea_pr_review` | 一条合并的 PR review/评论正文 | PR review / 配置的 summary 发布器 | problem 先缓冲，再作为一条 Markdown 正文 flush；403/422 时退化为一条 issue 评论 |
 | `github_pr_review` | 一条合并的 PR review/评论正文 | PR review / 配置的 summary 发布器 | 与 `gitea_pr_review` 相同的缓冲+flush；403/422 时退化为 issue 评论 |
 | `gitlab_mr_review` | 当 `baseSha`/`headSha` 可用时发 MR discussion | MR note / 配置的 summary 发布器 | 行锚点不可用时退化为通用 MR note |

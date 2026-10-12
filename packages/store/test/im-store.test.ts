@@ -34,9 +34,9 @@ describe("R01: migration registry", () => {
   it("ships the 011_im_tables step as the next append-only version", () => {
     const names = STORE_SQLITE_MIGRATIONS.map(step => step.name);
     expect(names).toContain("011_im_tables");
-    expect(names.at(-1)).toBe("012_review_event");
+    expect(names.at(-1)).toBe("013_im_reply_payload");
     expect(new Set(names).size).toBe(names.length);
-    expect(names).toHaveLength(12);
+    expect(names).toHaveLength(13);
   });
 
   it("verifies an existing store without rewriting it", async () => {

@@ -27,6 +27,27 @@ afterEach(async () => {
 });
 
 suite("im store conformance [postgres]", () => {
+  it("bounds a blocked admission statement below one second and rolls back the inbox", async () => {
+    const { acceptImDelivery } = await import("../src/im-store.js");
+    const lock = await store.pool.connect();
+    const key = `blocked-${randomUUID()}`;
+    try {
+      await lock.query("BEGIN");
+      await lock.query("LOCK TABLE im_inbox IN ACCESS EXCLUSIVE MODE");
+      const started = performance.now();
+      await expect(acceptImDelivery(store, {
+        delivery: { namespace: "deadline", connectionIdentity: "social", deliveryKind: "message", deliveryKey: key, payloadDigest: "d" },
+        now: new Date(), deadlineAt: Date.now() + 1000, signal: AbortSignal.timeout(1000),
+      })).rejects.toThrow();
+      expect(performance.now() - started).toBeLessThan(1000);
+    } finally {
+      await lock.query("ROLLBACK");
+      lock.release();
+    }
+    const rows = await store.pool.query<{ count: string }>("SELECT count(*) FROM im_inbox WHERE delivery_key = $1", [key]);
+    expect(rows.rows[0]?.count).toBe("0");
+  });
+
   it("accepts, merges, fences, dispatches and retains atomically (R02–R06)", async () => {
     await runImStoreConformance(store);
   });

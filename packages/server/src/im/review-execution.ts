@@ -30,6 +30,9 @@ export function createImReviewExecutor(options: {
   const now = options.now ?? Date.now;
   const runReview = options.runReview ?? runReviewOrchestration;
   return async ({ event, request, signal, resume, hooks }) => {
+    const requireAuthorization = async (): Promise<void> => {
+      if (hooks.isAuthorized && !await hooks.isAuthorized()) throw new Error("im.authorization_revoked");
+    };
     const startMs = now();
     const receipts = new Map<string, PublicationReceipt>(resume?.receipts.map(receipt => [receipt.channel, receipt]) ?? []);
     const attempted = new Set<string>();
@@ -72,6 +75,7 @@ export function createImReviewExecutor(options: {
         ...(remote ? { operations: remote.operations } : {}),
         signal: executionSignal,
         now,
+        beforeWrite: requireAuthorization,
         save: async operations => {
           if (payload === undefined) {
             const failure = new Error("remote publication requires a durable analysis payload");
@@ -125,6 +129,7 @@ export function createImReviewExecutor(options: {
     };
 
     try {
+      await requireAuthorization();
       const result = await runReview({
         reviewEvent: event, payload: {}, provider: "manual", eventName: "im.command.review",
         runId: request.runId, runSource: "im_command", signal: executionSignal,
@@ -134,6 +139,7 @@ export function createImReviewExecutor(options: {
         ...options.orchestrationOptions,
         ...(payload !== undefined ? { resumePublication: payload } : {}),
         onAnalysisComplete: async (outputState, analysis?: ReviewAnalysisSnapshot) => {
+          await requireAuthorization();
           payload = {
             problems: outputState.problems,
             summaries: outputState.summaries,
@@ -168,8 +174,8 @@ export function createImReviewExecutor(options: {
         await persistFailedRunToStore(options.store, request.runId, event, now() - startMs, startMs, error);
       }
       return {
-        state: "publication_unknown" as const,
-        errorCode: cancelled ? "im.cancelled_by_user" : "im.review_failed_unknown",
+        state: error instanceof Error && error.message === "im.authorization_revoked" && attempted.size === 0 ? "rejected" : "publication_unknown",
+        errorCode: error instanceof Error && error.message === "im.authorization_revoked" ? "im.authorization_revoked" : cancelled ? "im.cancelled_by_user" : "im.review_failed_unknown",
       };
     }
   };

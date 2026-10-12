@@ -1,8 +1,56 @@
 # Slack、Discord、Telegram 验收矩阵
 
-状态：以下新增验收全部待实施/执行。规范见[接入规范](slack-discord-telegram.md)，任务见[执行步骤](slack-discord-telegram-execution.md)。
-本表的测试文件名未存在时表示拟新增；现有文件名均相对相应 package 的 `test/`。
+状态：本地实现、参数化测试和适用完整门禁通过；真实账户 L01–L03 未执行。
+规范见[接入规范](slack-discord-telegram.md)，任务见[执行步骤](slack-discord-telegram-execution.md)。
+表中测试位置相对相应 package 的 `test/`；平台专属协议和发送用例合并到共享 `social-im-*` 文件。
 沿用原 IM 验收作为共享前置，不用同名新编号覆盖原文件中的证据。
+
+## 2026-10-12 实现与证据定位
+
+| 对应断言 | 实现入口 | 本轮实际测试与边界 |
+| --- | --- | --- |
+| C01–C03 | core `im-config.ts`、`config.ts`、`config-capabilities.ts`；server `social-callback.ts` | `social-im-config.test.ts`、`social-im-callbacks.test.ts`；三 kind、精确范围、file-only 拒绝、disabled 草案；metadata 反例在 outputs `social-im.test.ts` |
+| C04–C05、G02 | core `config-secret-*`、`config-ui-spec.ts`、`config-components.ts` | config-publish/secret-policy/sealing/UI 测试；`social-im-authorization.test.ts` 的三平台轮换/撤权；browser `config-ui.spec.ts` 新表单流程 |
+| S01–S07、A01–A02 | server `protocol-social.ts`、`social-command-service.ts`、共享 parser | `social-im-protocol.test.ts` 固定 HMAC/Ed25519 向量、UTF-8/重复键/数字身份；`social-im-callbacks.test.ts` 三平台认证、去重、越限与空 body 取消；授权测试验证 status 同 actor 范围 |
+| S08 | `social-callback.ts`；store `acceptImDelivery` 的 deadline/事务 | 独立 SQLite writer 锁与 PG ACCESS EXCLUSIVE 锁均验证 admission 小于 1 秒、零 inbox/request；PG 独立连接用例见 `im-store-pg.test.ts`。stalled stream 1 秒取消，wall-time 断言允许 500ms 调度误差；不将合成 callback 计为公网期限证据 |
+| A03、R01–R03 | SQLite/PG append-only 013；`im-store*.ts`；`reply-service.ts` | `im-store-conformance.ts` 由 `im-store.test.ts` 和真实 `im-store-pg.test.ts` 执行：通知工厂故障整笔回滚、duplicate 一次回复、超限 payload、owner/fence、sending 租约后零重领；PG 独立连接并发接收 |
+| A04、R05–R06 | `currentImRequestAuthorized`；manual worker；executor/journal `beforeWrite` | worker 测试验证撤权零 VCS、queued ID 在 fresh worker 复用、窗口等待零尝试、暂时 IO 退避；两后端 conformance 验证忙 workspace 排除；executor 三平台断言分析前及 durable intent 后撤权零新 POST。原 IM 多进程组合矩阵继续保留 |
+| A06、O01–O02、G01 | bootstrap publisher/resolver；`social-im-markdown.ts`；wecom-summary 内置模板 | `social-im-publishing.test.ts` 三平台实际配置、summary/line-only/named template、一条聚合消息、重复 flush；`social-im-examples.test.ts` 实际 YAML→compiler→resolver→HTTP；源回复只含 ID/状态 |
+| O03–O07、R08 | outputs `social-im.ts`、formatter、publication journal | `social-im.test.ts` 三平台身份/type/TTL/429/业务失败/错目标回执，fresh journal 的 confirmed/unknown/rejected 零重复 POST；旧 journal/checkpoint/multi-channel 测试补充超限与部分成功。普通非持久路径没有跨重启 exactly-once 保证 |
+| R03、R06–R07 | `reply-service.ts`、版本化 payload/current auth/sending CAS | `social-im-replies.test.ts` 三平台只持久有限回执、fresh worker 响应丢失不重发、撤权无远端请求；Telegram 429 due 跨 worker 恢复；sending crash 不重发 |
+| G03、D01–D03 | 注册工具、双语指南、侧栏、字段参考、三份 YAML | `social-im-registration.test.ts` 默认离线 dry-run、Discord 单条 PATCH 保留其他命令、Telegram webhook 所有权冲突零写入；启动没有注册调用；六篇指南及样例由配置示例/文档门禁检查 |
+| G04、D04 | repository baseline；专用 loopback PG/Redis/OOM | 完整覆盖率最终发现 239 文件、5139 用例；5107 通过、32 环境跳过；真实存储与服务清理见下方门禁记录 |
+| L01–L03 | 专用真实平台账户与公开 HTTPS callback | 未执行；没有平台注册、真实通知或真实 LLM 验收证据 |
+
+上述行定位本轮覆盖的断言与限制，不把同一编号内所有未列出的 crash/跨进程组合自动标完成。
+原 IM 的完整范围目录、P4 depot/SVN 作者和多进程组合仍见 [Plan.md](../../Plan.md)。
+
+## 最终门禁记录
+
+2026-10-12，以下命令退出码均为 0。日志是本次工作区的本地证据，位于忽略的 `build/logs/`。
+
+| 门禁 | 实际结果 | 最终日志（相对 `build/logs/`） |
+| --- | --- | --- |
+| `node node_modules/eslint/bin/eslint.js . --max-warnings=0` | 无 lint 错误或警告 | `social-im-lint-last.log` |
+| `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` | 全部项目通过 | `social-im-typecheck-final.log` |
+| `node node_modules/vitest/vitest.mjs run --coverage --maxWorkers=1` | 239 文件：225 通过、14 跳过；5139 用例：5107 通过、32 跳过 | `social-im-coverage-last.log` |
+| 覆盖率阈值 | statements 88.27%、branches 80.72%、functions 90.27%、lines 90.32%；全部适用阈值通过 | `social-im-coverage-last.log` |
+| Repository Markdown | 166 文件，0 issues | `social-im-markdown-last.log` |
+| `pnpm build` | 11 个 runtime package 构建通过 | `social-im-build-final.log` |
+| `node packages/cli/dist/index.js eval --validate-only` | 6 个离线 fixture 通过；无真实模型调用 | `social-im-eval-final.log` |
+| `pnpm test:browser` | 44 用例通过，含新三平台表单与秘密保存流程 | `social-im-browser-final.log` |
+| `pnpm docs:check` | 827 schema 路径、11 enum 行、29 双语页面对及内部链接校验通过；Astro 16 文件：0 errors、0 warnings、10 hints | `social-im-docs-check-verified.log` |
+| `pnpm docs:build` | 60 页面及搜索索引构建通过 | `social-im-docs-build-final.log` |
+| `git diff --check` | 无 whitespace 错误 | `social-im-diff-check-last.log` |
+
+完整测试显式注入本次拥有的 PostgreSQL、Redis、独立 Redis OOM 端点，PG migration/conformance、
+Redis 故障注入未因端点缺失跳过。其余环境条件跳过不计为通过，真实平台 L01–L03 未运行。
+服务清理见 `social-im-services-cleanup.log`；独立检查确认三个监听端口及专用 fixture 数据均已移除。
+
+首轮失败保留在 `social-im-coverage-final.log`：指南配置片段缺少连接域字段、
+generic auth 遮罩抢先分类 JWT，均已修复。后续 `social-im-coverage-pass.log` 的历史 SQLite
+迁移进程用例超时，检查资源并保留日志后，未改断言或时限的定向检查和完整重跑通过，
+不据此推断超时的唯一成因。文档字段校验补上 discriminated union 遍历并补齐双方参考；未放宽门禁。
 
 ## 证据填写方式
 

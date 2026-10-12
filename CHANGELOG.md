@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Docs site dev/preview servers now bind `127.0.0.1` instead of `localhost`: on hosts where the resolver returns `::1` first, the default produced an IPv6-only `[::1]` listener that was unreachable wherever the IPv6 loopback is broken, so the printed `http://localhost:4321` URL never opened.
+
+### Changed
+
+- Docs site wide-screen layout: content column cap raised from 45rem to 96rem on docs pages and 120rem on the splash landing page so 2.5K/4K viewports are used, while running text stays capped at a 62ch prose measure (~62 Latin / ~39 CJK characters per line, within WCAG 1.4.8); tables, code blocks, and card grids keep the full column width, and full-width component boxes (Aside/Card/LinkCard) let their inner text fill the frame. The previous full-bleed experiment (100% width plus root font-size scaling) produced ~229-character lines at 2560px and is removed. Landing pages no longer duplicate the site title in the browser tab (`Home | AICodeReviewer` / `首页 | AICodeReviewer`).
+
 ## [0.3.0]
 
 ### Added

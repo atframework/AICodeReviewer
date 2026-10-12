@@ -507,6 +507,18 @@ describe("reference resolution on publish", () => {
 });
 
 describe("IM entity publication (IM-02: C04/C06/C07)", () => {
+  it.each([
+    { kind: "slack_app", app_id: "A123", team_id: "T123", bot_user_id: "U123", token: "token", callback: { enabled: true, signing_secret: "signing" } },
+    { kind: "discord_bot", application_id: "123", guild_id: "456", token: "token", callback: { enabled: true, public_key: "11".repeat(32) } },
+    { kind: "telegram_bot", bot_id: "123", token: "123:token", callback: { enabled: true, secret_token: "webhook" } },
+  ])("publishes $kind through the normal entity pipeline with sealed Bot credentials", async value => {
+    const prepared = prepareConfigPublication(publishInput({ operations: [imOp("im_connections", "social", value)] }));
+    expect(prepared.effective.im?.connections?.social?.kind).toBe(value.kind);
+    expect((await publish(prepared)).status).toBe("committed");
+    const stored = (await currentDoc(NAMESPACE))?.entities?.im_connections?.["rec-social"]?.value as Record<string, unknown>;
+    expect(String(stored.token)).toMatch(/^enc:v1\./u);
+    expect(openConfigSecretLiterals(stored, createConfigSecretSealing(Buffer.alloc(32, 7)))).toMatchObject(value);
+  });
   const connectionValue = {
     kind: "wecom_app",
     corp_id: "ww_example",

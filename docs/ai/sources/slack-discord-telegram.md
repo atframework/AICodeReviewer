@@ -1,7 +1,7 @@
 # Slack、Discord、Telegram 官方接口核查
 
 - last_checked: 2026-10-12
-- next_review: 实施对应适配器之前，以及平台公告改变相关接口时
+- next_review: 2027-01-12，或平台公告改变相关接口时提前
 - update_trigger: 认证、权限、消息格式、响应期限、限流或恢复策略变化
 - evidence_scope: 当前官方文档与本地源码；本轮没有注册应用、发送消息或验证真实账户
 
@@ -20,6 +20,11 @@
 | S6 | [格式](https://docs.slack.dev/messaging/formatting-message-text/) | mrkdwn 与通用 Markdown 不同；`&`、`<`、`>` 及原生 mention/link 要分别处理，不能将审查文本直接当可信 mention markup |
 | S7 | [auth.test](https://docs.slack.dev/reference/methods/auth.test/) | 可验证 token 的身份和 workspace；用 team_id/user_id 对照配置，不推断 app_id 一定出现在此响应中 |
 | S8 | [conversations.info](https://docs.slack.dev/reference/methods/conversations.info/) | 返回 conversation 类型；公开/私有频道元数据分别涉及 channels:read/groups:read。不能只按 ID 首字母判断 DM；后台只读取已配置目标，不列出聊天历史或成员目录 |
+| S9 | [App manifest](https://docs.slack.dev/reference/app-manifest/) | manifest 包含 bot_user、slash_commands URL/usage_hint 和 Bot scopes；工具只生成待导入对象，启动不注册 |
+| S10 | [Conversation object](https://docs.slack.dev/reference/objects/conversation-object/) | context_team_id 为必填 workspace 身份；is_member 是调用 token 的成员资格；旧私有频道可能 is_group=true；is_read_only/is_frozen/is_thread_only 为 true 时不能主动发顶层报告 |
+
+实施时重查 S3 的错误定义：`internal_error`/`fatal_error` 可能部分成功，`ok:false` 并非一律安全重试；
+client/journal 保留 unknown。三平台均采用主动 API，不持久化临时 response_url/interaction token。
 
 未找到可用于本计划的、明确保证任意重启后去重的 `client_msg_id` 时间窗口。
 文档中的参数或错误名不能单独证明 exactly-once；本地日志保留未知发送，不自动重发。

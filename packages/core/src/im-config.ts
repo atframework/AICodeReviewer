@@ -21,7 +21,14 @@ import {
  */
 
 /** Connection protocol kinds, in schema order; feeds the UI kind selector. */
-export const IM_CONNECTION_KINDS = ["wecom_app", "wecom_aibot", "feishu_app"] as const;
+export const IM_CONNECTION_KINDS = ["wecom_app", "wecom_aibot", "feishu_app", "slack_app", "discord_bot", "telegram_bot"] as const;
+
+export const SOCIAL_IM_KINDS = ["slack_app", "discord_bot", "telegram_bot"] as const;
+export const isSocialImKind = (kind: string): kind is typeof SOCIAL_IM_KINDS[number] =>
+  (SOCIAL_IM_KINDS as readonly string[]).includes(kind);
+export const decimalPlatformIdSchema = z.string().regex(/^[1-9][0-9]*$/u).max(32);
+export const telegramChatIdSchema = z.string().regex(/^-?[1-9][0-9]*$/u).max(32);
+export const slackPlatformIdSchema = z.string().regex(/^[A-Z][A-Z0-9]+$/u).max(64);
 
 /** Named-map keys for connections and command bindings (execution contracts §2). */
 export const imEntityNameSchema = z
@@ -130,9 +137,52 @@ const feishuAppConnectionSchema = z
   })
   .strict();
 
+const socialTokenFields = {
+  enabled: z.boolean().optional(),
+  token: z.string().min(1).optional(),
+  token_env: z.string().min(1).optional(),
+};
+const slackCallbackSchema = z.object({
+  enabled: z.boolean().optional(),
+  signing_secret: z.string().min(1).optional(),
+  signing_secret_env: z.string().min(1).optional(),
+}).strict().superRefine((value, ctx) => requireCredential(ctx, value, "signing_secret", "signing_secret_env", value.enabled === true));
+const telegramCallbackSchema = z.object({
+  enabled: z.boolean().optional(),
+  // Persistence may contain a sealed envelope; validate protocol alphabet after unsealing.
+  secret_token: z.string().min(1).optional(),
+  secret_token_env: z.string().min(1).optional(),
+}).strict().superRefine((value, ctx) => requireCredential(ctx, value, "secret_token", "secret_token_env", value.enabled === true));
+const discordCallbackSchema = z.object({
+  enabled: z.boolean().optional(),
+  public_key: z.string().regex(/^[a-fA-F0-9]{64}$/u).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.enabled === true && value.public_key === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["public_key"], message: "enabled callbacks require public_key." });
+  }
+});
+const slackConnectionSchema = z.object({
+  kind: z.literal("slack_app"), ...socialTokenFields,
+  app_id: slackPlatformIdSchema, team_id: slackPlatformIdSchema, bot_user_id: slackPlatformIdSchema,
+  callback: slackCallbackSchema.optional(),
+}).strict();
+const discordConnectionSchema = z.object({
+  kind: z.literal("discord_bot"), ...socialTokenFields,
+  application_id: decimalPlatformIdSchema, guild_id: decimalPlatformIdSchema,
+  callback: discordCallbackSchema.optional(),
+}).strict();
+const telegramConnectionSchema = z.object({
+  kind: z.literal("telegram_bot"), ...socialTokenFields,
+  bot_id: decimalPlatformIdSchema, callback: telegramCallbackSchema.optional(),
+}).strict();
+
 export const imConnectionSchema = z
-  .discriminatedUnion("kind", [wecomAppConnectionSchema, wecomAibotConnectionSchema, feishuAppConnectionSchema])
+  .discriminatedUnion("kind", [wecomAppConnectionSchema, wecomAibotConnectionSchema, feishuAppConnectionSchema,
+    slackConnectionSchema, discordConnectionSchema, telegramConnectionSchema])
   .superRefine((connection, ctx) => {
+    if (isSocialImKind(connection.kind)) {
+      requireCredential(ctx, connection, "token", "token_env", connection.enabled !== false);
+    }
     if (connection.kind === "wecom_app" || connection.kind === "feishu_app") {
       addSecretMutexIssues(ctx, connection, [["app_secret", "app_secret_env"]]);
       if (connection.app_secret === undefined && connection.app_secret_env === undefined) {
@@ -286,6 +336,9 @@ const CONVERSATIONS_BY_CONNECTION_KIND: Readonly<Record<ImConnectionKind, readon
   wecom_app: ["app_direct"],
   wecom_aibot: ["bot_direct", "group"],
   feishu_app: ["app_direct", "group"],
+  slack_app: ["channel"],
+  discord_bot: ["channel"],
+  telegram_bot: ["bot_direct", "group"],
 };
 
 /** Actor identity types each connection protocol can authenticate (execution contracts §2). */
@@ -293,6 +346,9 @@ const ACTOR_TYPES_BY_CONNECTION_KIND: Readonly<Record<ImConnectionKind, readonly
   wecom_app: ["wecom_userid"],
   wecom_aibot: ["wecom_userid", "wecom_encrypted_userid"],
   feishu_app: ["feishu_open_id"],
+  slack_app: ["slack_user_id"],
+  discord_bot: ["discord_user_id"],
+  telegram_bot: ["telegram_user_id"],
 };
 
 const actorKey = (actor: ImBindingActor): string => {
@@ -318,12 +374,15 @@ const SCOPE_ACTOR_KINDS_BY_CONNECTION_KIND: Readonly<Record<ImConnectionKind, re
   wecom_app: ["wecom_department", "wecom_tag", "wecom_position", "wecom_extattr"],
   wecom_aibot: ["wecom_department", "wecom_tag", "wecom_position", "wecom_extattr"],
   feishu_app: ["feishu_chat", "feishu_department", "feishu_job_title"],
+  slack_app: [],
+  discord_bot: [],
+  telegram_bot: [],
 };
 
 const conversationsOverlap = (a: ImConversation, b: ImConversation): boolean => {
   if (a.kind !== b.kind) return false;
-  if (a.kind !== "group" || b.kind !== "group") return true;
-  return a.id === b.id;
+  if ("id" in a && "id" in b) return a.id === b.id;
+  return true;
 };
 
 export const imConfigSchema = z
@@ -336,12 +395,28 @@ export const imConfigSchema = z
     const connections = im.connections ?? {};
     const bindings = Object.entries(im.command_bindings ?? {});
 
+    const callbackOwners = new Set<string>();
+    for (const [name, connection] of Object.entries(connections)) {
+      if (!isSocialImKind(connection.kind) || connection.enabled === false || connection.callback?.enabled !== true) continue;
+      const id = connection.kind === "telegram_bot" ? connection.bot_id : connection.kind === "discord_bot" ? connection.application_id : connection.kind === "slack_app" ? connection.app_id : undefined;
+      const owner = `${connection.kind}:${id}`;
+      if (callbackOwners.has(owner)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["connections", name], message: "an application may have only one enabled callback connection." });
+      callbackOwners.add(owner);
+    }
+
     for (const [name, binding] of bindings) {
-      if (binding.enabled !== true) {
-        continue;
-      }
       const connection = connections[binding.connection];
       const basePath: [string, string] = ["command_bindings", name];
+      if (connection !== undefined && isSocialImKind(connection.kind)) {
+        if (binding.allow_all_repositories === true) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "allow_all_repositories"], message: "social IM requires explicit repository mappings." });
+        binding.commands.forEach((command, index) => {
+          if (!["help", "chat-id", "review", "status"].includes(command)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "commands", index], message: "social IM supports help/chat-id/review/status only." });
+        });
+        binding.actors.forEach((actor, index) => {
+          if ("kind" in actor) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "actors", index], message: "social IM requires exact typed actors." });
+        });
+      }
+      if (binding.enabled !== true) continue;
       if (connection === undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -359,6 +434,10 @@ export const imConfigSchema = z
       }
       const allowedConversations = CONVERSATIONS_BY_CONNECTION_KIND[connection.kind];
       binding.conversations.forEach((conversation, index) => {
+        if (isSocialImKind(connection.kind) && "id" in conversation) {
+          const schema = connection.kind === "slack_app" ? slackPlatformIdSchema : connection.kind === "discord_bot" ? decimalPlatformIdSchema : telegramChatIdSchema;
+          if (!schema.safeParse(conversation.id).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "conversations", index, "id"], message: "invalid platform conversation ID." });
+        }
         if (!allowedConversations.includes(conversation.kind)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -370,6 +449,10 @@ export const imConfigSchema = z
       const allowedActorTypes = ACTOR_TYPES_BY_CONNECTION_KIND[connection.kind];
       const allowedScopeKinds = SCOPE_ACTOR_KINDS_BY_CONNECTION_KIND[connection.kind];
       binding.actors.forEach((actor, index) => {
+        if (isSocialImKind(connection.kind) && !("kind" in actor)) {
+          const schema = connection.kind === "slack_app" ? slackPlatformIdSchema : decimalPlatformIdSchema;
+          if (!schema.safeParse(actor.id).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "actors", index, "id"], message: "invalid platform actor ID." });
+        }
         if ("kind" in actor) {
           if (actor.kind !== "any" && !allowedScopeKinds.includes(actor.kind)) {
             ctx.addIssue({

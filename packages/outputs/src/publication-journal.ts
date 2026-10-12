@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { RemotePublicationOperation } from "@aicr/core";
 import type { FetchLike, ResponseLike } from "./index.js";
 
-type Provider = "github" | "gitea" | "gitlab" | "feishu" | "wecom_app" | "webhook";
+type Provider = "github" | "gitea" | "gitlab" | "feishu" | "wecom_app" | "webhook" | "slack_app" | "discord_bot" | "telegram_bot";
 type Operation = RemotePublicationOperation;
 type Request = NonNullable<Parameters<FetchLike>[1]>;
 
@@ -27,17 +27,25 @@ function marker(id: string): string { return `<!-- aicr:publication=${id} -->`; 
 
 function compactResponse(raw: unknown): Record<string, string | number> {
   const result: Record<string, string | number> = {};
-  for (const key of ["id", "number", "iid", "index", "html_url", "url", "state", "message_id", "code"]) {
+  for (const key of ["id", "number", "iid", "index", "html_url", "url", "state", "message_id", "code", "channel", "channel_id", "ts"]) {
     const value = object(raw)[key];
     if ((typeof value === "string" && value.length <= 2048) || (typeof value === "number" && Number.isFinite(value))) result[key] = value;
   }
   const messageId = object(object(raw).data).message_id;
   if (typeof messageId === "string" && messageId.length <= 2048) result.message_id = messageId;
+  const telegram = object(object(raw).result);
+  if (Number.isSafeInteger(telegram.message_id) && Number.isSafeInteger(object(telegram.chat).id)) {
+    result.message_id = Number(telegram.message_id);
+    result.chat_id = Number(object(telegram.chat).id);
+  }
   return result;
 }
 
-function response(value: NonNullable<Operation["response"]>, feishu = false): ResponseLike {
-  const raw = feishu ? { code: 0, data: { message_id: value.data.message_id } } : value.data;
+function response(value: NonNullable<Operation["response"]>, provider: Provider): ResponseLike {
+  const raw = provider === "feishu" ? { code: 0, data: { message_id: value.data.message_id } }
+    : provider === "slack_app" ? { ok: true, ...value.data }
+    : provider === "telegram_bot" ? { ok: true, result: { message_id: value.data.message_id, chat: { id: value.data.chat_id } } }
+    : value.data;
   return { ok: true, status: value.status, statusText: "Reconciled", json: async () => raw, text: async () => JSON.stringify(raw) };
 }
 
@@ -115,6 +123,7 @@ export class PublicationJournal {
     readonly save: (operations: readonly Operation[]) => Promise<void>;
     readonly signal?: AbortSignal;
     readonly now?: () => number;
+    readonly beforeWrite?: () => Promise<void>;
   }) {
     this.operations = new Map(options.operations?.map(op => [op.id, op]));
   }
@@ -214,7 +223,7 @@ export class PublicationJournal {
     // sends. Everything else in the URL is part of the request identity.
     const hashInput = provider === "wecom_app" && url.searchParams.has("access_token")
       ? (() => { const normalized = new URL(input); normalized.searchParams.delete("access_token"); return normalized.href; })()
-      : input;
+      : provider === "telegram_bot" ? input.replace(/\/bot[^/]+/u, "/bot") : input;
     // Query pending writes before a live list changes the dispatcher's create/update branch.
     for (const op of this.operations.values()) {
       if (op.channel === channel && op.call === call && op.status === "unknown" && op.scope === scope && scope && !this.checked.has(op.id)) {
@@ -241,7 +250,13 @@ export class PublicationJournal {
     const { uuid: _uuid, timestamp: _timestamp, sign: _sign, ...stableBody } = body;
     const id = hash([this.options.batchId, channel, call, method, hashInput, stableBody, identity ?? null]);
     const existing = this.operations.get(id);
-    if (existing?.status === "confirmed") return response(existing.response!, provider === "feishu");
+    if (existing?.status === "confirmed") return response(existing.response!, provider);
+    if (["slack_app", "discord_bot", "telegram_bot"].includes(provider)
+      && [...this.operations.values()].some(op => op.channel === channel && op.call === call && op.status === "rejected")) {
+      // A crash after an explicit rejection does not authorize another POST.
+      // Timed reply retries have their own durable outbox due time.
+      throw new PublicationReconciliationError("publisher_previously_rejected");
+    }
     // One message per logical send: a confirmed write blocks changed bodies.
     // Chunked WeCom application reports deliberately issue several parts, so
     // for wecom_app only a changed body under the SAME part identity blocks;
@@ -249,7 +264,7 @@ export class PublicationJournal {
     const blocksConfirmed = (op: Operation): boolean => provider === "wecom_app"
       ? (op.identity ?? undefined) === (identity ?? undefined)
       : true;
-    if ((provider === "feishu" || provider === "webhook" || provider === "wecom_app")
+    if (["feishu", "webhook", "wecom_app", "slack_app", "discord_bot", "telegram_bot"].includes(provider)
       && [...this.operations.values()].some(op => op.channel === channel && op.call === call && op.status === "confirmed"
         && blocksConfirmed(op))) {
       throw new PublicationReconciliationError("request_changed_after_confirmed_write");
@@ -277,9 +292,12 @@ export class PublicationJournal {
     let outgoing = init;
     if (strategy === "marker") outgoing = { ...init, body: JSON.stringify({ ...body, body: `${body.body}\n\n${marker(id)}` }) };
     if (strategy === "feishu_uuid") outgoing = { ...init, body: JSON.stringify({ ...body, uuid: id.slice(0, 48) }) };
+    await this.options.beforeWrite?.();
     await this.save(op); // Write-ahead intent, fenced by the batch lease.
     this.checked.add(id);
-    const sent = await fetch(input, { ...outgoing, redirect: "error", ...(this.options.signal ? { signal: this.options.signal } : {}) });
+    await this.options.beforeWrite?.();
+    const signal = this.options.signal && outgoing.signal ? AbortSignal.any([this.options.signal, outgoing.signal]) : this.options.signal ?? outgoing.signal;
+    const sent = await fetch(input, { ...outgoing, redirect: "error", ...(signal ? { signal } : {}) });
     this.guard();
     if (!sent.ok) {
       if (sent.status >= 400 && sent.status < 500 && sent.status !== 408) await this.save({ ...op, status: "rejected", updatedAt: this.now() });
@@ -295,6 +313,18 @@ export class PublicationJournal {
     }
     if (strategy === "unqueryable") {
       const data = object(raw);
+      if (provider === "slack_app" || provider === "telegram_bot" || provider === "discord_bot") {
+        if ((provider === "slack_app" || provider === "telegram_bot") && data.ok === false) {
+          const ambiguous = provider === "slack_app" ? ["internal_error", "fatal_error", "service_unavailable"].includes(String(data.error)) : Number(data.error_code) >= 500;
+          if (!ambiguous) await this.save({ ...op, status: "rejected", updatedAt: this.now() });
+          return withBody(sent, raw);
+        }
+        const target = provider === "telegram_bot" ? object(data.result) : data;
+        const valid = provider === "slack_app" ? data.ok === true && typeof data.ts === "string" && /^\d+\.\d+$/u.test(data.ts) && data.channel === body.channel
+          : provider === "discord_bot" ? typeof data.id === "string" && /^[1-9][0-9]*$/u.test(data.id) && data.channel_id === url.pathname.split("/").at(-2)
+          : data.ok === true && Number.isSafeInteger(target.message_id) && Number(target.message_id) > 0 && Number.isSafeInteger(object(target.chat).id) && String(object(target.chat).id) === String(body.chat_id);
+        if (!valid) throw new PublicationReconciliationError("invalid_write_response");
+      }
       if ((data.code !== undefined && data.code !== 0) || (data.errcode !== undefined && data.errcode !== 0)) {
         // WeCom answers business rejections with HTTP 200; recording them as
         // rejected (like Feishu token codes) keeps later retries legal while

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import type { AppConfig } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
-import { claimDueImReplyNotifications, finishImReplyNotification } from "@aicr/store";
+import { claimDueImReplyNotifications, finishImReplyNotification, type ImReplyNotificationRow } from "@aicr/store";
+import { toBoundedSlackMarkdown, toDiscordMarkdown, toTelegramMessage } from "@aicr/outputs";
+import { imConnectionRegistryFor } from "./connections.js";
+import { parseSocialReplyPayload, socialReplyAuthorized } from "./social-command-service.js";
 
 import { sendFeishuReply } from "./inline-reply.js";
 import { WecomAibotLongConnection } from "./wecom-long-connection.js";
@@ -52,6 +55,9 @@ export class ImReplyService {
   private readonly owner = `im-reply-${randomUUID().slice(0, 8)}`;
   private readonly senders = new Map<string, { readonly key: string; readonly sender: WecomAibotLongConnection }>();
   private scanning = false;
+  private stopped = false;
+  private activeScan: Promise<void> | undefined;
+  private readonly abort = new AbortController();
   private longConnectionSender: ((connectionName: string, chatId: string, text: string, isGroup: boolean) => Promise<boolean>) | undefined;
 
   constructor(options: ImReplyServiceOptions) {
@@ -65,7 +71,7 @@ export class ImReplyService {
   }
 
   start(): void {
-    if (this.timer !== undefined) return;
+    if (this.timer !== undefined || this.stopped) return;
     void this.scan();
     this.timer = setInterval(() => {
       void this.scan();
@@ -74,14 +80,27 @@ export class ImReplyService {
   }
 
   dispose(): void {
+    this.stopped = true;
+    this.abort.abort();
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
     for (const entry of this.senders.values()) entry.sender.dispose();
     this.senders.clear();
   }
 
+  async stop(): Promise<void> {
+    this.dispose();
+    await this.activeScan;
+  }
+
   async scan(): Promise<void> {
-    if (this.scanning) return;
+    if (this.scanning || this.stopped) return;
+    const task = this.scanPass();
+    this.activeScan = task;
+    try { await task; } finally { if (this.activeScan === task) this.activeScan = undefined; }
+  }
+
+  private async scanPass(): Promise<void> {
     this.scanning = true;
     try {
       const claimed = await claimDueImReplyNotifications(this.options.store, {
@@ -90,6 +109,7 @@ export class ImReplyService {
         now: this.now(),
       });
       for (const row of claimed) {
+        if (this.stopped) break;
         await this.deliver(row);
       }
     } catch (error) {
@@ -99,7 +119,8 @@ export class ImReplyService {
     }
   }
 
-  private async deliver(row: { readonly operationId: string; readonly fence: number; readonly attempts: number; readonly destinationIdentity: string; readonly compactReceipt: string | null }): Promise<void> {
+  private async deliver(row: ImReplyNotificationRow): Promise<void> {
+    if (row.payloadJson !== null) { await this.deliverSocial(row); return; }
     const now = this.now();
     let receipt: CompactReceipt;
     try {
@@ -137,6 +158,47 @@ export class ImReplyService {
           now,
         });
       } catch { /* the row stays leased; the next cycle re-claims after expiry */ }
+    }
+  }
+
+  private async deliverSocial(row: ImReplyNotificationRow): Promise<void> {
+    const payload = parseSocialReplyPayload(row.payloadJson ?? "");
+    const config = await this.options.getConfig();
+    if (!payload || row.destinationIdentity !== payload.connectionIdentity || !await socialReplyAuthorized(config, row.namespace, payload, this.options.store)) {
+      await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "rejected", now: this.now() });
+      return;
+    }
+    const connection = config.im?.connections?.[payload.connectionName];
+    if (!connection || (connection.kind !== "slack_app" && connection.kind !== "discord_bot" && connection.kind !== "telegram_bot")) return;
+    try {
+      const client = imConnectionRegistryFor(config, { env: this.options.env, ...(this.options.fetch ? { fetch: this.options.fetch } : {}), now: () => this.now().getTime() }).social(connection);
+      const destination = "id" in payload.conversation ? payload.conversation.id : payload.actor.id;
+      if (!client.isReady(destination) && !await client.refreshReadiness(destination)) {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "rejected", now: this.now() });
+        return;
+      }
+      const latest = await this.options.getConfig();
+      if (!await socialReplyAuthorized(latest, row.namespace, payload, this.options.store)) {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "rejected", now: this.now() });
+        return;
+      }
+      if (!await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, owner: this.owner, state: "sending", now: this.now() })) return;
+      if (this.stopped || !await socialReplyAuthorized(await this.options.getConfig(), row.namespace, payload, this.options.store)) {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, owner: this.owner, state: "rejected", now: this.now() });
+        return;
+      }
+      const message = connection.kind === "telegram_bot" ? toTelegramMessage(payload.text) : { text: connection.kind === "slack_app" ? toBoundedSlackMarkdown(payload.text) : toDiscordMarkdown(payload.text) };
+      const result = await client.sendMessage(destination, message, this.abort.signal);
+      const retryAt = result.kind === "rejected" ? result.retryAt : undefined;
+      const canRetry = retryAt !== undefined && row.attempts < MAX_ATTEMPTS && (row.expiry === null || retryAt < row.expiry.getTime());
+      await finishImReplyNotification(this.options.store, {
+        operationId: row.operationId, fence: row.fence, owner: this.owner,
+        state: result.kind === "delivered" ? "delivered" : result.kind === "unknown" ? "unknown" : canRetry ? "pending" : "rejected",
+        ...(canRetry ? { retryAt: new Date(retryAt) } : {}),
+        compactReceipt: JSON.stringify(result.kind === "delivered" ? result.receipt : { code: result.code }), now: this.now(),
+      });
+    } catch {
+      // A post may have completed. Keep sending fenced until expiry turns it into unknown.
     }
   }
 

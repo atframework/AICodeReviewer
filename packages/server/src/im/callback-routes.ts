@@ -12,6 +12,8 @@ import { buildWecomAibotEncryptedReply } from "./protocol-wecom-aibot.js";
 import { invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix, type ImCancellationServiceLike, type ImCommandDirectoryLike, type ImQueryServiceLike } from "./command-service.js";
 import { consumeCardAction } from "./action-service.js";
 import type { FeishuCallbackCredentials } from "./protocol-feishu.js";
+import type { SocialImClient } from "@aicr/outputs";
+import { handleSocialCallback } from "./social-callback.js";
 
 /**
  * IM callback routes (design §5, IM-12): `GET/POST /callbacks/im/:connection`
@@ -38,6 +40,8 @@ export interface ImCallbackRoutesOptions {
   /** Cancellation surface for `aicr cancel`; absent = fail closed. */
   readonly cancellation?: ImCancellationServiceLike | undefined;
   readonly now?: () => number;
+  readonly socialClient?: (config: AppConfig, name: string) => SocialImClient | undefined;
+  readonly reviewReady?: () => boolean;
 }
 
 const MAX_CALLBACK_BODY_BYTES = 256 * 1024;
@@ -153,6 +157,10 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
     const name = context.req.param("connection");
     const generation = options.getConfigGeneration !== undefined ? await options.getConfigGeneration() : undefined;
     const config = generation?.config ?? await options.getConfig();
+    const connection = config.im?.connections?.[name];
+    if (connection && (connection.kind === "slack_app" || connection.kind === "discord_bot" || connection.kind === "telegram_bot")) {
+      return handleSocialCallback(context.req.raw(), name, config, connection, generation, options);
+    }
     const resolved = resolveConnection(config, options, name);
     if (typeof resolved === "string") {
       return response(JSON.stringify({ error: "callback_unavailable" }), statusFor(resolved), { "content-type": "application/json" });

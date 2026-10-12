@@ -215,7 +215,11 @@ const SLACK_BLOCKQUOTE_RE = /^>[ \t]?(.*)$/gmu;
 
 function slackFixLinks(text: string): string {
   return text.replace(SLACK_LINK_RE, (_match, label: string, url: string) => {
-    return `<${url}|${label}>`;
+    try {
+      const parsed = new URL(url.replace(/&amp;/gu, "&"));
+      if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || /[<>|\s]/u.test(url)) return label;
+      return `<${url}|${label.replace(/\|/gu, "¦")}>`;
+    } catch { return label; }
   });
 }
 
@@ -284,9 +288,9 @@ function slackFixTables(text: string): string {
  * - Trailing spaces / consecutive blank lines cleaned via {@link fixAndValidateMarkdown}
  */
 export function toSlackMarkdown(content: string): string {
-  const fixed = fixAndValidateMarkdown(content);
+  const fixed = fixAndValidateMarkdown(content).replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
   let transformed = applyTextTransform(fixed, (text) => {
-    let t = slackFixHeadings(text);
+    let t = slackFixHeadings(text.replace(/\*\*([^*]+)\*\*/gu, "*$1*"));
     t = slackFixLinks(t);
     t = slackFixBlockquotes(t);
     t = slackFixTables(t);

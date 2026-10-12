@@ -26,6 +26,9 @@ export interface ScrubResult {
 }
 
 const SECRET_PATTERNS: readonly { readonly kind: RedactedKind; readonly pattern: RegExp; readonly caseInsensitive?: boolean }[] = [
+  { kind: "oauth_token", pattern: /https:\/\/api\.telegram\.org\/bot[^/\s"'<>]+/gu },
+  { kind: "oauth_token", pattern: /https:\/\/hooks\.slack\.com\/(?:commands|actions)\/[^\s"'<>]+/gu },
+  { kind: "oauth_token", pattern: /https:\/\/discord\.com\/api(?:\/v\d+)?\/(?:webhooks|interactions)\/[^\s"'<>]+/gu },
 	{
 		kind: "aws_key",
 		pattern: /\b((?:AKIA|ASIA|AROA|AIPA|ANPA|ANVA|A3T|AGPA|AIDA|ABIA)[A-Z0-9]{16})\b/gu,
@@ -74,6 +77,7 @@ const SECRET_PATTERNS: readonly { readonly kind: RedactedKind; readonly pattern:
 		kind: "connection_string",
 		pattern: /\b(?:Server|Host|Database|Port|UID|PWD|Password)\s*=\s*[^\s;]+?;\s*(?:Server|Host|Database|Port|UID|PWD|Password)/gu,
 	},
+  { kind: "oauth_token", pattern: /\bAuthorization\s*:\s*(?:Bearer|Bot)\s+[^\s"'<>]+/giu },
 	{
 		kind: "generic_api_key",
 		pattern: /\b(?:sk|pk|api[_-]?key|apikey|secret|token|access[_-]?key|auth[_-]?token)\s*[:=]\s*['"]?([A-Za-z0-9+/=_-]{20,})['"]?/giu,

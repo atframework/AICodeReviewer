@@ -43,7 +43,8 @@ web_search `credentials` 条目接受环境变量名字符串或 `{ value: "..."
 :::note[Channel `kind` 是自由字符串]
 输出 channel 的 `kind` 字段是受输出注册表约束的自由字符串，不是封闭枚举。内置 channel kind 包括
 `gitea_pr_review`、`github_pr_review`、`gitlab_mr_review`、`gitea_issue`、`gitea_problem_issue`、
-`github_issue`、`github_problem_issue`、`gitlab_problem_issue`、`feishu_bot`、`wecom_bot`。已移除的 `gitea_finding_issue` kind 会被
+`github_issue`、`github_problem_issue`、`gitlab_problem_issue`、`feishu_bot`、`feishu_app`、`wecom_bot`、`wecom_app`、
+`slack_app`、`discord_bot`、`telegram_bot`。已移除的 `gitea_finding_issue` kind 会被
 校验拒绝；请使用 `gitea_problem_issue`。参见[输出通道](/zh-cn/configuration/outputs/)。
 :::
 
@@ -346,10 +347,9 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 
 `member_directory` 接受历史飞书 API 形态（`chat_id`，可选 `cache_ttl_seconds`）、
 显式 `source: feishu_api` 的同字段形态，以及由严格 YAML/JSON 成员文件支撑的
-`source: file` 形态。`file` 来源、`author_mappings`、`connection` 与 `target`
-当前仅通过 schema 校验，发送与目录接线随 IM 计划逐步落地（见
-[IM 机器人指南](/zh-cn/integrations/im-bots/)）；数据库发布侧仍拒绝没有运行时
-消费者的频道记录，这些字段本身不构成可用集成。
+`source: file` 形态。受支持的企业微信/飞书渠道消费对应的目录和目标字段，
+见 [IM 机器人指南](/zh-cn/integrations/im-bots/)。应用/Bot sender 消费命名连接。
+Slack、Discord 和 Telegram 必须使用命名连接及精确目的地，拒绝成员目录和作者映射字段。
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
@@ -363,32 +363,95 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].member_directory.poll_interval_seconds` | int 5–300 | — | 仅 `file`：周期内容摘要校验间隔；运行时默认 30 |
 | `outputs.channels[].member_directory.allowed_root` | string | — | 仅 `file`：真实路径边界检查的受信根；缺省为主配置文件目录 |
 | `outputs.channels[].author_mappings.<id>` | string | — | 作者或 workspace 标识精确映射到文件成员 key；与 `user_mappings` 互斥 |
-| `outputs.channels[].connection` | string | — | 对 `im.connections` 的引用；`wecom_app` 频道必填，`feishu_app` 频道用它替代内联凭据 |
+| `outputs.channels[].connection` | string | — | 对 `im.connections` 的引用；`wecom_app`、`slack_app`、`discord_bot`、`telegram_bot` 必填；`feishu_app` 用它替代内联凭据 |
 | `outputs.channels[].target` | object | — | 仅 `wecom_app`：`{kind: recipients, users/parties/tags}` 或 `{kind: appchat, chat_id}` — 收件人列表与群目标严格二选一 |
+| `outputs.channels[].target.kind` | enum | — | 仅企业微信：`recipients` 或 `appchat` |
+| `outputs.channels[].target.users` | string[] | — | 仅 `recipients`：最多 1000 个精确用户 ID；至少一个收件人列表非空 |
+| `outputs.channels[].target.parties` | string[] | — | 仅 `recipients`：最多 100 个部门 ID |
+| `outputs.channels[].target.tags` | string[] | — | 仅 `recipients`：最多 100 个标签 ID |
+| `outputs.channels[].target.chat_id` | string | — | 仅 `appchat`：精确应用群 ID |
 
 ## `im`
 
 IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）。
-schema 已接受该命名空间，发送、回调与 worker 随计划逐步接线；绑定默认停用，
-数据库发布侧持续拒绝没有消费者的记录，仅配置 `im` 不会启用聊天命令。
-`review` 命令另需持久化配置存储。
+绑定默认停用；接收命令需显式启用连接 callback 与准确的绑定。
+`review` 另需 SQLite 或 PostgreSQL 持久存储、数据库配置 snapshot 和 ready worker。
+三个新平台使用 HTTP callback；身份与凭据字段见下节。
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `im.connections.<id>` | object | — | 命名连接映射；连接 id 需匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`；`kind` 选择 `wecom_app`（`corp_id`、`agent_id`、`app_secret`/`app_secret_env`）、`wecom_aibot`（`corp_id`；回调模式带 `callback` 与可选 `aibot_id`，长连接模式带 `aibot_id` 与 `secret`/`secret_env`）或 `feishu_app`（`app_id`、`app_secret`/`app_secret_env`、可选 `base_url`、`tenant_key`），均带可选 `callback`（运行时默认停用；企业微信 `token`/`encoding_aes_key` 与飞书 `verification_token`/`encrypt_key` 各为明文与 `*_env` 成对，启用回调时必填其一）。`wecom_aibot` 与 `feishu_app` 的接收模式均按 `callback.enabled` 区分：`true` 走事件回调（`GET/POST /callbacks/im/<id>`），未启用回调时由服务端主动建立长连接接收（企微需 `aibot_id`+`secret`，飞书需 `app_id`+`app_secret`，即官方 SDK 长连接） |
-| `im.command_bindings.<id>.enabled` | boolean | — | 运行时默认 false；接线完成前禁用草稿始终可保存 |
+| `im.connections.<id>` | object | — | 命名连接映射；连接 id 需匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`；`kind` 选择 `wecom_app`（`corp_id`、`agent_id`、`app_secret`/`app_secret_env`）、`wecom_aibot`（`corp_id`；回调模式带 `callback` 与可选 `aibot_id`，长连接模式带 `aibot_id` 与 `secret`/`secret_env`）或 `feishu_app`（`app_id`、`app_secret`/`app_secret_env`、可选 `base_url`、`tenant_key`），均带可选 `callback`（运行时默认停用；企业微信 `token`/`encoding_aes_key` 与飞书 `verification_token`/`encrypt_key` 各为明文与 `*_env` 成对，启用回调时必填其一）。`wecom_aibot` 与 `feishu_app` 的接收模式均按 `callback.enabled` 区分：`true` 走事件回调（`GET/POST /callbacks/im/<id>`），未启用回调时由服务端主动建立长连接接收（企微需 `aibot_id`+`secret`，飞书需 `app_id`+`app_secret`，即官方 SDK 长连接） 新增 `slack_app`、`discord_bot`、`telegram_bot` 的 HTTP 专用凭据见下节。 |
+| `im.connections.<id>.kind` | enum | — | `wecom_app`、`wecom_aibot`、`feishu_app`、`slack_app`、`discord_bot` 或 `telegram_bot` |
+| `im.connections.<id>.enabled` | boolean | — | 运行时默认 true；false 停用连接 |
+| `im.connections.<id>.corp_id` | string | — | 企业微信企业身份域；两个企业微信 kind 均必填 |
+| `im.connections.<id>.agent_id` | positive int | — | 企业微信应用 agent ID，必填 |
+| `im.connections.<id>.app_secret` | string | — | 企业微信/飞书应用密钥；加密落库；与 `app_secret_env` 互斥 |
+| `im.connections.<id>.app_secret_env` | string | — | 企业微信/飞书应用密钥环境变量引用；凭据对必须提供一项 |
+| `im.connections.<id>.aibot_id` | string | — | 企业微信 API Bot ID；长连接必填，HTTP 回调可省略 |
+| `im.connections.<id>.secret` | string | — | 企业微信 API Bot 长连接密钥；加密落库；与 `secret_env` 互斥 |
+| `im.connections.<id>.secret_env` | string | — | 企业微信 API Bot 长连接密钥环境变量引用 |
+| `im.connections.<id>.app_id` | string | — | 飞书或 Slack 应用 ID，必填 |
+| `im.connections.<id>.base_url` | string | — | 仅飞书：`https://open.feishu.cn` 或 `https://open.larksuite.com`；运行时默认飞书 origin |
+| `im.connections.<id>.tenant_key` | string | — | 飞书租户身份；启用回调时必填 |
+| `im.connections.<id>.callback.enabled` | boolean | — | 运行时默认 false；启用时必须提供对应 kind 的验证凭据 |
+| `im.connections.<id>.callback.token` | string | — | 企业微信回调验证 token；加密落库；与 `token_env` 互斥 |
+| `im.connections.<id>.callback.token_env` | string | — | 企业微信回调验证 token 环境变量引用 |
+| `im.connections.<id>.callback.encoding_aes_key` | string | — | 企业微信回调 AES key；加密落库；与 `encoding_aes_key_env` 互斥 |
+| `im.connections.<id>.callback.encoding_aes_key_env` | string | — | 企业微信回调 AES key 环境变量引用 |
+| `im.connections.<id>.callback.verification_token` | string | — | 飞书回调验证 token；加密落库；与 `verification_token_env` 互斥 |
+| `im.connections.<id>.callback.verification_token_env` | string | — | 飞书回调验证 token 环境变量引用 |
+| `im.connections.<id>.callback.encrypt_key` | string | — | 飞书回调加密 key；加密落库；与 `encrypt_key_env` 互斥 |
+| `im.connections.<id>.callback.encrypt_key_env` | string | — | 飞书回调加密 key 环境变量引用 |
+| `im.command_bindings.<id>.enabled` | boolean | — | 运行时默认 false；禁用草稿可保存；启用 review 需持久配置 snapshot 和 ready worker |
 | `im.command_bindings.<id>.connection` | string | — | 对 `im.connections` 的命名引用；启用绑定时要求连接存在且启用 |
 | `im.command_bindings.<id>.actors[]` | object | — | 匹配器数组，任一命中即授权。范围匹配器形态以 `kind` 判别：`any`（任意已认证操作人）、`wecom_department`（部门，`recursive` 缺省 true 含子部门）、`wecom_tag`（标签，承载角色/用户组语义）、`wecom_position`（职位）、`wecom_extattr`（自定义字段 name+value）、`feishu_chat`（群成员 chat_id）、`feishu_department`（部门）、`feishu_job_title`（职务）；匹配器按连接平台适配，目录事实来自服务端目录快照，目录不可用时该维度不授权（fail-closed） |
-| `im.command_bindings.<id>.actors[].type` | enum | — | 精确 principal 形态：`wecom_userid`、`wecom_encrypted_userid` 或 `feishu_open_id`；身份命名空间继承自连接 |
+| `im.command_bindings.<id>.actors[].type` | enum | — | 精确 principal：`wecom_userid`、`wecom_encrypted_userid`、`feishu_open_id`、`slack_user_id`、`discord_user_id`、`telegram_user_id`；身份命名空间继承自连接 |
 | `im.command_bindings.<id>.actors[].id` | string | — | 精确的带类型平台 id；不做模糊匹配或目录推导授权 |
 | `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 时间戳；到期的匹配器（含精确 principal 与 `any`）自动停止匹配，是临时授权的通用机制 |
+| `im.command_bindings.<id>.actors[].kind` | enum | — | 上述 scope 匹配器的判别字段；精确 typed principal 不填写；Slack/Discord/Telegram 不支持 scope 匹配器 |
+| `im.command_bindings.<id>.actors[].recursive` | boolean | — | 仅 `wecom_department`：运行时默认 true，包含子部门 |
+| `im.command_bindings.<id>.actors[].value` | string | — | 对应 scope 匹配器的精确职位、自定义字段值或职务名称 |
+| `im.command_bindings.<id>.actors[].name` | string | — | 仅 `wecom_extattr`：精确自定义字段名 |
+| `im.command_bindings.<id>.actors[].chat_id` | string | — | 仅 `feishu_chat`：成员授权使用的群 ID |
 | `im.command_bindings.<id>.conversations[]` | object | — | `app_direct`（企业微信/飞书应用）、`bot_direct`（企业微信 API 机器人）或带非空 `id` 的 `group`；类型必须匹配连接协议 |
+| `im.command_bindings.<id>.conversations[].kind` | enum | — | `app_direct`、`bot_direct`、`group` 或 `channel`；Slack/Discord 使用 `channel`，Telegram 使用 `bot_direct` 或 `group` |
+| `im.command_bindings.<id>.conversations[].id` | string | — | 精确群/频道 ID；`group` 和 `channel` 必填，私聊形态不填写 |
 | `im.command_bindings.<id>.allow_all_repositories` | boolean | — | 运行时默认 false；开启后仓库别名在 `repositories` 注册表之外还可按 workspace id 或仓库全名精确匹配已观测的项目（projects 表），对查询与 review 命令生效 |
 | `im.command_bindings.<id>.commands` | enum[] | — | `help`、`chat-id`、`review`、`status`、`cancel` 与查询命令 `projects`、`reviews`、`commits`、`prs`、`detail`、`prdetail`、`queue`、`running` 的去重子集 |
 | `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | 仓库别名目标：workspace id；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | 仓库别名目标：来源触发器名；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | 仓库别名目标：仓库引用；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.report_policy` | enum | — | 仅 `workspace_routes`；运行时默认 |
+
+### Slack、Discord 和 Telegram 连接字段
+
+三种 kind 仅使用 Bot API 输出和 HTTP callback，操作步骤见
+[Slack](/zh-cn/integrations/slack/)、[Discord](/zh-cn/integrations/discord/)、
+[Telegram](/zh-cn/integrations/telegram/) 指南。准确 principal 类型为
+`slack_user_id`、`discord_user_id`、`telegram_user_id`；会话使用
+`channel`（Slack/Discord）、`group` 或 `bot_direct`（Telegram）。
+只接受 `help`、`chat-id`、`review`、`status` 与显式仓库 alias，拒绝 scope actor 和 `allow_all_repositories: true`。
+
+| 字段 | 类型 | 默认值 | 描述 |
+| --- | --- | --- | --- |
+| `im.connections.<id>.team_id` | string | — | Slack workspace 身份 |
+| `im.connections.<id>.bot_user_id` | string | — | Slack Bot user 身份；还需 `app_id` |
+| `im.connections.<id>.application_id` | string | — | Discord application snowflake |
+| `im.connections.<id>.guild_id` | string | — | Discord guild snowflake |
+| `im.connections.<id>.bot_id` | string | — | Telegram Bot 数字 ID |
+| `im.connections.<id>.token` | string | — | Bot API 凭据；与 `token_env` 互斥，持久化时加密 |
+| `im.connections.<id>.token_env` | string | — | Bot API 凭据环境引用 |
+| `im.connections.<id>.callback.signing_secret` | string | — | Slack HMAC 秘密；与 `_env` 引用互斥，加密落库 |
+| `im.connections.<id>.callback.signing_secret_env` | string | — | Slack signing secret 引用 |
+| `im.connections.<id>.callback.public_key` | string | — | Discord Ed25519 公钥，64 位十六进制；公开数据 |
+| `im.connections.<id>.callback.secret_token` | string | — | Telegram webhook secret；与 `_env` 引用互斥，加密落库 |
+| `im.connections.<id>.callback.secret_token_env` | string | — | Telegram webhook secret 引用 |
+| `outputs.channels[].channel_id` | string | — | Slack/Discord 准确频道 ID |
+| `outputs.channels[].chat_id` | string | — | Telegram 带引号的有符号十进制 chat ID |
+
+启用 connection 需 token，启用 callback 需对应验证材料。output 需匹配的 `connection`，
+拒绝内联凭据、自定义 API origin、目录、原生 mention、线程/topic 字段。
+file-only 支持输出；review 命令还需持久 config snapshot 和 worker。
 
 ## `prompts`
 

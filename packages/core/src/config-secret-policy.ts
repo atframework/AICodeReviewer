@@ -19,7 +19,7 @@ const DESTINATION_KEYS = new Set(["kind", "base_url", "url", "endpoint", "endpoi
   "webhook_url_env", "endpoint_url_env", "app_id", "client_id", "installation_id", "receive_id", "receive_id_type", "chat_id",
   // IM connection identity domains: grants bind literals/env refs to the
   // exact corp/app/bot/tenant they were issued for (execution contracts §2).
-  "corp_id", "agent_id", "aibot_id", "tenant_key"]);
+  "corp_id", "agent_id", "aibot_id", "tenant_key", "team_id", "bot_user_id", "application_id", "guild_id", "bot_id", "channel_id"]);
 
 function channelTriggers(channel: Record<string, unknown>, triggers: readonly unknown[]): Record<string, unknown>[] {
   const kind = String(channel.kind ?? "");

@@ -129,6 +129,9 @@ The publishing account needs assignment permission, and the target user must be 
 
 | Kind | Description |
 | --- | --- |
+| `slack_app` | Bot API report to a joined Slack channel; [setup and commands](/en/integrations/slack/). |
+| `discord_bot` | Bot API report to an ordinary guild text channel; [setup and commands](/en/integrations/discord/). |
+| `telegram_bot` | Bot API report to a private/group/supergroup chat; [setup and commands](/en/integrations/telegram/). |
 | `gitea_pr_review` | Inline line comments on Gitea/Forgejo pull requests. |
 | `github_pr_review` | Inline line comments on GitHub pull requests. |
 | `gitlab_mr_review` | Inline line comments on GitLab merge requests. |

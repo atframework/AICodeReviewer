@@ -1,6 +1,7 @@
 # Slack、Discord、Telegram 执行步骤
 
-状态：全部待实施。本文件供后续实施模型逐项执行，不授权本轮修改运行代码或平台设置。
+状态：本地实现及适用门禁已通过，真实平台验收按 Plan 跟踪。保留原逐项步骤以约束剩余验收，
+不以此文件单独授权平台注册或真实消息发送。
 接口和默认值以[接入规范](slack-discord-telegram.md)为准，断言以[验收矩阵](slack-discord-telegram-acceptance.md)为准。
 进度只在 [Plan.md](../../Plan.md)维护，避免多份完成清单失去同步。
 
@@ -101,7 +102,7 @@ server `im/reply-service.ts` 和 review checkpoint/receipt 对接位置。
 5. 扩展 acceptImDelivery 的可选通知输入，将 Telegram 接收/命令结果/通知原子写入；
    operation ID 由连接域+delivery kind/key+reply ordinal 的稳定摘要生成，终态通知用 requestId+terminal kind。
 6. 发送前核查当前授权和持久目的地；落库 16 KiB 上限、24 小时期限、明确限流最多 5 次；通知失败不重跑审查。
-7. 提供新平台的 status 投递状态；新终态文本只显示 ID/状态/查询命令，避免直接沿用 repoRef/revision 输出。
+7. status 返回请求阶段或终态；通知投递状态独立保存在 outbox。新终态文本只显示 ID/状态/查询命令，避免直接沿用 repoRef/revision 输出。
 
 测试位置：outputs `publication-journal.test.ts`；store `im-store-conformance.ts`、`im-store.test.ts`、`im-store-pg.test.ts`；
 server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应数据使用合成值。
@@ -109,20 +110,20 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 
 ## SDC-03：Slack client、渲染及输出接线
 
-拟新增 `packages/outputs/src/slack-app.ts`、`slack-app-dispatcher.ts` 和对应测试；
+已实现于共享 `packages/outputs/src/social-im.ts`、`social-im-markdown.ts`；
 修改 `im-markdown.ts`、`template-engine.ts` 的相关入口、outputs 导出及 server `bootstrap.ts`、`im/connections.ts`。
 
 1. 读取 S1–S8，client 注入 fetch/clock/signal，主动发 chat.postMessage；验证 team/bot 及频道元数据 readiness，固定 origin 和 Bearer。
 2. 复用 toSlackMarkdown，补 `**bold**`、代码、链接及不可信 Slack 控制语法处理；不能仅测试标题替换。
-3. 每条总预算 3900 UTF-16 单元，包含截断提示与 target；新 built-in template 进入资源打包。
+3. 每条总预算 3900 UTF-16 单元，包含截断提示与 target；复用已打包的 wecom-summary 内置摘要模板。
 4. 按 generation 解析 token/缓存 client；接入实际 publisher resolver、空结果策略及缓冲刷新。
 5. 429 遵守 Retry-After；业务错误、身份不符和未知发送按规范分类，不凭 HTTP 200 判成功。
 
-出口：O01–O07、G01–G02；新增 server `slack-app-publishing.test.ts` 必须从配置生成 publisher 后检查 HTTP。
+出口：O01–O07、G01–G02；server `social-im-publishing.test.ts` 的 Slack 参数从配置生成 publisher 后检查 HTTP。
 
 ## SDC-04：Discord client、渲染及输出接线
 
-拟新增 outputs `discord-bot.ts`、`discord-bot-dispatcher.ts` 和对应测试；修改与 SDC-03 相同的公共入口。
+共享 outputs `social-im.ts`、`social-im-markdown.ts`；修改与 SDC-03 相同的公共入口。
 
 1. 读取 D1–D6；使用 API v10、Bot Authorization；后台核查 application 和频道 guild/type。
 2. 新 toDiscordMarkdown，1900 UTF-16 总预算；始终显式 allowed_mentions，不创建 embed/components。
@@ -130,11 +131,11 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 4. 按 bucket/major resource/global 429 信号调度，不把整个服务阻塞在一个 sleep 中。
 5. 从真实配置 resolver 生成 publisher；不借 Gateway 或 Message Content intent 接收 slash command。
 
-出口：O01–O07、G01–G02；新增 server `discord-bot-publishing.test.ts` 覆盖实际 wiring。
+出口：O01–O07、G01–G02；server `social-im-publishing.test.ts` 的 Discord 参数覆盖实际 wiring。
 
 ## SDC-05：Telegram client、渲染及输出接线
 
-拟新增 outputs `telegram-bot.ts`、`telegram-bot-dispatcher.ts` 和对应测试；修改公共导出/模板/bootstrap。
+共享 outputs `social-im.ts`、`social-im-markdown.ts`；修改公共导出/模板/bootstrap。
 
 1. 读取 T1–T5；getMe readiness 取得并核对 bot_id，username 只用于定向命令；token 不从 URL 输出到日志。
 2. 新 toTelegramMessage，text+白名单 entities；按最终 text 计算 UTF-16 范围，含截断后重算。
@@ -143,11 +144,11 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 4. 支持显式配置的 private/group/supergroup，拒绝 topic/channel/business 消息目标；更新 generation 缓存。
 5. 接入 output resolver，覆盖负 chat ID、Unicode 和无安全 target link 的 P4/SVN 报告。
 
-出口：O01–O07、G01–G02；新增 server `telegram-bot-publishing.test.ts` 检查真实发送参数及错误脱敏。
+出口：O01–O07、G01–G02；server `social-im-publishing.test.ts` 的 Telegram 参数检查实际发送参数及错误脱敏。
 
 ## SDC-06：HTTP 协议与四个命令
 
-拟新增 server `im/protocol-slack.ts`、`protocol-discord.ts`、`protocol-telegram.ts`；
+三个验证函数位于 server `im/protocol-social.ts`，共用有界 raw body/严格 JSON 工具；
 修改 `callback-routes.ts`、`command-service.ts`、`reply-service.ts`、`connections.ts` 及 server 路由/bootstrap。
 
 1. 使用原始有界请求字节、真实密码算法和固定独立向量完成认证；新增协议测试文件，覆盖认证前无数据库/远端副作用。
@@ -229,8 +230,9 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 5. 仅当所有任务及验收完成，将稳定约定合并到主题文档，保留必要的真实验收限制；更新导航后再退役执行清单，
    不删除原 Plan 中其他未完成 IM/RUN 任务。
 
-本轮只写 Markdown，适用门禁为 repository Markdown、内部引用/AI 导航检查和 git diff --check；
-上述 runtime、browser、docs site build 和真实平台测试属于实施交付阶段，本轮不声称执行。
+本地实施包含 runtime、schema/UI、迁移、注册工具、示例和双语站点；完整 runtime、browser、
+docs 门禁均适用。实际测试文件采用共用 `social-im*.test.ts` 参数化三平台，
+不再按规划中的三个独立 client/protocol 文件重复实现。真实账户验收另行授权并记录。
 
 ## 验证命令与执行记录
 
@@ -249,8 +251,8 @@ node node_modules/vitest/vitest.mjs run packages/server/test/im-callback-routes.
 node node_modules/vitest/vitest.mjs run packages/store/test/im-store.test.ts packages/store/test/im-store-pg.test.ts
 ```
 
-新文件创建后，用相同命令显式追加对应路径；例如 SDC-03 的
-`packages/outputs/test/slack-app.test.ts` 和 `packages/server/test/slack-app-publishing.test.ts`。
+平台参数化测试使用共享文件；追加路径见本节末尾实际文件清单，不要求按平台复制文件。
+`packages/outputs/test/social-im.test.ts` 和 `packages/server/test/social-im-publishing.test.ts` 各参数化三个 kind。
 验收脚本先检查路径存在，再运行；零发现不算通过。`AICR_PG_TEST_URL` 缺失时的 PG skip 不满足 R01–R03。
 Redis 变量及受控服务启动命令从 baseline/服务指南读取，不能用生产 endpoint 凑门禁。
 

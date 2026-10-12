@@ -13,6 +13,13 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
 - Recheck native-module engines and pnpm build approvals after dependency bumps.
   `better-sqlite3` 13 uses bundled N-API prebuilds: retain the workspace override
   and ignored build setting while applicable; do not trigger node-gyp needlessly.
+  When pnpm meets an undecided build script it appends an
+  `allowBuilds: <pkg>: set this to true or false` PLACEHOLDER to
+  `pnpm-workspace.yaml`; from then on every install hard-fails with
+  ERR_PNPM_IGNORED_BUILDS (surfacing as runDepsStatusCheck errors before any
+  `pnpm run` script) until each entry is decided. Decide explicitly (`false`
+  for esbuild/msgpackr-extract/protobufjs — prebuilt optional deps or pure JS)
+  and keep the list reviewed, not auto-accepted.
   A dynamic optional import can fail because a transitive dependency is missing
   even when the package itself exists. Preserve the underlying import cause and
   verify package-local resolution before changing manifests (`redis-queue.ts`).
@@ -135,3 +142,31 @@ Sources: `.markdownlint-cli2.yaml`, `docs/site/package.json`, its scripts,
   Sidebar extraction handles inline entries; link resolution distinguishes index
   pages from ordinary pages. Update extractors when source shapes change, never
   weaken their assertions to conceal missing documentation.
+- Starlight CSS cascade: all built-in styles live in `@layer starlight.*`, so
+  unlayered `customCss` rules beat them at equal specificity — EXCEPT
+  `Page.astro`'s unlayered inline `<style>` (e.g. the splash-page
+  `--sl-content-width: 67.5rem` under `html:not([data-has-sidebar])`), which ties
+  a `:root`/element rule and wins on source order. Bump specificity with the
+  always-present `[data-theme]` attribute instead of `!important`.
+- `--sl-content-width` feeds several formulas (TwoColumnContent main-pane/right
+  sidebar, Header search grid, ContentPanel max-width). Setting it to `100%`
+  degrades the header grid math and gives ~229 Latin / ~114 CJK characters per
+  line at 2560px; on the sidebar-free splash page it is even worse (~211 CJK in
+  full-width asides at 3440px). Keep fixed rem caps (96rem docs / 120rem splash).
+  Paragraphs and lists must follow their containing section's width: a separate
+  `62ch` cap leaves narrow text beside wide asides and card grids. Inspect
+  rendered bounds and screenshots on landing and ordinary docs pages in both
+  locales/themes, including mobile, ultrawide and font-CDN fallback rendering;
+  preserve list indentation and local table/code scrolling. The rules live in
+  `docs/site/src/styles/custom.css`; validation scope is in `docs/site/README.md`.
+  Aside titles containing inline code need normal inline layout: Starlight's
+  flex title splits text/code into separate items that can exceed a narrow box.
+  Check the English config reference's workspace-layer note on mobile.
+- `astro dev`/`astro preview` default to host `localhost`, which follows the
+  system resolver: when it returns `::1` first (Windows default) the server
+  binds an IPv6-only listener on `[::1]`, and on hosts with a broken IPv6
+  loopback (seen with Hyper-V/WSL networking: LISTENING on `[::1]` yet every
+  connect refused) the printed URL never opens and `127.0.0.1` answers nothing.
+  `docs/site/astro.config.mjs` pins `server.host: "127.0.0.1"` for both
+  commands; browsers still reach it via the `localhost` name. Do not revert to
+  `localhost`; pass `--host` on the CLI for LAN exposure instead.

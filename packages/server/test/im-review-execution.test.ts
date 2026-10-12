@@ -10,6 +10,8 @@ import { createImReviewExecutor } from "../src/im/review-execution.js";
 import type { ImReviewCheckpoint, ImReviewExecutionInput, ImReviewResume } from "../src/im/manual-review-service.js";
 import type { ReviewOrchestrationContext, ReviewOrchestrationResult, ServerReviewOrchestrationOptions } from "../src/review-orchestrator.js";
 import type { runReviewOrchestration } from "../src/review-orchestrator.js";
+import { SocialImClient } from "@aicr/outputs";
+import { platforms, fixture, apiFixture } from "./social-im-fixtures.js";
 
 /**
  * IM-14 executor acceptance R14/R15: the analysis output is checkpointed
@@ -86,6 +88,36 @@ function executionInput(overrides: Partial<ImReviewExecutionInput> = {}): ImRevi
 }
 
 describe("IM review executor publication recovery", () => {
+  it.each(platforms)("blocks %s analysis when current authorization has been revoked", async platform => {
+    const runReview = vi.fn<typeof runReviewOrchestration>();
+    const execute = createImReviewExecutor({ store, orchestrationOptions: {} as ServerReviewOrchestrationOptions, runReview });
+    expect(await execute(executionInput({ config: fixture(platform).config, hooks: { isAuthorized: async () => false, saveCheckpoint: async () => true } })))
+      .toEqual({ state: "rejected", errorCode: "im.authorization_revoked" });
+    expect(runReview).not.toHaveBeenCalled();
+  });
+
+  it.each(platforms)("rechecks %s authorization after the intent is durable and before the actual POST", async platform => {
+    const f = fixture(platform); let allowed = true;
+    const calls: { url: string; body: Record<string, unknown>; init?: RequestInit }[] = [];
+    const client = new SocialImClient(f.connection, f.connection.token!, { fetch: apiFixture(platform, calls) });
+    expect(await client.refreshReadiness(f.destination)).toBe(true);
+    const runReview = vi.fn<typeof runReviewOrchestration>(async (context, options) => {
+      await options.onAnalysisComplete!(result().outputState, undefined);
+      await context.publicationRecovery!.onChannelStart!("chat");
+      await context.publicationRecovery!.remote!.run("chat", "summary:0", () => client.sendMessage(f.destination, { text: "report" }));
+      return result();
+    });
+    const execute = createImReviewExecutor({ store, orchestrationOptions: {} as ServerReviewOrchestrationOptions, runReview });
+    const saved: ImReviewCheckpoint[] = [];
+    const outcome = await execute(executionInput({ config: f.config, hooks: { isAuthorized: async () => allowed, saveCheckpoint: async checkpoint => {
+      saved.push(structuredClone(checkpoint));
+      if (checkpoint.publication?.remote?.operations.some(operation => operation.status === "unknown")) allowed = false;
+      return true;
+    } } }));
+    expect(saved.some(checkpoint => checkpoint.publication?.remote?.operations.some(operation => operation.status === "unknown"))).toBe(true);
+    expect(outcome.state).toBe("publication_unknown");
+    expect(calls.some(call => call.url.endsWith("chat.postMessage") || call.url.endsWith("/messages") || call.url.endsWith("sendMessage"))).toBe(false);
+  });
   it("checkpoints the analysis output before remote writes and persists receipts (R14/R15)", async () => {
     const saved: ImReviewCheckpoint[] = [];
     const runReview = vi.fn<typeof runReviewOrchestration>(async (context: ReviewOrchestrationContext, options) => {

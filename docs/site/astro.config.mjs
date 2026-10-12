@@ -17,6 +17,17 @@ import starlight from "@astrojs/starlight";
 
 export default defineConfig({
   site: "https://aicr.atframe.work",
+  server: {
+    // Bind dev and preview to the IPv4 loopback, not `localhost`. When the
+    // system resolver returns ::1 first (Windows default), Astro's default
+    // `localhost` host produces an IPv6-only listener on [::1] — unreachable
+    // wherever the IPv6 loopback stack is broken (seen on Hyper-V/WSL
+    // workstations: LISTENING on [::1] yet every connect is refused), so the
+    // printed http://localhost:4321 URL never opens. 127.0.0.1 exists on every
+    // platform and browsers still reach it via the `localhost` name. Pass
+    // `--host` on the CLI to expose the server on the LAN when needed.
+    host: "127.0.0.1",
+  },
   integrations: [
     starlight({
       title: "AICodeReviewer",
@@ -115,6 +126,9 @@ export default defineConfig({
           label: "Integrations",
           translations: { "zh-CN": "集成" },
           items: [
+            { slug: "integrations/slack", translations: { "zh-CN": "Slack" } },
+            { slug: "integrations/discord", translations: { "zh-CN": "Discord" } },
+            { slug: "integrations/telegram", translations: { "zh-CN": "Telegram" } },
             {
               slug: "integrations/vcs-providers",
               translations: { "zh-CN": "VCS 提供商" },

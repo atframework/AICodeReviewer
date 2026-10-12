@@ -70,6 +70,9 @@ import {
   type ReviewProblem,
   type DispatchResult,
   toTemplateProblem,
+  toBoundedSlackMarkdown,
+  toDiscordMarkdown,
+  toTelegramMessage,
   resolveAuthorAssignment,
   type AuthorResolutionOptions,
   type MentionChannelKind,
@@ -180,7 +183,8 @@ import {
   type RuntimeConfigGeneration,
   admissionUnavailableReason,
 } from "./runtime-config.js";
-import { ImConnectionRegistry } from "./im/connections.js";
+import { ImConnectionRegistry, imConnectionRegistryFor, SocialImReadinessService } from "./im/connections.js";
+import { currentImRequestAuthorized } from "./im/social-command-service.js";
 import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { ImLongConnectionService } from "./im/long-connection-service.js";
 import { issueCardAction, resolveFeishuCardActionTarget, resolveWecomCardActionTarget } from "./im/action-service.js";
@@ -1192,7 +1196,7 @@ function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsActio
   if (channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue" || channelKind === "gitlab_problem_issue") {
     return "publish";
   }
-  if (channelKind === "feishu_bot" || channelKind === "feishu_app" || channelKind === "wecom_bot") {
+  if (["feishu_bot", "feishu_app", "wecom_bot", "slack_app", "discord_bot", "telegram_bot"].includes(channelKind)) {
     return "publish_if_summary";
   }
   return "suppress";
@@ -1924,6 +1928,36 @@ export function createOutputPublisherFromConfig(
   const channelReviewEvent = readString(channelConfig, "review_event", "reviewEvent") as "COMMENT" | "REQUEST_CHANGES" | undefined;
   const channelReviewUpdateStrategy = readString(channelConfig, "review_update_strategy", "reviewUpdateStrategy") as "always_new" | "update_existing" | undefined;
   const headSha = reviewEvent?.headSha;
+
+  if (channel.kind === "slack_app" || channel.kind === "discord_bot" || channel.kind === "telegram_bot") {
+    const connection = config.im?.connections?.[channel.connection ?? ""];
+    if (!connection || connection.enabled === false || connection.kind !== channel.kind ||
+      (connection.kind !== "slack_app" && connection.kind !== "discord_bot" && connection.kind !== "telegram_bot")) throw new Error("Social IM channel connection is unavailable.");
+    const registry = imConnectionRegistryFor(config, { env: resolveEnv });
+    const client = registry.social(connection);
+    const destination = channel.kind === "telegram_bot" ? channel.chat_id! : channel.channel_id!;
+    const problems: ReviewProblem[] = [];
+    let flushed = false;
+    return {
+      handlesRendering: true, noProblemsAction, publishEmptySummary,
+      async publishProblem(problem): Promise<DispatchResult> {
+        problems.push(problem);
+        return { channel: channel.name, status: "buffered" };
+      },
+      async publishSummary(summary, summaryProblems, options): Promise<DispatchResult> {
+        if (flushed) return { channel: channel.name, status: "buffered", raw: { action: "already_flushed" } };
+        flushed = true;
+        if (!client.isReady(destination) && !await client.refreshReadiness(destination)) return { channel: channel.name, status: "failed", raw: { kind: "rejected", code: "destination_not_ready" } };
+        const rendered = (summaryProblems ?? problems).map(problem => rendering.renderProblem(problem));
+        const content = [rendering.renderSummary(summary, rendered, options?.title), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
+        const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl)
+          : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl) : toDiscordMarkdown(content, options?.summaryIssueUrl) };
+        const result = await client.sendMessage(destination, message);
+        return result.kind === "delivered" ? { channel: channel.name, status: "published", externalId: result.receipt.messageId }
+          : { channel: channel.name, status: "failed", raw: { kind: result.kind, code: result.code, ...(result.kind === "rejected" && result.retryAt ? { retryAt: result.retryAt } : {}) } };
+      },
+    };
+  }
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -4246,11 +4280,14 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
 
   let imReviewTimer: ReturnType<typeof setInterval> | undefined;
   let imReviewRunning: Promise<void> | undefined;
+  const socialReadiness = new SocialImReadinessService({ getConfig: currentConfig, env: resolveEnv });
+  if (store) socialReadiness.start();
   const adminReviews = new Map<string, { controller: AbortController; task: Promise<void> }>();
   let draining: Promise<void> | undefined;
   const beginDrain = (): Promise<void> => {
     if (draining) return draining;
     runtimeConfig.stopAdmission();
+    socialReadiness.dispose();
     deferralManager.stop();
     if (sweepTimer) clearInterval(sweepTimer);
     clearInterval(concurrencyTimer);
@@ -4279,6 +4316,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     imReviewService = new ManualReviewService({
       store,
       namespace: configSources.database.namespace,
+      reauthorize: request => currentImRequestAuthorized(currentConfig(), request, imAuthorizationDirectory),
+      canScan: () => executionConcurrency.available,
+      blockedWorkspaceIds: () => executionConcurrency.blockedWorkspaceIds(),
+      batchLimit: 10,
       getConfig: async (snapshotId) => (await runtimeConfig.resolveGeneration(snapshotId === "file-only" ? null : snapshotId)).config,
       createAdapter: async (pinnedConfig, request) => {
         if (!pinnedConfig.triggers.some(trigger => trigger.name === request.sourceTrigger) ||
@@ -4318,7 +4359,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     const scanService = imReviewService;
     const scanImReviews = () => {
       if (imReviewRunning) return;
-      imReviewRunning = scanService.scan().then(() => {}).catch(error => {
+      imReviewRunning = scanService.scan({ detached: true }).then(() => {}).catch(error => {
         console.warn(JSON.stringify({ msg: "im_review_scan_failed", error: String(error) }));
       }).finally(() => { imReviewRunning = undefined; });
     };
@@ -4521,17 +4562,19 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(store
       ? {
         ...(imAuthorizationDirectory !== undefined ? { imDirectory: imAuthorizationDirectory } : {}),
-        ...(imReplyService !== undefined ? { closeImReplies: () => imReplyService!.dispose() } : {}),
+        ...(imReplyService !== undefined ? { closeImReplies: () => imReplyService!.stop() } : {}),
         imCallbacks: {
           store,
           namespace: configSources.database.namespace,
           getConfig: currentConfig,
           getConfigGeneration: () => {
             const generation = runtimeConfig.current();
-            return { config: generation.config, snapshotId: generation.snapshotId, fileDigest: generation.fileDigest ?? "unknown" };
+            return { config: generation.config, snapshotId: runtimeConfig.mode === "database" ? generation.snapshotId : null, fileDigest: generation.fileDigest ?? "unknown" };
           },
           env: (name: string) => resolveEnv(name),
           directory: imAuthorizationDirectory,
+          socialClient: (config, name) => socialReadiness.client(config, name),
+          reviewReady: () => !draining && runtimeConfig.mode === "database" && imReviewService !== undefined,
           query: imQueryService,
           cancellation: imCancellationHandler,
         } satisfies ImCallbackRoutesOptions,

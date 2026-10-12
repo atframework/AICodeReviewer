@@ -4,6 +4,29 @@ This document is the user-facing module for AICodeReviewer report output. Keep i
 
 ## Design goals
 
+Slack/Discord/Telegram use `slack_app`, `discord_bot`, `telegram_bot` channels
+referencing `im.connections`. See the [protocol contract](design/slack-discord-telegram.md)
+and bilingual [user guide index](README.md#用户文档). Credentials and exact platform
+identity belong to the connection; destinations belong to output channels.
+Problems buffer into one bounded summary flush, including a line-only route.
+Slack/Telegram use a 3900 UTF-16-unit budget, Discord 1900; metadata counts toward it.
+Native author mentions, directory scopes, threads/topics and buttons are rejected.
+
+`SocialImClient` checks cached platform identity/destination metadata before sends.
+Complete destination-matching receipts are delivered; explicit rejections are
+failed; missing/ambiguous receipts remain unknown. PublicationJournal persists
+write-ahead identities and replays confirmed receipts without POST. Unknown
+unqueryable writes do not authorize resend. Versioned reply outbox payloads are
+separate from remote receipts; `sending` is persisted before POST and an expired
+lease becomes unknown. Only explicit 429 due times authorize later reply retries.
+
+HTTP callbacks authenticate bounded raw bytes before admission. Telegram short
+replies commit with the inbox/request; Slack/Discord ACK replies are ephemeral.
+Source replies contain request IDs/states only; full reports follow workspace routes.
+Current authorization is checked before new VCS, analysis and journaled writes,
+while the execution snapshot stays pinned. The main reviewer prompt needs no
+transport rules: these boundaries are enforced by the host.
+
 - Agent CLIs do the code reasoning; AICR owns the report contract, validation, routing, and rendering.
 - Every formal review result must flow through AICR tools, never through free-form stdout.
 - The same reported problem must render cleanly as a VCS line comment, an issue entry, or an IM summary card.
