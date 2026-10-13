@@ -107,6 +107,70 @@ function api(
 describe.each(fixtures)(
   "$connection.kind API and publication recovery",
   (fixture) => {
+    it("keeps unexpired readiness during refresh, expires on time, and renews only on success", async () => {
+      let time = 1000;
+      let blocked = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const normal = api(fixture, () => response(fixture.receipt));
+      const fetch: FetchLike = async (url, init) => {
+        if (blocked) await gate;
+        return normal(url, init);
+      };
+      const client = new SocialImClient(fixture.connection, "123:test-token", {
+        fetch,
+        now: () => time,
+      });
+      expect(await client.refreshReadiness(fixture.destination)).toBe(true);
+      time = 241000;
+      expect(client.isReady(fixture.destination)).toBe(true);
+      expect(client.isReady(fixture.destination, 60000)).toBe(false);
+      blocked = true;
+      const refresh = client.refreshReadiness(fixture.destination);
+      expect(client.isReady(fixture.destination)).toBe(true);
+      time = 300999;
+      expect(client.isReady(fixture.destination)).toBe(true);
+      time = 301000;
+      expect(client.isReady(fixture.destination)).toBe(false);
+      release();
+      expect(await refresh).toBe(true);
+      expect(client.isReady(fixture.destination, 60000)).toBe(true);
+      time = 601000;
+      expect(client.isReady(fixture.destination)).toBe(false);
+    });
+    it.each(["identity", "transport"])(
+      "invalidates previously ready targets after a failed %s refresh",
+      async (failure) => {
+        let fail = false;
+        const normal = api(fixture, () => response(fixture.receipt));
+        const fetch: FetchLike = async (url, init) => {
+          if (!fail) return normal(url, init);
+          if (failure === "transport") throw new Error("unavailable");
+          return response({
+            ok: true,
+            team_id: "TOTHER",
+            user_id: "UOTHER",
+            bot_id: "BOTHER",
+            id: "999",
+            result: { id: 999, is_bot: true, username: "OtherBot" },
+          });
+        };
+        const client = new SocialImClient(
+          fixture.connection,
+          "123:test-token",
+          { fetch, now: () => 1000 },
+        );
+        expect(await client.refreshReadiness(fixture.destination)).toBe(true);
+        fail = true;
+        expect(await client.refreshReadiness(fixture.destination)).toBe(false);
+        expect(client.isReady(fixture.destination)).toBe(false);
+        expect(
+          await client.sendMessage(fixture.destination, { text: "report" }),
+        ).toEqual({ kind: "rejected", code: "destination_not_ready" });
+      },
+    );
     it("rejects metadata with an unsupported destination type or a different platform domain", async () => {
       const normal = api(fixture, () => response(fixture.receipt));
       const fetch: FetchLike = async (url, init) => {

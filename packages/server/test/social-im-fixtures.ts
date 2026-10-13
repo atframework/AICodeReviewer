@@ -200,6 +200,7 @@ export function callbackRequest(
   platform: Platform,
   command: string,
   delivery = 900,
+  actorId?: string,
 ): Request {
   let raw: string;
   const headers = new Headers();
@@ -207,7 +208,7 @@ export function callbackRequest(
     raw = new URLSearchParams({
       api_app_id: "A123",
       team_id: "T123",
-      user_id: "U234",
+      user_id: actorId ?? "U234",
       channel_id: "C123",
       command: "/aicr",
       text: command,
@@ -229,7 +230,7 @@ export function callbackRequest(
       guild_id: "123456789012345679",
       channel_id: "123456789012345680",
       type: 2,
-      member: { user: { id: "123456789012345681" } },
+      member: { user: { id: actorId ?? "123456789012345681" } },
       data: {
         name: "aicr",
         type: 1,
@@ -248,7 +249,7 @@ export function callbackRequest(
       message: {
         text: "/aicr@TestBot " + command,
         entities: [{ type: "bot_command", offset: 0, length: 13 }],
-        from: { id: 234567891, is_bot: false },
+        from: { id: Number(actorId ?? "234567891"), is_bot: false },
         chat: { id: -1001234567890, type: "supergroup" },
       },
     });

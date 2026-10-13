@@ -26,8 +26,18 @@ Slack、Discord、Telegram 的本地实现已落地；待完成专用账户上�
 真实命令、报告显示、长任务终态与回滚验收。按
 [执行步骤](../design/slack-discord-telegram-execution.md)和
 [验收矩阵](../design/slack-discord-telegram-acceptance.md)控制调用预算并保留未覆盖边界。
+真实平台验收需核验实际运行容器的 API 访问与目的地 readiness，再验证命令和报告；公网健康检查不能替代这些证据。
+命令无回复时需核验客户端实际 slash 调用、平台命令定义和回调状态；Slack/Discord 的 inline 初始回复与 Telegram 回复 outbox 分开验收。
+Slack 的 HTTP 命令验收需确认 Socket Mode 已关闭、命令 Request URL 可编辑且与回调一致；导入生成的 manifest 不能代替该检查。
+SDC-13-live：Slack Socket Mode 需补跨刷新周期 help/chat-id ACK 与控制台/HTTP 回切；
+回切时核验应用级开关与接收器配置一致，并验证保留的 HTTP URL。实际命令回复与连接状态分列验收。
+真实命令可用性需跨越 readiness 缓存刷新周期验证；一次成功的签名探针不能替代连续接收证据。
 稳定配置与恢复约定见[接入规范](../design/slack-discord-telegram.md)，外部接口见
 [官方来源](sources/slack-discord-telegram.md)，使用文档见[目录](../README.md)。
+指定群/频道的 `conversation_users` 批量授权还需补真实成员变化与 status 归属证据；
+它使用平台认证的命令上下文，不查询当前成员目录，退群不自动取消已接受任务。
+精确 `repo_ref` 旧报告路由按既有配置中的仓库核验映射及其他组织隔离；本次不扩展组织仓库清单或 GitHub 安装权限。
+配置清单不代表平台授权，真实审查结果仍需单独验证。
 
 IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 [IM 实施规范](../design/im-implementation-spec.md)，外部协议见[来源记录](sources/im-integrations.md)。

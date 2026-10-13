@@ -146,7 +146,8 @@ export class SocialImReadinessService {
         if (!client) return;
         for (const destination of destinations) {
           if (this.stopped) return;
-          if (!client.isReady(destination)) await client.refreshReadiness(destination);
+          // Leave time for the 30-second poll and both bounded platform metadata reads.
+          if (!client.isReady(destination, 60_000)) await client.refreshReadiness(destination);
         }
       }));
     } finally { this.refreshing = false; }

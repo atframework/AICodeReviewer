@@ -1,6 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { registerSocialIm } from "../../../scripts/register-social-im.mjs";
 const reply = (body: unknown) => new Response(JSON.stringify(body));
+it("generates an offline Socket Mode manifest without an HTTP slash URL", async () => {
+  const result = await registerSocialIm(["--platform", "slack", "--slack-mode", "socket"]);
+  expect(result.manifest.settings).toEqual({socket_mode_enabled: true});
+  expect(result.manifest.features.slash_commands[0]).not.toHaveProperty("url");
+  const http = await registerSocialIm(["--platform", "slack", "--callback-url", "https://example.org/callbacks/im/bot"]);
+  expect(http.manifest.settings).toEqual({socket_mode_enabled: false});
+});
 it("keeps every registration dry-run offline and excludes credential values", async () => {
   const fetch = vi.fn(() => {
     throw new Error("offline");

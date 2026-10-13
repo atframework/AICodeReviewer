@@ -1,5 +1,6 @@
 import type { AppConfig, ImActorScopes, ImBindingActor, ImCommandBindingConfig, ImCommandName } from "@aicr/core";
 import type { ImCommand, ImConversation, ImPrincipal } from "@aicr/core";
+import { isSocialImSharedConversation, type ImConnectionKind } from "@aicr/core";
 import type { AcceptImDeliveryOutcome, AcceptImDeliveryInput, StoreDb } from "@aicr/store";
 import { acceptImDelivery, findImReviewRequest } from "@aicr/store";
 
@@ -180,11 +181,17 @@ function matcherActive(matcher: ImBindingActor, now: Date): boolean {
  * section is missing (fail closed). Directory members, aliases and name
  * guesses still never authorize (A02) — only configured matchers do.
  */
-function actorMatches(matcher: ImBindingActor, actor: ImPrincipal, scopes: ImActorScopes | undefined): boolean {
+function actorMatches(matcher: ImBindingActor, actor: ImPrincipal, scopes: ImActorScopes | undefined, connectionKind: ImConnectionKind, conversation: ImConversation): boolean {
   if (!("kind" in matcher)) return matcher.type === actor.type && matcher.id === actor.id;
   switch (matcher.kind) {
     case "any":
       return true;
+    case "conversation_users": {
+      const type = connectionKind === "slack_app" ? "slack_user_id"
+        : connectionKind === "discord_bot" ? "discord_user_id"
+          : connectionKind === "telegram_bot" ? "telegram_user_id" : undefined;
+      return actor.type === type && isSocialImSharedConversation(connectionKind, conversation);
+    }
     case "wecom_department": {
       const wecom = scopes?.wecom;
       if (wecom === undefined) return false;
@@ -206,8 +213,8 @@ function actorMatches(matcher: ImBindingActor, actor: ImPrincipal, scopes: ImAct
   }
 }
 
-function actorsMatch(binding: ImCommandBindingConfig, actor: ImPrincipal, scopes: ImActorScopes | undefined, now: Date): boolean {
-  return binding.actors.some(allowed => matcherActive(allowed, now) && actorMatches(allowed, actor, scopes));
+function actorsMatch(binding: ImCommandBindingConfig, actor: ImPrincipal, scopes: ImActorScopes | undefined, now: Date, connectionKind: ImConnectionKind, conversation: ImConversation): boolean {
+  return binding.actors.some(allowed => matcherActive(allowed, now) && actorMatches(allowed, actor, scopes, connectionKind, conversation));
 }
 
 /**
@@ -240,7 +247,7 @@ export function authorizeImCommand(options: {
     if (binding.enabled !== true) continue;
     const bindingConnection = options.config.im?.connections?.[binding.connection];
     if (bindingConnection === undefined || bindingConnection.kind !== connection.kind) continue;
-    if (!actorsMatch(binding, options.actor, options.actorScopes, now)) continue;
+    if (!actorsMatch(binding, options.actor, options.actorScopes, now, connection.kind, options.conversation)) continue;
     if (!conversationsMatch(binding, options.conversation)) continue;
     const commandName = options.command.kind === "chat-id" ? "chat-id" : options.command.kind;
     if (!binding.commands.includes(commandName as ImCommandName)) continue;
@@ -508,7 +515,7 @@ function scopeMatchersFor(config: AppConfig, connectionName: string): ImBindingA
   for (const binding of Object.values(config.im?.command_bindings ?? {})) {
     if (binding.connection !== connectionName || binding.enabled !== true) continue;
     for (const actor of binding.actors) {
-      if ("kind" in actor && actor.kind !== "any") matchers.push(actor);
+      if ("kind" in actor && actor.kind !== "any" && actor.kind !== "conversation_users") matchers.push(actor);
     }
   }
   return matchers;

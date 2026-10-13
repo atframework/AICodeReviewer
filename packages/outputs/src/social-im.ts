@@ -76,8 +76,9 @@ export class SocialImClient {
           ? "https://discord.com/api/v10"
           : "https://api.telegram.org";
   }
-  isReady(destination: string): boolean {
-    return (this.ready.get(destination) ?? 0) > this.now();
+  /** Check the remaining validity without extending the cached verification. */
+  isReady(destination: string, minimumValidityMs = 0): boolean {
+    return (this.ready.get(destination) ?? 0) > this.now() + minimumValidityMs;
   }
   telegramUsername(): string | undefined {
     return this.botUsername;
@@ -114,7 +115,7 @@ export class SocialImClient {
   }
   /** Called by background prewarming or an output worker, never by the callback handler. */
   async refreshReadiness(destination: string): Promise<boolean> {
-    this.ready.delete(destination);
+    let refreshed = false;
     try {
       const connection = this.connection;
       if (connection.kind === "slack_app") {
@@ -178,9 +179,13 @@ export class SocialImClient {
         this.botUsername = identity.username;
       }
       this.ready.set(destination, this.now() + 300_000);
+      refreshed = true;
       return true;
     } catch {
       return false;
+    } finally {
+      // Pending metadata reads keep only the old, bounded verification; any failure revokes it.
+      if (!refreshed) this.ready.delete(destination);
     }
   }
   async sendMessage(

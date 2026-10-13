@@ -221,7 +221,7 @@ export async function consumeCardAction(store: StoreDb, input: {
   const alias = Object.entries(binding.repositories ?? {}).find(([, target]) =>
     target.workspace === action.workspaceId && target.source_trigger === action.sourceTrigger && target.repo_ref === action.repoRef)?.[0];
   if (alias === undefined) return { kind: "rejected", reason: "repository_revoked" };
-  const matchers = binding.actors.filter((actor): actor is ImBindingActor => "kind" in actor && actor.kind !== "any");
+  const matchers = binding.actors.filter((actor): actor is ImBindingActor => "kind" in actor && actor.kind !== "any" && actor.kind !== "conversation_users");
   const scopes = matchers.length > 0 ? await input.directory?.resolve({ connectionName: input.connectionName, actor: input.actor, matchers }) : undefined;
   const authorization = authorizeImCommand({
     config: { ...input.config, im: { ...input.config.im, command_bindings: { [action.bindingId]: binding } } },

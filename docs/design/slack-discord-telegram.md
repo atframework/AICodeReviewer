@@ -11,10 +11,10 @@
 | 项目 | 本次选择与理由 |
 | --- | --- |
 | 输出类型 | 新增 `slack_app`、`discord_bot`、`telegram_bot`；统一引用 `im.connections`，主动 Bot API 可处理长任务终态 |
-| 接收方式 | 复用 `/callbacks/im/:connection` 的 HTTP 入口；新平台不启用长连接、Gateway 或 polling |
+| 接收方式 | 复用 `/callbacks/im/:connection` 的 HTTP 入口；Slack 可用互斥的 Socket Mode；Discord/Telegram 不启用 Gateway 或 polling |
 | 命令 | `help`、`chat-id`、`review <alias> <revision>`、`status <request-id>`；新平台 capability 显式拒绝其他命令，既有平台命令不变 |
 | 执行 | 复用命令授权、持久请求、ReviewQueue、ManualReviewService、VCS resolver 与编排器；不新增聊天 Agent 或另一个任务队列 |
-| 授权 | 精确 typed actor + 精确会话 + 显式仓库别名；新连接不支持 any、目录 scope、allow_all_repositories |
+| 授权 | 精确 typed actor 或显式 `conversation_users` + 精确会话 + 显式仓库别名；不支持 any、目录 scope、allow_all_repositories |
 | 报告目的地 | 仅 workspace 既有输出路由；命令所在会话只接收请求编号和状态，不自动收到完整报告 |
 | 单应用范围 | Slack 一个应用/一个 workspace；Discord 一个应用/一个 guild；Telegram 一个 Bot/一个 webhook。相同应用不能启用多个相互覆盖的 callback connection |
 | 会话范围 | Slack workspace 频道；Discord guild 普通文本频道；Telegram 已建立的私聊及 group/supergroup。线程、forum topic、频道广播、Slack/Discord DM 不在首期 |
@@ -30,7 +30,7 @@
 
 下表记录规划提交 `6112f05` 的起点。当前共用实现为 outputs `social-im.ts`、
 `social-im-markdown.ts`，server `im/protocol-social.ts`、`social-callback.ts`、
-`social-command-service.ts`、`social-identity.ts`；职责和验收沿用本规范，没有增加 SDK/Gateway/polling。
+`social-command-service.ts`、`social-identity.ts`；职责和验收沿用本规范，Slack Socket Mode 使用固定 SDK；其余平台不增加 Gateway/polling。
 
 | 位置 | 当前证据 | 实施约束 |
 | --- | --- | --- |
@@ -90,6 +90,8 @@ corpId 保持 undefined；namespace 继续参与隔离。凭据轮换不改变�
 的 team/user 及 conversations.info 的 context_team_id、频道类型、成员身份和写入限制，Discord 当前应用及频道 guild/type、Telegram getMe 的
 id/username 及 getChat 的目标类型。不能按 ID 前缀猜测会话类型。
 元数据缓存有效期 300 秒（本地设计值），按 generation/身份/目的地隔离；失败或到期且未刷新则不 ready。
+后台每 30 秒检查，在剩余有效期不超过 60 秒时刷新，覆盖轮询间隔和两次各至多 10 秒的元数据请求。
+刷新期间保留原有效期限；成功才续期，失败立即失效。不能等过期才刷新，也不能在请求开始时清空仍有效的缓存。
 预热范围只含已配置的输出和 binding 会话；不自动发现其他频道。Slack 增加 channels:read，
 使用私有频道时增加 groups:read；不申请历史或成员目录权限。
 readiness 不在 callback 内请求网络，失败则新接收/发送返回明确不可用，不能改用其他连接。
@@ -97,7 +99,15 @@ readiness 不在 callback 内请求网络，失败则新接收/发送返回明�
 
 ### 3.3 接收与执行权限
 
-新平台 binding 只允许精确 actor、上述精确 conversation、四个命令、显式 repositories，report_policy 固定 workspace_routes。
+新平台 binding 允许精确 actor 或 `{kind: conversation_users}`、上述精确 conversation、四个命令、显式 repositories，report_policy 固定 workspace_routes。
+
+`conversation_users` 授权在 binding 指定的 Slack/Discord 频道或 Telegram 群内发出平台认证命令的用户，
+成员增减不需要维护用户 ID 列表。它只使用验签后的操作人和会话上下文，不拉取成员目录；Slack 仍核对 app/team，
+Discord 仍核对 app/guild 和 member.user，Telegram 仍拒绝 Bot、匿名 sender_chat、topic 和广播帖。
+私聊、Slack DM ID、Telegram 正数群 ID 和旧 IM 连接不能使用此选项，disabled 草案也不例外。
+批量与精确 actor 的重叠 binding 必须合并或缩小会话/命令范围；expires_at 仍生效。
+授权依据是提交命令时的平台上下文，退群不会自动撤销已接受请求；撤销待执行工作须停用或缩小 binding。
+恢复和发布前复查当前配置，但不会把用户名称或历史作者映射当作成员身份。status 仍只允许原操作人查询原请求。
 `review` 要求 SQLite/PG StoreDb、数据库 ConfigStore、非空 snapshot、worker ready 与所需 secret 可用。
 输出发送本身仍可用于 file-only 配置。
 
@@ -109,7 +119,7 @@ status 同时检查原请求 actor、连接身份、会话和仓库范围，不�
 
 | 平台 | 输入与规范化 | 认证/去重 | 响应 |
 | --- | --- | --- | --- |
-| Slack | `/aicr review demo <revision>`；command 必须 `/aicr`，text 交给已有固定 parser；form 解码只发生在验签后 | S1；校验 api_app_id/team_id；delivery key 使用已验证 timestamp+原始 body 的 SHA-256，只保证完全相同请求的重投；不要伪造 Events API event_id | 持久接收后 HTTP 200 ephemeral 文本，含 request ID；help/chat-id/status 在同一响应中返回 |
+| Slack | `/aicr review demo <revision>`；command 必须 `/aicr`，text 交给已有固定 parser；form 解码只发生在验签后 | S1；校验 api_app_id/team_id；delivery key 优先哈希 trigger_id，缺失时哈希已验证 timestamp+原始 body；不要伪造 Events API event_id | 持久接收后 HTTP 200 ephemeral 文本，含 request ID；help/chat-id/status 在同一响应中返回 |
 | Discord | Guild slash `/aicr command:review demo <revision>`；注册一个必填 STRING option `command`，禁止未知 option/类型 | D1；校验 application_id、guild_id、member.user.id；delivery key=interaction.id；PING 先验签再返回 type=1 | 命令 HTTP 200、type=4、flags=64、allowed_mentions.parse=[]；本期不 deferred，不保存 interaction token |
 | Telegram | 私聊 `/aicr review ...`，群 `/aicr@BotUsername review ...`；检查首位 bot_command entity 及 bot username | T1 secret header 常量时间比较；delivery key=update_id；from.is_bot、sender_chat/匿名管理员、无 from、edited/channel/非文本消息不触发 review | inbox/request/command reply outbox 原子提交后 HTTP 200；worker 再调用 sendMessage，不能在 ACK body 内代发 |
 
@@ -128,6 +138,12 @@ Telegram command reply 必须与 inbox 同事务登记；重复投递不能重�
 Slash command 是明确调用，不要求额外 @mention；不能照抄旧群消息前缀判断。
 
 ## 5. 输出与格式
+
+旧配置按仓库限制报告时，`outputs.routes.rules[].match.repo_ref` 精确、区分大小写地匹配事件 repoRef，
+与 trigger/target_kind 取交集，无 glob/正则。首条匹配规则仍优先于 workspace 列表；
+把精确规则放在宽泛规则之前，复制其原有渠道后追加新 Bot 输出。
+不能把未知 repo 字段塞入 passthrough 后宣称隔离生效。core compiler 与 bootstrap 必须对同一事件选择相同渠道。
+组织仓库清单与 GitHub App 安装可访问仓库清单分别核验；配置别名不会自动授予 App 仓库访问权限。
 
 在 outputs 增加三个 client/dispatcher，网络依赖采用仓库 FetchLike + clock + AbortSignal；不引入三个完整 Bot SDK。
 复用 template-engine 和结构化 ReviewProblem。publishProblem 缓冲、publishSummary 一次汇总；
@@ -212,3 +228,14 @@ Authorization、Slack response_url、Discord interaction token、Telegram `/bot<
   保留 outbox/unknown/receipt，不删记录后重发；恢复旧二进制前核查 schema reader 兼容性。
 - 双语指南、可运行示例、输出规范和 AI 导航同步维护；主评审 prompt 无需平台操作规则，
   传输认证、当前授权与恢复由宿主实现。
+
+## Slack Socket Mode
+
+`socket_mode.enabled` 与 HTTP callback 互斥，凭据为 `app_token`/`app_token_env`，不影响 Bot 输出 token。
+server `slack-socket-mode.ts` 使用 @slack/socket-mode 3.1.0 与 undici 7.29.0；显式代理覆盖开连接 API 和 WebSocket。
+hello 必须匹配 App ID，slash payload 必须匹配 team，随后复用 `processVerifiedSocialCommand`，保留授权、readiness、持久 snapshot 和队列。
+接收限 256 KiB，拒绝重复 JSON 键；一秒接收预算包含配置读取，持久提交后 ACK，失败不 ACK。
+trigger_id 哈希与 HTTP 共享去重；缺失时使用 envelope_id 哈希。原始临时 URL、token 和 envelope 不持久化。
+SDK 处理 heartbeat，服务负责有界重连、30 秒配置轮询和排空断开。其他事件只 ACK，不实施 App Agent/mentions/按钮。
+一个应用只启用一个命令接收实例；服务不会自动修改应用级 Socket Mode 开关。
+使用及回切步骤见双语 Slack 指南；测试见 `slack-socket-mode.test.ts`，真实平台验收单列。

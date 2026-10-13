@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { assertConfigSecretPolicy, assertNoConfigCredentialLiterals, collectConfigSecretReferences } from "../src/config-secret-policy.js";
 
 describe("deployment-owned secret purposes (A06)", () => {
+  it("binds nested Socket app-token references to the configured Slack identity", () => {
+    const connection = {kind: "slack_app", app_id: "A123", team_id: "T123", bot_user_id: "U123", socket_mode: {enabled: true, app_token_env: "APP_TOKEN"}};
+    const file = {im: {connections: {bot: connection}}};
+    expect(() => assertConfigSecretPolicy(file, {}, file)).not.toThrow();
+    expect(() => assertConfigSecretPolicy(file, {}, {im: {connections: {bot: {...connection, app_id: "A999"}}}})).toThrow(/not authorized/);
+    expect(() => assertNoConfigCredentialLiterals({socket_mode: {app_token: "xapp-private"}})).not.toThrow();
+  });
   it.each([
     { kind: "slack_app", app_id: "A123", team_id: "T123", bot_user_id: "U123", token_env: "BOT_TOKEN" },
     { kind: "discord_bot", application_id: "123", guild_id: "456", token_env: "BOT_TOKEN" },

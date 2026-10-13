@@ -15,10 +15,46 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 
 - For Slack/Discord/Telegram, read [the protocol contract](../../../docs/design/slack-discord-telegram.md)
   and [official sources](../../../docs/ai/sources/slack-discord-telegram.md).
+  For batch authorization, `conversation_users` uses authenticated command context
+  in explicit shared conversations; never substitute `any`, display names or
+  inferred membership. Keep direct chats excluded and status ownership intact.
   Trace config → `SocialImClient` → raw HTTP → journal/outbox, and callback →
   current authorization → durable worker. ACK is admission only; missing receipts
   or expired `sending` leases remain unknown. Registration defaults to dry-run
   and never runs during bootstrap. Keep live-account evidence separate from fixtures.
+
+  For setup failures, compare Slack's actual Bot token scopes with `scopes.bot`;
+  user scopes and an uninstalled manifest change do not grant Bot permissions.
+  Also verify the slash command definition, its Request URL and actual client
+  invocation; the `commands` scope alone does not define `/aicr`.
+  Select HTTP or Socket Mode explicitly; the app-wide switch must match the
+  configured receiver. HTTP requires its saved slash URL and signing secret.
+  Socket Mode requires a connections:write App-Level Token, verified hello App ID,
+  envelope ACK and one receiving instance. Trace `slack-socket-mode.ts` through
+  `processVerifiedSocialCommand`; never synthesize HTTP signatures or duplicate
+  admission. Use the pinned SDK, explicit proxy dispatcher and silent SDK logger.
+  Preserve other app settings; unsupported event/interactive envelopes are ACK-only.
+  Cover real SDK handshake, identity rejection, hot reload, drain and reconnect
+  with `slack-socket-mode.test.ts`. Connection logs do not prove command delivery.
+  A Slack challenge-parameter error belongs to Events API URL verification;
+  configure the command's Slash Commands URL and preserve existing App Agent
+  event endpoints. This callback accepts form commands, not Events API JSON.
+  For Discord, verify the app/guild command and Interactions Endpoint URL, then
+  select its slash command and fill the `command` option. Both return initial replies inline
+  (`social-callback.ts`), while Telegram uses the reply outbox. An absent inbox
+  row may mean rejection before admission; require callback status/client error
+  evidence before changing authentication, readiness or outbound permissions.
+  For periodic `destination_not_ready`, trace cache expiry and refresh timing.
+  Refresh before expiry and retain the original deadline during pending reads;
+  successful checks renew it, failed checks revoke it. Keep callbacks free of
+  metadata network calls. Cover pending refresh, expiry and failure with
+  `social-im-readiness.test.ts` and outputs `social-im.test.ts`.
+  Never log raw callback bodies, signatures, response URLs or interaction tokens.
+  If Telegram commands yield no updates and no message link is available, use the
+  [documented membership-event check](../../../docs/site/src/content/docs/en/integrations/telegram.md)
+  before webhook registration. Verify the exact Bot and group; preserve privacy
+  and pending updates. Runtime registration still accepts `message` only, as
+  covered by `social-im-registration.test.ts`; never add a target from its display name alone.
 
 - Resolve empty-result policy per channel: built-in → `outputs.no_problems` →
   channel → workspace defaults → instance. `review.skip_lgtm` is review guidance,
@@ -40,7 +76,13 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   Sync affected config/examples, output docs, public locales and roadmap entries;
   run applicable final gates from the repository baseline.
 - For routing changes, compare preview with actual publisher calls in old/new
-  generations. v2 route rules match on `target_kinds`, `triggers`, and
+  generations. Legacy `outputs.routes.rules[].match.repo_ref` is an exact,
+  case-sensitive repository reference and intersects trigger/target kind;
+  keep narrower rules before broad rules and verify unrelated repos retain
+  their selected channels in both core selection and bootstrap publishing.
+  Trace `resolveOutputChannelsLegacy` and `routeMatchesEvent`; workspace
+  output lists cannot override a non-empty matching legacy route.
+  v2 route rules match on `target_kinds`, `triggers`, and
   `source.repo_ref` (`routingRuleMatchSchema` in `config.ts`, compiled by
   `config-compiler.ts`). Each event resolves publishers through the
   generation-scoped `outputPublisherResolver` (option declared at

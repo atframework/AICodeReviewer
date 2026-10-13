@@ -16,7 +16,10 @@
 
 | 任务 | 执行范围 | 验收出口 |
 | --- | --- | --- |
-| SDC-10-live | 在专用 workspace/guild/Bot、公开 HTTPS 回调上逐平台验证安装、注册、实际四命令、报告显示、长任务终态与回滚 | L01–L03；需要专用账户，默认不开启、不读取本地秘密 |
+| SDC-10-live | 在专用 workspace/guild/Bot、公开 HTTPS 回调上逐平台验证安装、注册、实际四命令、报告显示、长任务终态与回滚；跨 readiness 刷新周期验证命令接收，无回复时取得客户端原始错误及回调状态 | L01–L03；Slack 按 HTTP/Socket Mode 核对命令投递、ACK 和应用开关；分别核验实际 slash 调用、命令定义与 inline 初始回复；元数据/readiness 和其他平台通过不能替代本平台命令验收 |
+| SDC-13-live | Slack Socket Mode 跨 readiness 周期命令 ACK；核验应用开关回切到 HTTP | SM05-live；验证刷新期间与之后的实际 help/chat-id 回复、HTTP URL 与接收器模式一致；真实 review/report 验收继续保留 |
+| SDC-11-live | 指定群/频道使用 conversation_users 批量授权；核验成员变化无需配置变更、错会话拒绝、status 归属和配置撤权 | A07、本地完整门禁及 L01–L03；平台认证上下文不等于当前成员目录，退群不自动取消已接受任务 |
+| SDC-12-live | 按既有 config.yaml 的仓库映射核验精确 repo_ref 报告路由；部署并由用户验证，不扩展组织仓库清单或 GitHub 安装权限 | 配置内目标仓库映射明确；原有渠道保留；其他组织报告不进入新渠道；缺 Bot 权限或 chat_id 时保留未完成项 |
 
 真实账户通过前保留执行步骤和验收矩阵。各断言当前代码、测试和证据限制见验收矩阵。
 

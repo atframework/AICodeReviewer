@@ -20,6 +20,7 @@ records from primary sources and mark unavailable claims unverified.
 | Slack/Discord/Telegram sends, command callbacks, authentication or delivery recovery | [Official protocol research](sources/slack-discord-telegram.md); Bot API/HTTP implementation, live-platform acceptance tracked separately |
 | Automatic batch publisher queries, remote receipts or idempotency | [Publication reconciliation](sources/publication-reconciliation.md) |
 | PowerShell or runtime image tools/releases | [Shell and tooling](sources/shell-and-tooling.md) |
+| Node runtime HTTP proxy and bypass settings | [Shell and tooling](sources/shell-and-tooling.md#node-runtime-http-proxy) |
 
 The 2026-09-12 authoring refresh covers concise instructions, conditional
 reference loading, skill metadata, the Claude import bridge, and PowerShell 7

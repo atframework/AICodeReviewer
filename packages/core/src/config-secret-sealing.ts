@@ -47,6 +47,7 @@ export const SEALED_LITERAL_SECRET_FIELDS: ReadonlySet<string> = new Set([
   "webhook_url",
   "secret",
   "app_secret",
+  "app_token",
   "aws_access_key",
   "aws_secret_key",
   "aws_session_token",

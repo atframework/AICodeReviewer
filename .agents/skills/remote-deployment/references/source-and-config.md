@@ -39,6 +39,26 @@ host snapshot or secrets into a committed helper.
 - Restart through the current owner: systemd unit, compose project, or plain
   engine. For rootless port-release races, stop/start after confirming the port
   is free. Recheck health and logs after the configuration is loaded.
+- For missing callback access records, inspect the running proxy's log writer
+  path and container mounts. A log can exist only inside the container, so an
+  empty host directory does not prove requests never arrived. Read bounded
+  records and allowlist time, method, callback path, status and duration;
+  exclude headers, raw bodies, signatures and response URLs.
+- Atomic file replacement must preserve container read access as well as mode.
+  Check the image's runtime UID/GID and rootless mappings; validate the mounted
+  config with that identity before restart. Private backup modes are not active
+  config modes. A stopped SQLite WAL database can require new sidecars even for
+  a readonly connection: copy the stopped DB and WAL into private task staging
+  for validation, retaining a read-only production mount. Never use immutable
+  reads that omit pending WAL transactions to check config heads.
+- If outbound Node API reads time out while host reads succeed, verify with the
+  deployed client before changing credentials. Existing proxy env vars may need
+  `NODE_USE_ENV_PROXY=1` on supported Node versions; preserve proxy/bypass settings
+  and verify local health plus platform metadata after the owning-service restart.
+  Build proxy detection is separate. See [runtime proxy sources](../../../../docs/ai/sources/shell-and-tooling.md#node-runtime-http-proxy)
+  and `SocialImClient.refreshReadiness`; do not send messages as a connectivity probe.
+  For another config phase, use a fresh validation-copy directory and checkpoint;
+  never reuse a stopped database copy from an earlier activation.
 - Preserve runtime-owned `0700` directories and `0600` files for member lists
   under `data/db/private` and task backups under `data/db/build`. Recursive
   permission repair must prune these subtrees; verify modes after deployment.
@@ -77,3 +97,12 @@ For nested containers verify the host socket, access permissions, engine client,
 socket env and actual child launch. A mounted engine socket grants host-user
 container control; retain the intended trust boundary. Verify only the configured
 engine path, and record from-scratch acceptance separately from production health.
+
+## Slack Socket Mode cutover
+
+Read App-Level Token through local yq into private task staging, never tool output or source archives.
+Validate candidate config and env before cutover; retain the HTTP URL/signing secret for rollback.
+The deployed receiver explicitly proxies apps.connections.open and WebSocket through undici.
+Verify hello identity, reconnect, active receiver count and real command ACK separately.
+The app-wide console switch also reroutes events/interactions; a Bot/App-Level Token cannot update the App Manifest.
+For retries or diagnostics, keep SDK raw logs disabled and emit fixed status metadata only.

@@ -6,6 +6,7 @@ import { parseImCommand } from "./command-service.js";
 import { processSocialCommand } from "./social-command-service.js";
 import { storedConnectionIdentity } from "./social-identity.js";
 import {
+  type SocialProtocolResult,
   verifySlackCommand,
   verifyDiscordCommand,
   verifyTelegramCommand,
@@ -132,64 +133,16 @@ export async function handleSocialCallback(
     if (verified.kind === "unavailable")
       return response({ error: "destination_not_ready" }, 503);
     if (verified.kind === "ignored") return response({});
-    const destination =
-      "id" in verified.conversation
-        ? verified.conversation.id
-        : verified.actor.id;
-    if (!client?.isReady(destination))
-      return response({ error: "destination_not_ready" }, 503);
-    const parsed = parseImCommand(verified.text);
-    let text = "Use /aicr help.";
-    if (parsed.kind === "command") {
-      if (
-        parsed.command.kind === "review" &&
-        (!generation?.snapshotId || options.reviewReady?.() !== true)
-      )
-        return response({ error: "review_runtime_not_ready" }, 503);
-      const payloadDigest = createHash("sha256")
-        .update(
-          JSON.stringify([
-            verified.actor,
-            verified.conversation,
-            parsed.command,
-          ]),
-        )
-        .digest("hex");
-      const result = await processSocialCommand(options.store, {
-        config,
-        namespace: options.namespace,
-        connectionName: name,
-        connectionIdentity: storedConnectionIdentity(
-          connection,
-          options.namespace,
-        ),
-        deliveryKey: verified.deliveryKey,
-        payloadDigest,
-        actor: verified.actor,
-        conversation: verified.conversation,
-        command: parsed.command,
-        now: new Date(now),
-        configSnapshotId: generation?.snapshotId ?? "file-only",
-        configFileDigest: generation?.fileDigest ?? "",
-        replyOutbox: connection.kind === "telegram_bot",
-        signal: abort.signal,
-        deadlineAt,
-      });
-      text = result.text;
-    }
-    abort.signal.throwIfAborted();
-    return connection.kind === "slack_app"
-      ? response({ response_type: "ephemeral", text, mrkdwn: false })
-      : connection.kind === "discord_bot"
-        ? response({
-            type: 4,
-            data: {
-              content: text,
-              flags: 64,
-              allowed_mentions: { parse: [], replied_user: false },
-            },
-          })
-        : response({});
+    return processVerifiedSocialCommand(
+      verified,
+      name,
+      config,
+      connection,
+      generation,
+      options,
+      abort.signal,
+      deadlineAt,
+    );
   };
   try {
     return await Promise.race([
@@ -199,4 +152,75 @@ export async function handleSocialCallback(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Shared admission after transport authentication; never expose as an unsigned HTTP route. */
+export async function processVerifiedSocialCommand(
+  verified: Extract<SocialProtocolResult, { kind: "command" }>,
+  name: string,
+  config: AppConfig,
+  connection: SocialImConnection,
+  generation:
+    | { readonly snapshotId: string | null; readonly fileDigest: string }
+    | undefined,
+  options: ImCallbackRoutesOptions,
+  signal: AbortSignal,
+  deadlineAt: number,
+): Promise<Response> {
+  const client = options.socialClient?.(config, name);
+  const now = options.now?.() ?? Date.now();
+  const destination =
+    "id" in verified.conversation
+      ? verified.conversation.id
+      : verified.actor.id;
+  if (!client?.isReady(destination))
+    return response({ error: "destination_not_ready" }, 503);
+  const parsed = parseImCommand(verified.text);
+  let text = "Use /aicr help.";
+  if (parsed.kind === "command") {
+    if (
+      parsed.command.kind === "review" &&
+      (!generation?.snapshotId || options.reviewReady?.() !== true)
+    )
+      return response({ error: "review_runtime_not_ready" }, 503);
+    const payloadDigest = createHash("sha256")
+      .update(
+        JSON.stringify([verified.actor, verified.conversation, parsed.command]),
+      )
+      .digest("hex");
+    const result = await processSocialCommand(options.store, {
+      config,
+      namespace: options.namespace,
+      connectionName: name,
+      connectionIdentity: storedConnectionIdentity(
+        connection,
+        options.namespace,
+      ),
+      deliveryKey: verified.deliveryKey,
+      payloadDigest,
+      actor: verified.actor,
+      conversation: verified.conversation,
+      command: parsed.command,
+      now: new Date(now),
+      configSnapshotId: generation?.snapshotId ?? "file-only",
+      configFileDigest: generation?.fileDigest ?? "",
+      replyOutbox: connection.kind === "telegram_bot",
+      signal: signal,
+      deadlineAt,
+    });
+    text = result.text;
+  }
+  signal.throwIfAborted();
+  return connection.kind === "slack_app"
+    ? response({ response_type: "ephemeral", text, mrkdwn: false })
+    : connection.kind === "discord_bot"
+      ? response({
+          type: 4,
+          data: {
+            content: text,
+            flags: 64,
+            allowed_mentions: { parse: [], replied_user: false },
+          },
+        })
+      : response({});
 }

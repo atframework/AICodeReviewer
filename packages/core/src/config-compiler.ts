@@ -340,10 +340,11 @@ export function resolveOutputChannelsLegacy(
   key: OutputChannelKey,
 ): readonly string[] {
   const legacyMatch = (route: {
-    readonly match?: { readonly trigger?: string | undefined; readonly target_kind?: string | undefined } | undefined;
+    readonly match?: { readonly trigger?: string | undefined; readonly target_kind?: string | undefined; readonly repo_ref?: string | undefined } | undefined;
   }): boolean => {
     if (route.match?.trigger !== undefined && route.match.trigger !== event.triggerName) return false;
     if (route.match?.target_kind !== undefined && route.match.target_kind !== event.targetKind) return false;
+    if (route.match?.repo_ref !== undefined && route.match.repo_ref !== event.repoRef) return false;
     return true;
   };
 

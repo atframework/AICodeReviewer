@@ -52,7 +52,8 @@ export async function currentImRequestAuthorized(
       return false;
     if (
       isSocialImKind(connection.kind) &&
-      connection.callback?.enabled !== true
+      connection.callback?.enabled !== true &&
+      !(connection.kind === "slack_app" && connection.socket_mode?.enabled === true)
     )
       return false;
     const explicitAlias = Object.entries(binding.repositories ?? {}).find(
@@ -86,7 +87,7 @@ export async function currentImRequestAuthorized(
       JSON.parse(request.conversationJson),
     );
     const matchers = binding.actors.filter(
-      (actor) => "kind" in actor && actor.kind !== "any",
+      (actor) => "kind" in actor && actor.kind !== "any" && actor.kind !== "conversation_users",
     );
     const scopes =
       matchers.length && directory
@@ -299,7 +300,8 @@ export async function socialReplyAuthorized(
   const binding = config.im?.command_bindings?.[payload.bindingId];
   if (
     !connection ||
-    connection.callback?.enabled !== true ||
+    (connection.callback?.enabled !== true &&
+      !(connection.kind === "slack_app" && connection.socket_mode?.enabled === true)) ||
     storedConnectionIdentity(connection, namespace) !==
       payload.connectionIdentity ||
     !binding ||

@@ -181,6 +181,24 @@ environment variables always **take precedence** over autodetection, and a
 loopback-only proxy (`127.0.0.1:3128`) automatically switches the build to host
 networking so Dockerfile `RUN` steps can still reach it.
 
+## Runtime HTTP proxy
+
+Build proxy detection does not enable Node's runtime `fetch` proxy support.
+If outbound platform APIs require an existing authorized proxy, verify that the deployed Node version
+supports `NODE_USE_ENV_PROXY=1`, then pass it through the service's runtime env file:
+
+```dotenv
+NODE_USE_ENV_PROXY=1
+HTTPS_PROXY=http://proxy.example.org:3128
+NO_PROXY=localhost,127.0.0.1
+```
+
+Replace the sample address with a proxy reachable from the running container. Merge these settings with existing values;
+lowercase `http_proxy`, `https_proxy` and `no_proxy` take precedence over their uppercase equivalents.
+Keep local and internal service bypasses, restart through the service owner, and verify both local health
+and platform metadata through the deployed Node client. A successful image build or host API call does not prove runtime access.
+See [Node's built-in proxy support](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support).
+
 ## Sandbox backends
 
 AICR can isolate each agent run in its own container. Two container backends

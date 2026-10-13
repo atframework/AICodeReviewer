@@ -125,6 +125,12 @@ export function verifySlackCommand(input: {
     )
       return reject;
     if (params.get("command") !== "/aicr") return ignore;
+    if (
+      params.getAll("trigger_id").length > 1 ||
+      (params.has("trigger_id") &&
+        !/^[A-Za-z0-9._-]{1,256}$/u.test(params.get("trigger_id")!))
+    )
+      return reject;
     const user = params.get("user_id");
     const channel = params.get("channel_id");
     if (!slackId(user) || !slackId(channel)) return reject;
@@ -132,16 +138,62 @@ export function verifySlackCommand(input: {
       kind: "command",
       actor: { type: "slack_user_id", id: user },
       conversation: { kind: "channel", id: channel },
-      deliveryKey: createHash("sha256")
-        .update(timestamp)
-        .update(":")
-        .update(input.raw)
-        .digest("hex"),
+      deliveryKey:
+        params.getAll("trigger_id").length === 1 && params.get("trigger_id")
+          ? createHash("sha256")
+              .update("slack-trigger:")
+              .update(params.get("trigger_id")!)
+              .digest("hex")
+          : createHash("sha256")
+              .update(timestamp)
+              .update(":")
+              .update(input.raw)
+              .digest("hex"),
       text: `aicr ${params.get("text")}`,
     };
   } catch {
     return reject;
   }
+}
+
+/** Only call for envelopes received on the app-authenticated Socket Mode connection. */
+export function parseSlackSocketCommand(input: {
+  readonly body: unknown;
+  readonly envelopeId: string;
+  readonly connection: Extract<SocialImConnection, { kind: "slack_app" }>;
+}): SocialProtocolResult {
+  const body = object(input.body);
+  if (
+    !/^[A-Za-z0-9_-]{1,128}$/u.test(input.envelopeId) ||
+    body.team_id !== input.connection.team_id ||
+    (body.api_app_id !== undefined &&
+      body.api_app_id !== input.connection.app_id) ||
+    !slackId(body.user_id) ||
+    !slackId(body.channel_id) ||
+    typeof body.text !== "string"
+  )
+    return reject;
+  if (body.command !== "/aicr") return ignore;
+  if (
+    body.trigger_id !== undefined &&
+    (typeof body.trigger_id !== "string" ||
+      !/^[A-Za-z0-9._-]{1,256}$/u.test(body.trigger_id))
+  )
+    return reject;
+  return {
+    kind: "command",
+    actor: { type: "slack_user_id", id: body.user_id },
+    conversation: { kind: "channel", id: body.channel_id },
+    text: `aicr ${body.text}`,
+    deliveryKey: createHash("sha256")
+      .update(body.trigger_id ? "slack-trigger:" : "slack-envelope:")
+      .update(
+        typeof body.trigger_id === "string"
+          ? body.trigger_id
+          : input.envelopeId,
+      )
+      .digest("hex"),
+  };
 }
 
 export function verifyDiscordCommand(input: {

@@ -71,7 +71,7 @@ SDC-00 完成基线记录后即可开展 SDC-01–05；其中共享 IM 缺口的
 
 1. 增加三种 connection/output、三种 typed actor 和 channel conversation；保持旧 identity 序列化完全相同。
 2. 按规范 §3 校验跨 kind 引用、ID、必填凭据、callback、输出目的地及四个命令。
-   新平台明确拒绝 scope/any/wildcard 仓库授权、线程、目录、提醒及旧 webhook 专属字段。
+   新平台允许精确 actor 或仅限已列群/频道的 conversation_users；拒绝目录 scope/any/wildcard 仓库授权、线程、目录、提醒及旧 webhook 专属字段。
 3. 新 literal secret 进入 seal/mask/purpose policy；destination 绑定平台身份和目标。
    bot URL 路径和 interaction token 进入错误脱敏测试；public_key 不要误密封。
 4. 扩展现有 config entity 双向映射和 rename/delete 引用检查；复用已有 collection，不新增 parallel config store。
@@ -192,6 +192,13 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 
 ## SDC-09：最终使用文档与可运行样例
 
+先按用户确认的仓库范围建立显式 workspace/trigger/alias 映射。
+只接入既有配置中的仓库时，复用已有 workspace 和 trigger，不扩展组织仓库清单或 GitHub 安装权限。
+用户要求接入组织全部仓库时，再分别查询组织仓库清单和 GitHub App 安装授权。
+旧路由使用 `match.repo_ref` 精确规则，在原有宽泛规则之前保留原有渠道并追加 Bot 输出。
+验证 `config-compiler.test.ts` 的选路及 `social-im-publishing.test.ts` 的三平台真实 resolver 调用；
+其他组织、相似仓库名、不同事件类型均不能发送到新目的地。配置与安装授权缺口单独记录，禁止推断授权已存在。
+
 本步交付的是实现后可用的操作文档；当前[草案](../../example/slack-discord-telegram-design.md)不能直接加载。
 公开内容按实际完成的平台同步双语，不能一次宣称未完成的平台已支持。
 
@@ -201,7 +208,7 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 | 同目录 `discord.md`（新增） | 创建应用/Bot、guild install、最小频道权限、public key、Interactions URL/PING、单条命令注册、snowflake 字符串、无 Gateway 的边界 |
 | 同目录 `telegram.md`（新增） | BotFather、用户先开始私聊/加入群、privacy mode 定向命令、取得精确 ID、HTTPS/secret header、setWebhook/getWebhookInfo、避免覆盖他人 webhook |
 | 两语 `integrations/im-bots.md`、`configuration/outputs.md`、`reference/config-fields.md`、站点导航 | 三平台入口、支持范围、字段/枚举、文件配置仅输出与持久命令前提 |
-| `example/slack-app.yaml`、`discord-bot.yaml`、`telegram-bot.yaml`（新增）及 example README | 无真实凭据的最小输出配置；单独的命令启用片段；显式 actor/会话/repository/snapshot 部署前提 |
+| `example/slack-app.yaml`、`discord-bot.yaml`、`telegram-bot.yaml` 及 example README | 无真实凭据的输出配置与 disabled 批量授权草案；命令启用片段；显式授权策略/会话/repository/snapshot 部署前提 |
 | `docs/output-channels.md`、IM 稳定规范、AI index/source map、输出 skill 的条件引用 | 发送/ACK/恢复/不支持能力的已实现规则；主评审 prompt 无需变化 |
 | `docs/testing-services.md` | 三平台 live 环境变量、调用/时长预算、注册授权、测试数据及清理范围 |
 
@@ -225,6 +232,9 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
    docs:build 和 test:browser 都适用。记录发现数、通过/失败/跳过及 coverage，不降低阈值。
 2. 使用专用测试 workspace/guild/Bot 和合成仓库，按 L01–L03 验收真实输出、认证回调、命令和终态。
    没有账户凭据则跳过并保持该平台 live 未完成；部分变量配置必须报错。
+   Slack 在控制台关闭 Enable Socket Mode，或在已有 manifest 中设置 `settings.socket_mode_enabled: false`，
+   再核对 `/aicr` 的 Request URL。生成工具未显式输出该开关；URL 字段隐藏时先检查 Socket Mode。
+   模式切换涉及整应用，须核对已有事件/交互端点；客户端真实命令及 callback 记录才是投递证据。
 3. 真实注册和测试发送须有明确授权，普通测试不加载私有 YAML 或扫描环境凭据；不得碰生产频道。
 4. 文档/计划分别记录“本地实现完成”“真实平台验收完成”；任一平台未验收，不宣称三平台已全部接入。
 5. 仅当所有任务及验收完成，将稳定约定合并到主题文档，保留必要的真实验收限制；更新导航后再退役执行清单，
@@ -275,3 +285,14 @@ docs:check/build 顺序执行，避免共享 Astro 产物竞争；browser 在 bu
 后端迁移相关全量测试须注入专用 PG/必要 Redis 环境，live 平台测试另行执行，防止全量 coverage 重复通知。
 每次实际运行记录命令、环境层次、exit code、发现数、pass/fail/skip 和 `build/logs/` 日志路径。
 本地 eval 是离线样本校验，不是模型质量或真实平台验收。
+
+## SDC-13：Slack Socket Mode
+
+1. 核对 S12/S13 与固定 SDK：hello App ID、slash envelope、三秒 ACK、应用级切换、dispatcher 代理和重连生命周期。
+2. core 增加 socket_mode 严格字段、HTTP 互斥、同应用接收归属和 app_token 加密/遮蔽；配置 UI 和元数据同步。
+3. server 使用独立 Socket 接收器，先验证 app/team，再复用共同持久接收流程；不得伪造 HTTP 签名、复制审查队列或打印 SDK 原始日志。
+4. 测试真实 SDK 回环握手/ACK、错 app/team、授权、去重、冷 readiness、一秒超时、配置轮换和停止重连；运行完整适用门禁。
+5. 注册工具增加 --slack-mode socket 并显式生成应用开关；交付双语设置/排障/回切文档和可加载示例。
+6. 部署前从本地 yq 捕获 App-Level Token，只上传私密临时文件；备份实际运行源、配置、env、DB 和镜像。候选镜像使用新配置/新 env 离线验证后再切换。
+7. 单实例上线，核验真实 hello/代理、三平台 readiness、重启重连和跨缓存刷新周期；用户在配置频道验证 help/chat-id。
+8. 保留 HTTP URL/signing secret；回滚时恢复匹配源/config/env 并核对 Slack 控制台开关。连接状态不替代真实命令或模型/报告验收。

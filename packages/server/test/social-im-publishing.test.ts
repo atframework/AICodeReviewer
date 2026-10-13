@@ -7,6 +7,27 @@ import {
 import { fixture, platforms, apiFixture, SHA } from "./social-im-fixtures.js";
 afterEach(() => vi.unstubAllGlobals());
 it.each(platforms)(
+  "restricts the %s legacy summary route to an exact repository and target kind",
+  async (platform) => {
+    const { config } = fixture(platform);
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal("fetch", apiFixture(platform, calls));
+    config.workspaces.instances.ws!.outputs = { line_comments: [], summary: [] };
+    config.outputs.routes = { rules: [{
+      match: { trigger: "git", target_kind: "commit", repo_ref: "org/demo" },
+      line_comments: [], summary: ["report"],
+    }] };
+    const resolver = createOutputPublisherResolverFromConfig(config);
+    for (const [repoRef, targetKind] of [["other/demo", "commit"], ["org/demo-other", "commit"], ["org/demo", "push"], ["org/demo", "commit"]] as const) {
+      const event = createReviewEvent({ triggerName: "git", provider: "github", workspaceId: "ws", targetKind, repoRef, headSha: SHA, author: {}, reason: "test" });
+      const publisher = await resolver({ reviewEvent: event });
+      await publisher?.publishSummary?.("summary", []);
+      const writes = calls.filter((c) => /chat\.postMessage$|\/messages$|sendMessage$/u.test(c.url));
+      expect(writes).toHaveLength(repoRef === "org/demo" && targetKind === "commit" ? 1 : 0);
+    }
+  },
+);
+it.each(platforms)(
   "builds the %s publisher from configuration and flushes one bounded message",
   async (platform) => {
     const { config, destination } = fixture(platform);

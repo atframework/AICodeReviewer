@@ -323,6 +323,7 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.routes.default` | object | — | 无规则匹配时应用的默认路由 |
 | `outputs.routes.rules[]` | array | `[]` | 有序路由规则 |
 | `outputs.routes.rules[].match.trigger` | string | — | 要匹配的 trigger 名 |
+| `outputs.routes.rules[].match.repo_ref` | string | — | 精确匹配仓库引用，区分大小写；与 trigger、目标类型取交集，不支持 glob/正则；仍按首条匹配规则选择。 |
 | `outputs.routes.rules[].match.target_kind` | enum | — | 目标类型（`pull_request`、`push`、`commit`、`issue`、`manual`、`scheduled`）；`pr` 会被归一化为 `pull_request`。GitLab MR 以 `pull_request` 报告。 |
 | `outputs.routes.rules[].line_comments` | string[] | — | 接收行评论输出的 channel 名 |
 | `outputs.routes.rules[].summary` | string[] | — | 接收 summary 输出的 channel 名 |
@@ -408,7 +409,7 @@ IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）
 | `im.command_bindings.<id>.actors[].type` | enum | — | 精确 principal：`wecom_userid`、`wecom_encrypted_userid`、`feishu_open_id`、`slack_user_id`、`discord_user_id`、`telegram_user_id`；身份命名空间继承自连接 |
 | `im.command_bindings.<id>.actors[].id` | string | — | 精确的带类型平台 id；不做模糊匹配或目录推导授权 |
 | `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 时间戳；到期的匹配器（含精确 principal 与 `any`）自动停止匹配，是临时授权的通用机制 |
-| `im.command_bindings.<id>.actors[].kind` | enum | — | 上述 scope 匹配器的判别字段；精确 typed principal 不填写；Slack/Discord/Telegram 不支持 scope 匹配器 |
+| `im.command_bindings.<id>.actors[].kind` | enum | — | 匹配器判别字段；精确 typed principal 不填写；Slack/Discord/Telegram 可用 `conversation_users` 授权配置群/频道内的平台认证命令发送人，不查询成员目录，禁止私聊/广播会话；其他目录 scope 和 `any` 不适用于这三个平台 |
 | `im.command_bindings.<id>.actors[].recursive` | boolean | — | 仅 `wecom_department`：运行时默认 true，包含子部门 |
 | `im.command_bindings.<id>.actors[].value` | string | — | 对应 scope 匹配器的精确职位、自定义字段值或职务名称 |
 | `im.command_bindings.<id>.actors[].name` | string | — | 仅 `wecom_extattr`：精确自定义字段名 |
@@ -425,7 +426,7 @@ IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）
 
 ### Slack、Discord 和 Telegram 连接字段
 
-三种 kind 仅使用 Bot API 输出和 HTTP callback，操作步骤见
+三种 kind 使用 Bot API 输出和 HTTP callback；Slack 也支持 Socket Mode，操作步骤见
 [Slack](/zh-cn/integrations/slack/)、[Discord](/zh-cn/integrations/discord/)、
 [Telegram](/zh-cn/integrations/telegram/) 指南。准确 principal 类型为
 `slack_user_id`、`discord_user_id`、`telegram_user_id`；会话使用
@@ -441,6 +442,9 @@ IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）
 | `im.connections.<id>.bot_id` | string | — | Telegram Bot 数字 ID |
 | `im.connections.<id>.token` | string | — | Bot API 凭据；与 `token_env` 互斥，持久化时加密 |
 | `im.connections.<id>.token_env` | string | — | Bot API 凭据环境引用 |
+| `im.connections.<id>.socket_mode.enabled` | boolean | — | 仅 Slack；运行时默认 false；与启用的 HTTP callback 互斥 |
+| `im.connections.<id>.socket_mode.app_token` | string | — | Slack App-Level Token，需 connections:write；加密落库；与 app_token_env 互斥 |
+| `im.connections.<id>.socket_mode.app_token_env` | string | — | App-Level Token 环境引用；启用 Socket Mode 时必须提供一项凭据 |
 | `im.connections.<id>.callback.signing_secret` | string | — | Slack HMAC 秘密；与 `_env` 引用互斥，加密落库 |
 | `im.connections.<id>.callback.signing_secret_env` | string | — | Slack signing secret 引用 |
 | `im.connections.<id>.callback.public_key` | string | — | Discord Ed25519 公钥，64 位十六进制；公开数据 |

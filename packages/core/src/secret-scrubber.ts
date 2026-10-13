@@ -26,6 +26,8 @@ export interface ScrubResult {
 }
 
 const SECRET_PATTERNS: readonly { readonly kind: RedactedKind; readonly pattern: RegExp; readonly caseInsensitive?: boolean }[] = [
+  { kind: "slack_token", pattern: /\bxapp-[A-Za-z0-9-]+\b/gu },
+  { kind: "oauth_token", pattern: /wss:\/\/[^\s"'<>]+[?&]ticket=[^\s"'<>]+/gu },
   { kind: "oauth_token", pattern: /https:\/\/api\.telegram\.org\/bot[^/\s"'<>]+/gu },
   { kind: "oauth_token", pattern: /https:\/\/hooks\.slack\.com\/(?:commands|actions)\/[^\s"'<>]+/gu },
   { kind: "oauth_token", pattern: /https:\/\/discord\.com\/api(?:\/v\d+)?\/(?:webhooks|interactions)\/[^\s"'<>]+/gu },

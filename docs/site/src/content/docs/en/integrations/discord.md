@@ -25,6 +25,8 @@ the truncation notice and optional safe report link. Discord disables allowed me
 
 ## Enable commands
 
+To select reports for specific repositories with legacy routes, use `outputs.routes.rules[].match.repo_ref` together with `trigger` and `target_kind`. It matches the exact, case-sensitive repository reference. Put these rules before broader rules and keep the existing channel lists when appending the Bot output. A matching legacy route takes precedence over workspace output lists. See [configuration fields](/en/reference/config-fields/).
+
 Merge the fragment below into the output configuration, preserving the connection identity/token.
 Replace the actor, conversation, repository and public key.
 Review commands require a durable SQLite/PostgreSQL store, database config source, snapshot and running worker.
@@ -65,8 +67,12 @@ im:
       report_policy: workspace_routes
 ```
 
-The exact connection, actor, conversation and repository mapping must all authorize the request.
-Broad actors, directory scopes, wildcard repositories and extra commands are rejected for this platform.
+The connection, actor policy, conversation and repository mapping must all authorize the request.
+To allow users in the listed guild text channels without maintaining user IDs, set `actors: [{kind: conversation_users}]`.
+This uses the authenticated interaction sender and channel context. Added users can submit commands without a config change;
+leaving a guild does not cancel previously accepted requests. It does not query a member directory.
+Private chats cannot use this policy. `any`, directory scopes, wildcard repositories and extra commands are rejected.
+The `expires_at` field still applies. Merge overlapping bindings; status stays limited to the original request owner.
 
 Set the application's **Interactions Endpoint URL** to your public HTTPS origin plus any `server.path_prefix` and `/callbacks/im/bot`. The server validates Ed25519 signatures before replying to PING. Register exactly one guild command with one required STRING option named `command`:
 
@@ -90,10 +96,33 @@ The tool reads the command inventory and creates or patches only the guild `aicr
 ACK confirms admission, not completed analysis. Background readiness verifies platform identity and configured destination metadata,
 cached for 300 seconds; callbacks fail closed when unavailable. Admission has a one-second local budget and does not wait for
 VCS, models, readiness network calls or message sends.
+Background checks refresh before expiry. Pending reads retain the existing cache deadline; success renews it and failure immediately invalidates the destination. Verify command replies across a refresh cycle.
 
 ## Operations and troubleshooting
 
+If a command has no reply, type `/aicr` in the configured text channel, select the
+correct app from the slash menu, and enter `help` in the `command` field before
+submitting. The guide's `command:` notation denotes the argument field; sending
+it as ordinary chat text does not invoke the command. The initial reply is
+visible only to the caller. If the menu is missing, check guild command
+registration, app installation and the caller's application command permissions.
+If the client says the application did not respond, keep its original error and
+the command time, then check the Interactions Endpoint URL, callback HTTP status,
+signature verification and readiness.
+
+A successfully admitted valid command leaves an `im_inbox` row. A missing row can
+also mean rejection before admission; it does not prove that no request arrived.
+`help` and `chat-id` use the HTTP interaction response directly, bypassing the Bot
+message outbox. The Bot's **Send Messages** permission is used for reports and
+terminal notifications; check it against outbound failure evidence. Log only
+required metadata; exclude interaction tokens, signatures and complete request
+bodies. See [application commands](https://docs.discord.com/developers/interactions/application-commands)
+and [initial responses](https://docs.discord.com/developers/interactions/receiving-and-responding).
+
 For PING/command 401, verify the public key and timestamp headers; AICR enforces a five-minute local freshness window. For outbound 403, inspect the Bot's channel permissions. A 429 uses `retry_after` in seconds; the reply outbox persists the due time. Do not use interaction tokens as Bot tokens. A channel from another guild or of another type fails readiness before sending.
+
+For outbound timeouts, check API access from the running Node container. If the deployment uses a proxy,
+follow [runtime HTTP proxy configuration](/en/deployment/docker/#runtime-http-proxy); successful host requests alone do not prove readiness.
 
 Current authorization is rechecked before new VCS, analysis and publication operations; execution content retains the admitted snapshot.
 Disable the binding/connection/callback to stop new work. Rotate secrets through normal config publication while keeping identities stable.

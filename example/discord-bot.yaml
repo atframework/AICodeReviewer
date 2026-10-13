@@ -8,6 +8,15 @@ im:
       application_id: "123456789012345678"
       guild_id: "123456789012345679"
       token_env: AICR_DISCORD_TOKEN
+  command_bindings:
+    reviewers:
+      enabled: false # Enable after configuring the callback, durable store and worker.
+      connection: bot
+      actors: [{ kind: conversation_users }]
+      conversations: [{ kind: channel, id: "123456789012345680" }]
+      commands: [help, chat-id, review, status]
+      repositories:
+        demo: { workspace: ws, source_trigger: git, repo_ref: org/demo }
 triggers:
   - name: git
     kind: github

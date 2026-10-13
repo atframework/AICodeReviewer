@@ -165,6 +165,11 @@ const slackConnectionSchema = z.object({
   kind: z.literal("slack_app"), ...socialTokenFields,
   app_id: slackPlatformIdSchema, team_id: slackPlatformIdSchema, bot_user_id: slackPlatformIdSchema,
   callback: slackCallbackSchema.optional(),
+  socket_mode: z.object({
+    enabled: z.boolean().optional(),
+    app_token: z.string().min(1).optional(),
+    app_token_env: z.string().min(1).optional(),
+  }).strict().superRefine((value, ctx) => requireCredential(ctx, value, "app_token", "app_token_env", value.enabled === true)).optional(),
 }).strict();
 const discordConnectionSchema = z.object({
   kind: z.literal("discord_bot"), ...socialTokenFields,
@@ -182,6 +187,9 @@ export const imConnectionSchema = z
   .superRefine((connection, ctx) => {
     if (isSocialImKind(connection.kind)) {
       requireCredential(ctx, connection, "token", "token_env", connection.enabled !== false);
+    }
+    if (connection.kind === "slack_app" && connection.socket_mode?.enabled === true && connection.callback?.enabled === true) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["socket_mode", "enabled"], message: "Slack HTTP callback and Socket Mode are mutually exclusive." });
     }
     if (connection.kind === "wecom_app" || connection.kind === "feishu_app") {
       addSecretMutexIssues(ctx, connection, [["app_secret", "app_secret_env"]]);
@@ -239,6 +247,11 @@ const imBindingPrincipalActorSchema = z
  * membership-based authorization.
  */
 const imBindingScopeActorSchema = z.discriminatedUnion("kind", [
+  z.object({
+    /** Authenticated command senders inside the binding's explicit shared conversations. */
+    kind: z.literal("conversation_users"),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
   z.object({
     kind: z.literal("any"),
     expires_at: imBindingExpiresAtSchema.optional(),
@@ -355,6 +368,7 @@ const actorKey = (actor: ImBindingActor): string => {
   if (!("kind" in actor)) return `${actor.type}:${actor.id}`;
   switch (actor.kind) {
     case "any": return "any:*";
+    case "conversation_users": return "conversation_users:*";
     case "wecom_department": return `wecom_department:${actor.id}${actor.recursive === false ? "!" : ""}`;
     case "wecom_tag": return `wecom_tag:${actor.id}`;
     case "wecom_position": return `wecom_position:${actor.value}`;
@@ -367,17 +381,26 @@ const actorKey = (actor: ImBindingActor): string => {
 
 /** `any` overlaps every other matcher on the same connection. */
 const actorsOverlap = (a: ImBindingActor, b: ImBindingActor): boolean =>
-  ("kind" in a && a.kind === "any") || ("kind" in b && b.kind === "any") || actorKey(a) === actorKey(b);
+  ("kind" in a && ["any", "conversation_users"].includes(a.kind)) ||
+  ("kind" in b && ["any", "conversation_users"].includes(b.kind)) || actorKey(a) === actorKey(b);
 
 /** Scope matchers only resolve against their own platform's directory. */
 const SCOPE_ACTOR_KINDS_BY_CONNECTION_KIND: Readonly<Record<ImConnectionKind, readonly string[]>> = {
   wecom_app: ["wecom_department", "wecom_tag", "wecom_position", "wecom_extattr"],
   wecom_aibot: ["wecom_department", "wecom_tag", "wecom_position", "wecom_extattr"],
   feishu_app: ["feishu_chat", "feishu_department", "feishu_job_title"],
-  slack_app: [],
-  discord_bot: [],
-  telegram_bot: [],
+  slack_app: ["conversation_users"],
+  discord_bot: ["conversation_users"],
+  telegram_bot: ["conversation_users"],
 };
+
+/** Shared social command contexts; deliberately excludes private chats and broadcast channels. */
+export function isSocialImSharedConversation(kind: ImConnectionKind, conversation: ImConversation): boolean {
+  if (!("id" in conversation)) return false;
+  if (kind === "slack_app") return conversation.kind === "channel" && /^[CG][A-Z0-9]{1,63}$/u.test(conversation.id);
+  if (kind === "discord_bot") return conversation.kind === "channel" && decimalPlatformIdSchema.safeParse(conversation.id).success;
+  return kind === "telegram_bot" && conversation.kind === "group" && /^-[1-9][0-9]{0,31}$/u.test(conversation.id);
+}
 
 const conversationsOverlap = (a: ImConversation, b: ImConversation): boolean => {
   if (a.kind !== b.kind) return false;
@@ -397,10 +420,10 @@ export const imConfigSchema = z
 
     const callbackOwners = new Set<string>();
     for (const [name, connection] of Object.entries(connections)) {
-      if (!isSocialImKind(connection.kind) || connection.enabled === false || connection.callback?.enabled !== true) continue;
+      if (!isSocialImKind(connection.kind) || connection.enabled === false || (connection.callback?.enabled !== true && !(connection.kind === "slack_app" && connection.socket_mode?.enabled === true))) continue;
       const id = connection.kind === "telegram_bot" ? connection.bot_id : connection.kind === "discord_bot" ? connection.application_id : connection.kind === "slack_app" ? connection.app_id : undefined;
       const owner = `${connection.kind}:${id}`;
-      if (callbackOwners.has(owner)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["connections", name], message: "an application may have only one enabled callback connection." });
+      if (callbackOwners.has(owner)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["connections", name], message: "an application may have only one enabled command receiver." });
       callbackOwners.add(owner);
     }
 
@@ -413,7 +436,14 @@ export const imConfigSchema = z
           if (!["help", "chat-id", "review", "status"].includes(command)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "commands", index], message: "social IM supports help/chat-id/review/status only." });
         });
         binding.actors.forEach((actor, index) => {
-          if ("kind" in actor) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "actors", index], message: "social IM requires exact typed actors." });
+          if ("kind" in actor && actor.kind !== "conversation_users") ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "actors", index], message: "social IM requires exact typed actors or conversation_users." });
+        });
+      }
+      if (binding.actors.some(actor => "kind" in actor && actor.kind === "conversation_users")) {
+        binding.conversations.forEach((conversation, index) => {
+          if (connection === undefined || !isSocialImSharedConversation(connection.kind, conversation)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "conversations", index], message: "conversation_users requires explicit Slack/Discord channels or Telegram groups; private and broadcast conversations are not allowed." });
+          }
         });
       }
       if (binding.enabled !== true) continue;

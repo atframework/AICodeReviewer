@@ -187,6 +187,7 @@ import { ImConnectionRegistry, imConnectionRegistryFor, SocialImReadinessService
 import { currentImRequestAuthorized } from "./im/social-command-service.js";
 import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { ImLongConnectionService } from "./im/long-connection-service.js";
+import { SlackSocketModeService } from "./im/slack-socket-mode.js";
 import { issueCardAction, resolveFeishuCardActionTarget, resolveWecomCardActionTarget } from "./im/action-service.js";
 import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix } from "./im/command-service.js";
 import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
@@ -2720,6 +2721,7 @@ function routeMatchesEvent(
     readonly match?: {
       readonly trigger?: string | undefined;
       readonly target_kind?: string | undefined;
+      readonly repo_ref?: string | undefined;
     } | undefined;
   },
   context: ReviewOrchestrationContext,
@@ -2734,6 +2736,10 @@ function routeMatchesEvent(
   }
 
   if (match.target_kind && match.target_kind !== context.reviewEvent.targetKind) {
+    return false;
+  }
+
+  if (match.repo_ref !== undefined && match.repo_ref !== context.reviewEvent.repoRef) {
     return false;
   }
 
@@ -4281,6 +4287,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   let imReviewTimer: ReturnType<typeof setInterval> | undefined;
   let imReviewRunning: Promise<void> | undefined;
   const socialReadiness = new SocialImReadinessService({ getConfig: currentConfig, env: resolveEnv });
+  let slackSockets: SlackSocketModeService | undefined;
   if (store) socialReadiness.start();
   const adminReviews = new Map<string, { controller: AbortController; task: Promise<void> }>();
   let draining: Promise<void> | undefined;
@@ -4294,7 +4301,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     clearInterval(queuedTimeoutTimer);
     if (imReviewTimer) clearInterval(imReviewTimer);
     for (const run of adminReviews.values()) run.controller.abort(new ReviewCancelledError());
-    draining = Promise.all([sweepRunning, imReviewRunning, imReviewService?.stop(), ...[...adminReviews.values()].map(run => run.task), historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    draining = Promise.all([slackSockets?.stop(), sweepRunning, imReviewRunning, imReviewService?.stop(), ...[...adminReviews.values()].map(run => run.task), historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
     return draining;
   };
 
@@ -4454,6 +4461,20 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       return { status: "accepted" as const, detail: `re-review started for ${row.repoRef}`, runId: freshRunId };
     },
   };
+
+  if (store) {
+    slackSockets = new SlackSocketModeService({
+      store, namespace: configSources.database.namespace, getConfig: currentConfig,
+      getConfigGeneration: () => {
+        const generation = runtimeConfig.current();
+        return {config: generation.config, snapshotId: runtimeConfig.mode === "database" ? generation.snapshotId : null, fileDigest: generation.fileDigest ?? "unknown"};
+      },
+      env: resolveEnv,
+      socialClient: (config, name) => socialReadiness.client(config, name),
+      reviewReady: () => !draining && runtimeConfig.mode === "database" && imReviewService !== undefined,
+    });
+    slackSockets.start();
+  }
 
   return {
     // Fixed dispatcher sources (P4/H06): index.ts resolves these per request

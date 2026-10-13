@@ -9,6 +9,15 @@ im:
       team_id: T123
       bot_user_id: U123
       token_env: AICR_SLACK_TOKEN
+  command_bindings:
+    reviewers:
+      enabled: false # Enable after configuring the callback, durable store and worker.
+      connection: bot
+      actors: [{ kind: conversation_users }]
+      conversations: [{ kind: channel, id: C123 }]
+      commands: [help, chat-id, review, status]
+      repositories:
+        demo: { workspace: ws, source_trigger: git, repo_ref: org/demo }
 triggers:
   - name: git
     kind: github

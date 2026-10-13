@@ -10,7 +10,18 @@ Native author mentions, directories, buttons and natural-language requests are o
 
 Create a Bot with BotFather. Put its Bot API token in `AICR_TELEGRAM_TOKEN` and use `getMe` to obtain the numeric Bot ID and username. Set a separate `AICR_TELEGRAM_WEBHOOK_SECRET` containing 1–256 letters, digits, underscores or hyphens. The webhook secret is not the Bot token.
 
-For a private destination the user must start the Bot first. For a group, add the Bot and allow it to send messages; administrative rights are not required for an ordinary group. Keep privacy mode enabled and use directed `/aicr@BotUsername` commands in groups. Obtain the numeric actor/chat IDs from your existing authorized Bot administration workflow before enabling bindings; unknown actors cannot bootstrap authorization using `chat-id`.
+For a private destination the user must start the Bot first. For a group, add the Bot and allow it to send messages; administrative rights are not required for an ordinary group. Keep privacy mode enabled and use directed `/aicr@BotUsername` commands in groups. Obtain the numeric chat ID and any explicit actor IDs from your authorized Bot administration workflow before enabling bindings.
+
+A display name or private invitation link cannot be passed to `getChat` to resolve a group ID. A public `@username` may identify a broadcast channel rather than a group; check the returned type. Before setting a webhook, a directed group command can supply `message.chat.id` through `getUpdates`; do not print its token or unrelated messages. Polling and webhooks cannot be used together. Unknown actors cannot bootstrap an explicit user allowlist using `chat-id`.
+
+If directed commands produce no updates and no group message link is available, temporarily use
+`allowed_updates: ["message", "my_chat_member"]` with `getUpdates` before registering the webhook.
+Ask the group administrator to add the Bot again from the profile verified by `getMe`.
+Read only events for that Bot and target group, then take the ID from `my_chat_member.chat.id`.
+Verify the chat type with `getChat` and the Bot's own membership and sending permissions with `getChatMember`.
+Do not substitute a broadcast channel, guess the ID or disable privacy mode for this check.
+Production webhook registration still uses `["message"]` and preserves pending updates.
+[getUpdates](https://core.telegram.org/bots/api#getupdates), [Update](https://core.telegram.org/bots/api#update), [getChatMember](https://core.telegram.org/bots/api#getchatmember).
 
 IDs are quoted decimal strings; group IDs can be negative. Only established private/group/supergroup chats are supported. Forum/topic, channel, business, anonymous `sender_chat`, bot-authored and edited updates do not trigger reviews. [Bot API](https://core.telegram.org/bots/api), [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
 
@@ -26,6 +37,8 @@ Named, workspace and built-in templates retain the normal priority. The final me
 the truncation notice and optional safe report link. Telegram sends explicit UTF-16 entities without parse_mode.
 
 ## Enable commands
+
+To select reports for specific repositories with legacy routes, use `outputs.routes.rules[].match.repo_ref` together with `trigger` and `target_kind`. It matches the exact, case-sensitive repository reference. Put these rules before broader rules and keep the existing channel lists when appending the Bot output. A matching legacy route takes precedence over workspace output lists. See [configuration fields](/en/reference/config-fields/).
 
 Merge the fragment below into the output configuration, preserving the connection identity/token.
 Replace the actor, conversation, repository and secret reference.
@@ -66,8 +79,12 @@ im:
       report_policy: workspace_routes
 ```
 
-The exact connection, actor, conversation and repository mapping must all authorize the request.
-Broad actors, directory scopes, wildcard repositories and extra commands are rejected for this platform.
+The connection, actor policy, conversation and repository mapping must all authorize the request.
+To allow users in the listed groups without maintaining user IDs, set `actors: [{kind: conversation_users}]`.
+This uses the authenticated message sender and group context. Added users can submit commands without a config change;
+leaving a group does not cancel previously accepted requests. It does not query a member directory.
+Private chats and broadcast channels cannot use this policy. `any`, directory scopes, wildcard repositories and extra commands are rejected.
+The `expires_at` field still applies. Merge overlapping bindings; status stays limited to the original request owner.
 Private Telegram bindings use `{kind: bot_direct}` plus explicit numeric actors.
 
 Register the HTTPS webhook explicitly, including any `server.path_prefix`:
@@ -92,10 +109,14 @@ Apply verifies `getMe`, then `getWebhookInfo`; it refuses to replace another web
 ACK confirms admission, not completed analysis. Background readiness verifies platform identity and configured destination metadata,
 cached for 300 seconds; callbacks fail closed when unavailable. Admission has a one-second local budget and does not wait for
 VCS, models, readiness network calls or message sends.
+Background checks refresh before expiry. Pending reads retain the existing cache deadline; success renews it and failure immediately invalidates the destination. Verify command replies across a refresh cycle.
 
 ## Operations and troubleshooting
 
 For 401, compare `X-Telegram-Bot-Api-Secret-Token` with the configured webhook secret. Group commands must address the username returned by `getMe`, not a display name. `blocked`/403 requires user or group action; group migration is rejected without changing the configured chat ID. A 429 uses `parameters.retry_after` in seconds. Inspect `getWebhookInfo` after a registration timeout before applying again.
+
+For outbound timeouts, check API access from the running Node container. If the deployment uses a proxy,
+follow [runtime HTTP proxy configuration](/en/deployment/docker/#runtime-http-proxy); successful host requests alone do not prove readiness.
 
 Current authorization is rechecked before new VCS, analysis and publication operations; execution content retains the admitted snapshot.
 Disable the binding/connection/callback to stop new work. Rotate secrets through normal config publication while keeping identities stable.

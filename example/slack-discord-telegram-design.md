@@ -1,5 +1,9 @@
 # Slack、Discord、Telegram 配置草案
 
+按仓库限制旧路由时，使用 `outputs.routes.rules[].match.repo_ref` 精确仓库引用，
+与 trigger、target_kind 取交集，把精确规则放在宽泛规则之前并保留原渠道。
+群/频道批量授权示例使用 `conversation_users`；仓库仍须显式映射到 workspace/source_trigger/repo_ref。
+
 这里保留[接入规范](../docs/design/slack-discord-telegram.md)中的合并片段，本文本身不是完整配置。
 可加载样例为 [Slack](slack-app.yaml)、[Discord](discord-bot.yaml)、[Telegram](telegram-bot.yaml)，
 均已由 schema/compiler/bootstrap 测试验证；实际权限及注册见对应双语使用指南。
@@ -116,6 +120,9 @@ im:
 ```
 
 `git-source` 必须是真实存在且覆盖 `example/demo` 的 VCS trigger，workspace 和路由也须相容。
+三个配置群/频道允许成员发起命令时，可把精确 actor 列表替换为 `actors: [{kind: conversation_users}]`。
+无需随成员增减改配置；仅授权平台认证的来源会话，不查询成员目录，退群不取消已接受请求。
+显式仓库映射、四命令、过期时间、status 归属和当前配置复查仍生效；重叠 binding 须合并。
 Telegram 私聊另建无重叠 binding，conversation 为 `{kind: bot_direct}`，actor 仍显式列出用户。
 后台配置的秘密引用需要现有 secret_refs 用途授权；不要复制其他连接的授权目标。
 
@@ -131,13 +138,17 @@ Telegram 私聊另建无重叠 binding，conversation 为 `{kind: bot_direct}`�
 Discord 的 `command:` 表示 slash UI 中名为 command 的 STRING 参数，不是自由聊天文本。
 chat-id 同样替换 help 的位置。Git 使用完整固定 commit ID；P4/SVN 使用授权仓库内的固定数字 revision。
 accepted 只表示已持久接收；报告发送到配置路由，源会话终态通知只给编号和状态。
+命令验证须跨越 300 秒 readiness 缓存刷新周期；后台提前刷新，刷新期间只沿用原有效期限，失败立即拒绝。
 
 ## 平台注册交付要求
 
 这部分是后续需要生成的操作资料，不是本轮已执行的操作：
 
 - Slack manifest：bot scopes `chat:write`、`commands`、`channels:read`，使用私有频道时另加 `groups:read`；slash `/aicr` URL 为
-  `https://<部署域名>/<可选路径前缀>/callbacks/im/slack-review`；不启用一般消息订阅。
+  `https://<部署域名>/<可选路径前缀>/callbacks/im/slack-review`；在 Slack App Manifest 的 settings 中设置
+  `socket_mode_enabled: false`，或关闭控制台 Enable Socket Mode。注册工具按接收模式显式生成该开关。
+  Socket Mode 使用 `--slack-mode socket`，设置 `socket_mode.enabled: true` 和 `app_token_env`，停用 HTTP callback；
+  参照可加载 [Socket Mode 示例](slack-socket-mode.yaml) 与双语 Slack 指南核验应用开关、连接身份和 envelope ACK。
 - Discord command JSON：仅一条 aicr，type=CHAT_INPUT，必填 STRING option command；
   Interactions URL 指向对应 callback。注册工具只改该命令，dry-run 默认开启。
 - Telegram：setWebhook 的 URL 指向对应 callback，secret_token 与配置一致，allowed_updates 至少收 message；

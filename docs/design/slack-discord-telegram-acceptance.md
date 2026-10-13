@@ -16,6 +16,8 @@
 | A03、R01–R03 | SQLite/PG append-only 013；`im-store*.ts`；`reply-service.ts` | `im-store-conformance.ts` 由 `im-store.test.ts` 和真实 `im-store-pg.test.ts` 执行：通知工厂故障整笔回滚、duplicate 一次回复、超限 payload、owner/fence、sending 租约后零重领；PG 独立连接并发接收 |
 | A04、R05–R06 | `currentImRequestAuthorized`；manual worker；executor/journal `beforeWrite` | worker 测试验证撤权零 VCS、queued ID 在 fresh worker 复用、窗口等待零尝试、暂时 IO 退避；两后端 conformance 验证忙 workspace 排除；executor 三平台断言分析前及 durable intent 后撤权零新 POST。原 IM 多进程组合矩阵继续保留 |
 | A06、O01–O02、G01 | bootstrap publisher/resolver；`social-im-markdown.ts`；wecom-summary 内置模板 | `social-im-publishing.test.ts` 三平台实际配置、summary/line-only/named template、一条聚合消息、重复 flush；`social-im-examples.test.ts` 实际 YAML→compiler→resolver→HTTP；源回复只含 ID/状态 |
+| A07 | core `im-config.ts`；server `command-service.ts`、`social-command-service.ts` | `social-im-config.test.ts`、`social-im-authorization.test.ts`、`social-im-callbacks.test.ts` 验证三平台 conversation_users、多用户、错身份/会话/签名、过期、撤权和 status owner；实际 YAML 示例另由 `social-im-examples.test.ts` 验证。新增策略的完整门禁和真实平台证据单独记录，不沿用下方基础实现的历史结果 |
+| O01、A06：仓库路由 | core `outputRouteSchema`、`resolveOutputChannelsLegacy`；server `routeMatchesEvent` | `config-compiler.test.ts` 验证精确 repo_ref、事件类型和旧渠道；`social-im-publishing.test.ts` 参数化验证三平台 resolver 对其他组织/相似仓库名/错类型零消息。安装授权与实际平台报告另验 |
 | O03–O07、R08 | outputs `social-im.ts`、formatter、publication journal | `social-im.test.ts` 三平台身份/type/TTL/429/业务失败/错目标回执，fresh journal 的 confirmed/unknown/rejected 零重复 POST；旧 journal/checkpoint/multi-channel 测试补充超限与部分成功。普通非持久路径没有跨重启 exactly-once 保证 |
 | R03、R06–R07 | `reply-service.ts`、版本化 payload/current auth/sending CAS | `social-im-replies.test.ts` 三平台只持久有限回执、fresh worker 响应丢失不重发、撤权无远端请求；Telegram 429 due 跨 worker 恢复；sending crash 不重发 |
 | G03、D01–D03 | 注册工具、双语指南、侧栏、字段参考、三份 YAML | `social-im-registration.test.ts` 默认离线 dry-run、Discord 单条 PATCH 保留其他命令、Telegram webhook 所有权冲突零写入；启动没有注册调用；六篇指南及样例由配置示例/文档门禁检查 |
@@ -65,7 +67,7 @@ HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是�
 | --- | --- | --- | --- |
 | C01 | 旧 config 无 im、新 connection、file-only 启用 review | 旧 canonical/hash 不变；新增配置贯通；file-only 输出可用但 review 拒绝且无 request/VCS/LLM | core im-config/config-compiler；server im-callback-routes |
 | C02 | 错 connection kind、混合内联 token、缺凭据、literal/env 同时设、非法 key/ID | 预览/发布明确拒绝；disabled 草案策略一致；无意外网络 | core im-config/config-capabilities；server config API |
-| C03 | scope/any/allow_all_repositories、未知命令、DM/线程/topic、原生 mention/目录字段 | 不支持的字段/会话结构在配置期拒绝；ID 对应真实类型由 readiness 拒绝，不能按前缀猜测；旧平台能力保持 | core im-config/config-capabilities；server connection readiness |
+| C03 | 目录 scope/any/allow_all_repositories、未知命令、DM/线程/topic、原生 mention/目录字段 | 不支持的字段/会话结构在配置期拒绝；conversation_users 只允许显式群/频道，禁止私聊/旧平台和重叠 binding；真实目标类型仍由 readiness 核验；旧平台能力保持 | core social-im-config/config-capabilities；server connection readiness |
 | C04 | connection rename/delete、secret 轮换、app/team/guild/Bot 改变 | 引用完整或拒绝；同身份轮换 dedup 稳定，不同身份分域；旧通知不转到同名新连接 | core config-source/config-publish；server runtime-generation |
 | C05 | 管理 UI/API export/preview/audit、异常错误含 token/response_url/bot URL | 所有 secret 遮罩；public_key 保留；用途授权不能将 secret 发往不同身份/目标 | core secret policy/sealing/scrubber；server API/UI/browser |
 
@@ -96,6 +98,7 @@ HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是�
 | A04 | 接收后撤权/禁用/改仓库映射，在 validating/analysis/publishing 前分别恢复 | 当前策略阻止新 VCS/LLM/POST，记录拒绝；原配置仍固定用于执行，不替换成 current head | im-review-runtime；im-review-execution |
 | A05 | IM 操作人与 Git/P4/SVN 作者不同、已有自动提交任务 | author 来自 VCS，requestedBy 独立；自动游标/去重不变，原 VCS 范围测试继续通过 | im-revision-resolver；im-combined |
 | A06 | 命令来自 A 会话、报告配置为 B，含敏感 repo/报告信息 | A 只收 ID/状态/查询说明；报告只发 B；help/chat-id/status 也须授权 | social-im-publishing；im-replies |
+| A07 | conversation_users 下多个新用户、错签/跨平台身份/错群/过期/改为精确 actor，跨人查询 status | 无用户名单变更可接收认证命令；不调用成员目录；边界变化阻止新 VCS/发布；status 不泄露其他用户请求；退群不自动取消已接受任务 | social-im-config；social-im-callbacks；social-im-authorization |
 
 ## 输出 O01–O07
 
@@ -126,7 +129,7 @@ HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是�
 
 | ID | 验收标准 | 证据位置 |
 | --- | --- | --- |
-| G01 | 静态配置和数据库配置的实际出站请求相同，预览/发布无 raw-object 捷径；readiness 预热、300 秒到期、失败和跨 generation 不串缓存 | config-e2e-publish-review；runtime-generation；平台 publishing 测试 |
+| G01 | 静态配置和数据库配置的实际出站请求相同，预览/发布无 raw-object 捷径；readiness 在 300 秒到期前刷新，刷新期间有效命令仍回复，失败立即失效、未完成刷新不能延长原期限，跨 generation 不串缓存 | config-e2e-publish-review；runtime-generation；social-im-readiness；outputs social-im；平台 publishing 测试 |
 | G02 | 管理表单按 kind 展示字段，禁用草案、发布校验、秘密遮罩、readiness 正确 | core config-ui 系列；Playwright browser |
 | G03 | 新平台不误启动旧长连接；preview/bootstrap 不调用命令注册/setWebhook | im-long-connection-service；bootstrap |
 | G04 | SQLite/PG 对等及必要 Redis 路径真实测试；临时服务结束清理已独立检查 | store conformance；服务日志 |
@@ -147,6 +150,20 @@ HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是�
 三平台分别选择测试身份，禁止复用生产目的地。每次平台验收最多 10 次消息写入、20 次只读 API、20 分钟，
 超预算停止并保留未完成；超过 15 分钟用受控 worker 等待验证，不以真实付费模型拖长任务。
 真实回调由平台客户端触发；用本地私钥/已知 signing secret 合成请求不能算真实平台发送证据。
+Slack/Discord 必须从客户端斜杠菜单选中本应用的命令，Discord 的子命令填入 `command` 参数；普通聊天文本不算触发证据。
+Slack 的 HTTP 测试须先确认 Socket Mode 关闭、命令 Request URL 可编辑且指向回调；开启 Socket Mode 的命令投递走 WebSocket。
+命令无回复时记录客户端原始错误、时间、命令定义与回调 HTTP 状态，区分 inline 初始回复和异步通知。
+成功接收的合法命令才有 inbox；没有记录可能是验签/readiness/授权阶段拒绝，不能推断请求未到达。
 注册工具默认 dry-run，仅显式 apply 时写平台；Discord 不覆盖其他命令，Telegram 不默认丢 pending updates。
 只清理本次创建的合成消息/命令/临时 webhook，恢复原 webhook 前核实仍归本次操作所有；已有资源保持。
 若额度或凭据不足，拆成有独立预算的后续验收，不在同次执行中静默提高限制。
+
+## Socket Mode 验收
+
+| 编号 | 断言 | 证据 |
+| --- | --- | --- |
+| SM01 | 凭据/env 互斥、HTTP/Socket 互斥、同 App 单接收归属；literal 加密和日志遮蔽 | core social-im-config、config-secret-sealing；UI 与秘密用途回归 |
+| SM02 | 真实固定 SDK 验证 hello App ID，拒绝重复 JSON；正确 envelope ACK | server slack-socket-mode 回环测试 |
+| SM03 | 当前授权/readiness/snapshot、重复 review 同一请求、HTTP/Socket trigger 去重 | server slack-socket-mode 与 social-im-callbacks |
+| SM04 | 阻塞配置不超接收预算；轮换/停用不接受旧连接；重连和 drain 关闭 | server slack-socket-mode |
+| SM05-live | 公网单实例、实际 app hello、代理路径、重启重连、跨刷新周期 help/chat-id ACK；验证回切 | 真实账户独立记录，连接日志不能代替命令 ACK |

@@ -3,7 +3,7 @@ title: Slack
 description: Send review reports and run authorized review commands through Slack.
 ---
 
-AICR supports `slack_app` for one aggregated report per publication and four HTTP commands: `help`, `chat-id`, `review` and `status`. Report destinations and command conversations can be different. Native author mentions, member directories, buttons and natural-language review requests are outside this implementation.
+AICR supports `slack_app` for one aggregated report per publication and four commands over HTTP or Socket Mode: `help`, `chat-id`, `review` and `status`. Report destinations and command conversations can be different. Native author mentions, member directories, buttons and natural-language review requests are outside this implementation.
 
 ## Create and install
 
@@ -14,6 +14,22 @@ node scripts/register-social-im.mjs --platform slack --callback-url https://aicr
 ```
 
 Import the generated `manifest` object in Slack's app console. Install the app in the intended workspace and invite its Bot to every command/report channel. Record the app ID, team ID, Bot user ID, Bot OAuth token and signing secret. Set `AICR_SLACK_TOKEN` and `AICR_SLACK_SIGNING_SECRET` in the server environment. The callback uses the signing secret; the Bot token is used for outbound API calls.
+
+In the app console's **Socket Mode** section, turn off **Enable Socket Mode** before
+setting `/aicr`'s HTTP Request URL. If the command editor says `Socket Mode is enabled`,
+the URL field is hidden and slash commands are delivered over WebSocket. This
+HTTP configuration generates `settings.socket_mode_enabled: false`. Merge this
+setting into the existing manifest and preserve its other fields. Socket Mode
+configuration is described below.
+
+```yaml
+settings:
+  socket_mode_enabled: false
+```
+
+Socket Mode is an app-wide setting. Check the app's existing event and interaction
+endpoints when switching modes, and preserve other manifest fields.
+See [Socket Mode delivery and console settings](https://docs.slack.dev/apis/events-api/using-socket-mode/).
 
 | Bot scope | Purpose |
 | --- | --- |
@@ -33,6 +49,8 @@ File configuration alone can send reports. Merge your existing VCS/LLM configura
 Reports use named, workspace or built-in templates in the normal priority order. Slack/Telegram are bounded to 3900 UTF-16 units including the truncation notice and optional safe report link. Telegram sends text plus explicit entities; Discord disables allowed mentions; Slack escapes native controls.
 
 ## Enable commands
+
+To select reports for specific repositories with legacy routes, use `outputs.routes.rules[].match.repo_ref` together with `trigger` and `target_kind`. It matches the exact, case-sensitive repository reference. Put these rules before broader rules and keep the existing channel lists when appending the Bot output. A matching legacy route takes precedence over workspace output lists. See [configuration fields](/en/reference/config-fields/).
 
 Merge this fragment into the output configuration, preserving the Bot identity/token. Replace its actor, conversation, repository and secret reference with your values. A `review` requires a persistent SQLite/PostgreSQL store, database configuration source, durable snapshot and running worker. File-only mode rejects it before creating a request. The callback route must be reachable without an admin session; admin APIs still require their normal authentication.
 
@@ -73,6 +91,67 @@ im:
 
 The manifest sets the slash command URL. No command or event subscription is created by server startup. Set this URL to the public HTTPS origin plus any `server.path_prefix` and `/callbacks/im/bot`. Slack needs the initial command ACK within three seconds; AICR bounds local admission to one second and returns an ephemeral response.
 
+The connection, actor policy, conversation and repository mapping must all authorize the request.
+To allow users in the listed channels without maintaining user IDs, set `actors: [{kind: conversation_users}]`.
+This uses the authenticated command sender and channel context. Added users can submit commands without a config change;
+leaving a channel does not cancel previously accepted requests. It does not query a member directory.
+Private chats cannot use this policy. `any`, directory scopes, wildcard repositories and extra commands are rejected.
+The `expires_at` field still applies. Merge overlapping bindings; status stays limited to the original request owner.
+
+## Use Socket Mode
+
+Choose HTTP or Socket Mode. Reports and terminal replies still use the Bot OAuth token.
+Create an App-Level Token with `connections:write` under **Basic Information → App-Level Tokens**,
+and set `AICR_SLACK_APP_TOKEN` in the service environment. Keep its value out of manifests and source control.
+Preserve Bot scopes, channel membership and command bindings, then merge:
+
+```yaml
+im:
+  connections:
+    bot:
+      kind: slack_app
+      app_id: A123
+      team_id: T123
+      bot_user_id: U123
+      token_env: AICR_SLACK_TOKEN
+      callback:
+        enabled: false
+      socket_mode:
+        enabled: true
+        app_token_env: AICR_SLACK_APP_TOKEN
+```
+
+Generate the Socket Mode manifest:
+
+```bash
+node scripts/register-social-im.mjs --platform slack --slack-mode socket
+```
+
+The tool sets `settings.socket_mode_enabled: true`; the slash command needs no Request URL.
+Deploy the receiver, then enable **Socket Mode → Enable Socket Mode** in Slack's console.
+This app-wide switch also moves events and interactions to WebSocket. The receiver executes
+only the four slash commands. Other envelopes are ACKed without handling App Agent events,
+mentions or buttons; plan receivers for any existing use of those features separately.
+Keep the HTTP URL and signing secret for rollback.
+
+The receiver verifies the hello App ID, command workspace and current authorization before durable admission.
+It returns an ephemeral ACK with the envelope ID. Deduplication hashes the trigger ID when present,
+or the envelope ID otherwise. Admission has a one-second budget. Missing readiness or durable runtime
+withholds ACK and creates no task, allowing platform redelivery.
+The SDK handles heartbeats; the service retries after 1, 2, 4 seconds up to 30 seconds.
+Configuration changes rebuild connections within 30 seconds; stale connections immediately reject new commands.
+Drain closes the connection.
+
+Use one command receiver instance per App. Slack distributes envelopes across multiple connections.
+Standard HTTP(S) proxy/no_proxy variables apply through an explicit dispatcher to both API and WebSocket traffic.
+Logs contain connection names and fixed statuses only, without tokens, temporary WebSocket URLs or raw envelopes.
+
+Test `/aicr help` and `/aicr chat-id` again after service restart and readiness refresh.
+Check the `connected` status in `slack_socket_mode_status`; a connection alone does not prove command ACK delivery.
+To return to HTTP, disable Socket Mode in Slack, disable `socket_mode.enabled`, enable the HTTP callback and check its saved Request URL.
+See [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) and
+[Node SDK](https://docs.slack.dev/tools/node-slack-sdk/socket-mode/).
+
 ## Verify the flow
 
 1. From the configured actor and conversation, run `/aicr help`, then `/aicr chat-id`.
@@ -81,12 +160,41 @@ The manifest sets the slash command URL. No command or event subscription is cre
 4. Confirm the full report appears only in the configured output destination. The source conversation receives only request ID/state/query instructions. Status is limited to the same actor, connection, conversation and authorized repository.
 
 An ACK means admission, not completed analysis. Readiness is checked from platform identity and configured destination metadata, cached for 300 seconds; an unavailable destination rejects admission. The callback does not wait for VCS, models, readiness network calls or message sends.
+Background checks refresh before expiry. Pending reads retain the existing cache deadline; success renews it and failure immediately invalidates the destination. Verify command replies across a refresh cycle.
 
 ## Operations and troubleshooting
 
+If a command has no reply, type `/aicr` in the configured channel's main composer,
+select this app from the slash menu, then enter `help`. The reply is visible only
+to the caller. Threads, the App Agent split view and ordinary `@Bot` messages do
+not invoke this integration. Under **Features → Slash Commands**, check `/aicr`'s
+**Request URL**. The `commands` scope and installation also require a command
+definition. In HTTP mode, disable **Enable Socket Mode** if the URL field is hidden.
+In Socket Mode, a hidden URL field is expected; check the App-Level Token, connection status and ACK.
+Another app can own the same command name. Merge
+`features.slash_commands` into an existing App Agent manifest, preserving its
+other fields. See [command creation, invocation and name collisions](https://docs.slack.dev/interactivity/implementing-slash-commands/).
+
+If saving the URL reports `Your URL didn't respond with the value of the challenge parameter`,
+this is **Event Subscriptions** verifying an Events API endpoint. AICR handles
+Slash Commands form requests and does not handle that JSON challenge. Open
+**Features → Slash Commands → Create New Command**, set Command to `/aicr`, enter
+the callback address in that command's **Request URL**, and save. Edit the command
+if `/aicr` already exists. Preserve an existing App Agent event endpoint; this
+integration requires no new event subscription. See [Events API URL verification](https://docs.slack.dev/reference/events/url_verification/).
+
+Keep the client's original error, command time and callback HTTP status.
+`operation_timeout` means Slack did not receive an ACK within three seconds.
+A successfully admitted valid command leaves an `im_inbox` row. A missing row can
+also mean rejection during authentication, readiness or authorization; it does
+not prove that no request arrived. Initial `help` and `chat-id` replies return
+in the HTTP response or Socket envelope ACK. Check the response and its client display rather
+than terminal reply outbox rows. Log only required metadata; exclude tokens,
+signatures, `response_url` and complete request bodies.
+
 A 401 callback response usually means the signing secret, raw body or timestamp is wrong; allow a maximum five-minute clock skew. A 503 means readiness or durable review execution is unavailable. For `not_in_channel` or private-channel failures, check Bot membership and `groups:read`. Slack `internal_error`/`fatal_error` can represent an ambiguous write and remain `unknown`. [Signature contract](https://docs.slack.dev/authentication/verifying-requests-from-slack/), [message errors](https://docs.slack.dev/reference/methods/chat.postMessage/).
 
-Before each new VCS/analysis/publication operation, current authorization is rechecked while execution content retains the admitted configuration snapshot. Disable a binding/connection/callback to stop new authorized work. Rotate the Bot token or callback secret through the normal configuration publish process; keep app/team/guild/Bot identities stable. Changing an identity prevents old notifications from being sent through the replacement connection.
+Before each new VCS/analysis/publication operation, current authorization is rechecked while execution content retains the admitted configuration snapshot. Disable the binding, connection or active receiver to stop new authorized work. Rotate the Bot token or callback secret through the normal configuration publish process; keep app/team/guild/Bot identities stable. Changing an identity prevents old notifications from being sent through the replacement connection.
 
 `delivered` requires a complete matching platform receipt. An explicit rejection is recorded as `rejected`; only a documented 429 authorizes a timed reply retry. Lost responses, server errors and expired `sending` leases become `unknown` and are never automatically resent. Inspect remote messages and the journal/outbox before arranging a new request.
 

@@ -13,6 +13,8 @@ Slack/Telegram use a 3900 UTF-16-unit budget, Discord 1900; metadata counts towa
 Native author mentions, directory scopes, threads/topics and buttons are rejected.
 
 `SocialImClient` checks cached platform identity/destination metadata before sends.
+Background checks refresh within 60 seconds of the 300-second expiry. Pending reads
+keep the existing deadline; success renews it and failure invalidates the target.
 Complete destination-matching receipts are delivered; explicit rejections are
 failed; missing/ambiguous receipts remain unknown. PublicationJournal persists
 write-ahead identities and replays confirmed receipts without POST. Unknown
@@ -266,6 +268,14 @@ Example:
 If a run has problems but records `skipReason="no_output_publisher"`, no summary route selected a publishable channel for that event. Add an `outputs.routes.rules[].summary` rule or a workspace-level `outputs.summary` entry for the trigger/target, for example to send GitHub push reviews to `feishu_bot` and/or `github_problem_issue`.
 
 ## Channel mapping
+
+Legacy `outputs.routes.rules[].match.repo_ref` selects an exact, case-sensitive
+repository reference and intersects `trigger`/`target_kind`. Place narrower rules
+before broader rules and retain their original channels when adding a report
+destination. A non-empty list in the first matching legacy rule takes precedence
+over workspace output lists; an empty list falls through to the workspace/default
+layers, rather than the next rule. Configuration preview and bootstrap publishing share
+this matching contract; glob and regex matching belong to v2 `routing.rules`.
 
 | Channel kind | Problem output | Summary output | Notes |
 | --- | --- | --- | --- |
@@ -748,3 +758,9 @@ The base system prompt in `prompts/system/code-reviewer.system.md` must keep the
 - Do not treat stdout as the final review channel.
 
 When changing the tool contract, update the prompt, this document, `docs/ai/architecture.md`, the relevant roadmap summary in `docs/ai/index.md`, examples, and unit tests together.
+
+## Slack Socket Mode 接收
+
+Slack 命令可选择 HTTP callback 或 socket_mode，二者互斥；Bot API 输出和回复恢复规则不变。
+App-Level Token 与 Bot OAuth token 分开，接收器核验 hello App ID 与命令 team，复用当前授权和持久审查流程。
+配置、应用级切换、代理及回切步骤见[Slack 指南](site/src/content/docs/zh-cn/integrations/slack.md#使用-socket-mode)。

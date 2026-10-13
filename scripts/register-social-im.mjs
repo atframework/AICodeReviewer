@@ -34,6 +34,7 @@ function parse(argv) {
         "--bot-id",
         "--token-env",
         "--secret-env",
+        "--slack-mode",
       ].includes(name) ||
       !argv[i + 1] ||
       argv[i + 1].startsWith("--") ||
@@ -68,7 +69,7 @@ function callbackUrl(value) {
     );
   return url.href;
 }
-export function slackManifest(url) {
+export function slackManifest(url, socketMode = false) {
   return {
     display_information: { name: "AICodeReviewer" },
     features: {
@@ -77,7 +78,7 @@ export function slackManifest(url) {
         {
           command: "/aicr",
           description: "Review a fixed revision or query its status",
-          url,
+          ...(socketMode ? {} : { url }),
           usage_hint:
             "help | chat-id | review <alias> <revision> | status <request-id>",
           should_escape: false,
@@ -89,6 +90,7 @@ export function slackManifest(url) {
         bot: ["chat:write", "channels:read", "groups:read", "commands"],
       },
     },
+    settings: { socket_mode_enabled: socketMode },
   };
 }
 
@@ -102,13 +104,19 @@ export async function registerSocialIm(
   if (!["slack", "discord", "telegram"].includes(platform))
     throw new Error("Choose --platform slack|discord|telegram.");
   if (platform === "slack") {
+    const mode = opts["--slack-mode"] ?? "http";
+    if (!["http", "socket"].includes(mode))
+      throw new Error("Choose --slack-mode http|socket.");
     if (opts.apply)
       throw new Error(
         "Import the reviewed manifest in Slack's application console.",
       );
     return {
       mode: "dry-run",
-      manifest: slackManifest(callbackUrl(opts["--callback-url"])),
+      manifest: slackManifest(
+        mode === "socket" ? undefined : callbackUrl(opts["--callback-url"]),
+        mode === "socket",
+      ),
     };
   }
   const tokenEnv = envName(opts["--token-env"]);

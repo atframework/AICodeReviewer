@@ -263,7 +263,7 @@ const IM_CONNECTION_FIELD_KINDS = buildFieldKindLookup(
     wecom_app: { corp_id: true, agent_id: true, app_secret: true, app_secret_env: true },
     wecom_aibot: { corp_id: true, aibot_id: true },
     feishu_app: { app_id: true, app_secret: true, app_secret_env: true, base_url: true, tenant_key: true },
-    slack_app: { app_id: true, team_id: true, bot_user_id: true, "callback.signing_secret": true, "callback.signing_secret_env": true },
+    slack_app: { app_id: true, team_id: true, bot_user_id: true, "callback.signing_secret": true, "callback.signing_secret_env": true, "socket_mode.enabled": true, "socket_mode.app_token": true, "socket_mode.app_token_env": true },
     discord_bot: { application_id: true, guild_id: true, "callback.public_key": true },
     telegram_bot: { bot_id: true, "callback.secret_token": true, "callback.secret_token_env": true },
   },
@@ -627,6 +627,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "identity", label: "Identity", scope: "entity", match: ["$name", "kind", "enabled"] },
       { id: "protocol", label: "Protocol identity", scope: "entity", match: ["corp_id", "agent_id", "aibot_id", "app_id", "base_url", "tenant_key", "app_secret", "app_secret_env", "secret", "secret_env", "team_id", "bot_user_id", "application_id", "guild_id", "bot_id", "token", "token_env"] },
       { id: "callback", label: "Callback credentials", scope: "entity", match: ["callback"], collapsed: true },
+      { id: "socket-mode", label: "Socket Mode", scope: "entity", match: ["socket_mode"], collapsed: true },
     ],
   },
   {

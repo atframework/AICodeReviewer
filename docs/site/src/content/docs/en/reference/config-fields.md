@@ -353,6 +353,7 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.routes.default` | object | — | Default route applied when no rule matches |
 | `outputs.routes.rules[]` | array | `[]` | Ordered routing rules |
 | `outputs.routes.rules[].match.trigger` | string | — | Trigger name to match |
+| `outputs.routes.rules[].match.repo_ref` | string | — | Exact, case-sensitive repository reference; combine with trigger and target kind. No glob or regex. Rules retain first-match order. |
 | `outputs.routes.rules[].match.target_kind` | enum | — | Target kind (`pull_request`, `push`, `commit`, `issue`, `manual`, `scheduled`); `pr` is normalized to `pull_request`. GitLab MRs are reported as `pull_request`. |
 | `outputs.routes.rules[].line_comments` | string[] | — | Channel names to receive line-comment output |
 | `outputs.routes.rules[].summary` | string[] | — | Channel names to receive summary output |
@@ -442,7 +443,7 @@ platforms use HTTP callbacks; their identities and credentials are listed below.
 | `im.command_bindings.<id>.actors[].type` | enum | — | Exact principal: `wecom_userid`, `wecom_encrypted_userid`, `feishu_open_id`, `slack_user_id`, `discord_user_id`, `telegram_user_id`; identity namespace comes from the connection |
 | `im.command_bindings.<id>.actors[].id` | string | — | Exact typed platform id; no fuzzy or directory-derived authorization |
 | `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 timestamp; an expired matcher (exact principals and `any` alike) stops matching on its own — the general temporary-authorization mechanism |
-| `im.command_bindings.<id>.actors[].kind` | enum | — | Scope matcher discriminator listed above; omitted for exact typed principals; scope matchers are unsupported on Slack/Discord/Telegram |
+| `im.command_bindings.<id>.actors[].kind` | enum | — | Matcher discriminator; omitted for exact typed principals. Slack/Discord/Telegram accept `conversation_users` for authenticated command senders in configured groups/channels, without a member-directory query; private/broadcast contexts are rejected. Other directory scopes and `any` are unsupported on these platforms |
 | `im.command_bindings.<id>.actors[].recursive` | boolean | — | `wecom_department` only: runtime default true, includes child departments |
 | `im.command_bindings.<id>.actors[].value` | string | — | Exact position, custom-field value or job title for the corresponding scope matcher |
 | `im.command_bindings.<id>.actors[].name` | string | — | `wecom_extattr` only: exact custom-field name |
@@ -459,7 +460,7 @@ platforms use HTTP callbacks; their identities and credentials are listed below.
 
 ### Slack, Discord and Telegram connection fields
 
-These kinds use Bot API outputs and HTTP callbacks only. See the
+These kinds use Bot API output and HTTP callbacks; Slack also supports Socket Mode. See the
 [Slack](/en/integrations/slack/), [Discord](/en/integrations/discord/) and
 [Telegram](/en/integrations/telegram/) guides. Exact principal types are
 `slack_user_id`, `discord_user_id`, `telegram_user_id`; conversation kinds are
@@ -476,6 +477,9 @@ scope actors and `allow_all_repositories: true` are rejected.
 | `im.connections.<id>.bot_id` | string | — | Telegram Bot numeric ID |
 | `im.connections.<id>.token` | string | — | Bot API credential; mutually exclusive with `token_env`; sealed on persistence |
 | `im.connections.<id>.token_env` | string | — | Bot API credential environment reference |
+| `im.connections.<id>.socket_mode.enabled` | boolean | — | Slack only; runtime default false; mutually exclusive with enabled HTTP callback |
+| `im.connections.<id>.socket_mode.app_token` | string | — | Slack App-Level Token with connections:write; sealed on persistence; mutually exclusive with app_token_env |
+| `im.connections.<id>.socket_mode.app_token_env` | string | — | App-Level Token environment reference; one credential required when Socket Mode is enabled |
 | `im.connections.<id>.callback.signing_secret` | string | — | Slack HMAC secret; mutually exclusive with its `_env` reference; sealed |
 | `im.connections.<id>.callback.signing_secret_env` | string | — | Slack signing secret reference |
 | `im.connections.<id>.callback.public_key` | string | — | Discord Ed25519 key, 64 hex characters; public data |

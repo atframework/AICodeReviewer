@@ -160,6 +160,24 @@ docker build -t aicodereviewer -f deploy/Dockerfile .
 环境变量始终**优先于**自动探测；如果代理只监听回环地址（`127.0.0.1:3128`），构建会自动切换到 host
 networking，以便 Dockerfile 的 `RUN` 步骤仍能访问它。
 
+## 运行时 HTTP 代理
+
+构建代理探测不会启用 Node 运行时 `fetch` 的代理支持。
+若平台 API 出站访问需要已有且获授权的代理，先核验部署的 Node 版本支持 `NODE_USE_ENV_PROXY=1`，
+再通过服务的运行时环境文件传入：
+
+```dotenv
+NODE_USE_ENV_PROXY=1
+HTTPS_PROXY=http://proxy.example.org:3128
+NO_PROXY=localhost,127.0.0.1
+```
+
+把示例地址替换为运行容器可访问的代理，并与现有设置合并。
+小写 `http_proxy`、`https_proxy`、`no_proxy` 优先于对应的大写变量。
+保留本地及内部服务的直连范围，经服务管理器重启后，用实际部署的 Node 客户端核验本地健康与平台元数据访问。
+镜像构建成功或宿主 API 调用成功不能证明运行时可访问。
+依据：[Node 内置代理支持](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support)。
+
 ## 沙箱后端
 
 AICR 可以把每个 agent 运行隔离在独立的容器中。当服务本身运行在 Docker 内时，有两种容器后端相关。

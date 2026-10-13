@@ -322,6 +322,31 @@ describe("output channel selection", () => {
     expect(resolveOutputChannelsLegacy(config, PR_EVENT, "ws", "summary")).toEqual([]);
   });
 
+  it("legacy: exact repository routes preserve target-kind selection and other repositories", () => {
+    const config = configWith({
+      outputs: {
+        channels: [
+          { name: "chat", kind: "feishu_bot", webhook_url_env: "U" },
+          { name: "pr", kind: "feishu_bot", webhook_url_env: "U" },
+          { name: "push", kind: "feishu_bot", webhook_url_env: "U" },
+        ],
+        routes: { rules: [
+          { match: { trigger: "github-main", target_kind: "pull_request", repo_ref: "acme/svc-api" }, summary: ["pr", "chat"] },
+          { match: { trigger: "github-main", target_kind: "push", repo_ref: "acme/svc-api" }, summary: ["push", "chat"] },
+          { match: { trigger: "github-main", target_kind: "pull_request" }, summary: ["pr"] },
+          { match: { trigger: "github-main", target_kind: "push" }, summary: ["push"] },
+        ] },
+      },
+    });
+    const push = { ...PR_EVENT, targetKind: "push" as const };
+    expect(resolveOutputChannelsLegacy(config, PR_EVENT, "product-services", "summary")).toEqual(["pr", "chat"]);
+    expect(resolveOutputChannelsLegacy(config, push, "product-services", "summary")).toEqual(["push", "chat"]);
+    expect(resolveOutputChannelsLegacy(config, { ...PR_EVENT, repoRef: "other/svc-api" }, "product-services", "summary")).toEqual(["pr"]);
+    expect(resolveOutputChannelsLegacy(config, { ...push, repoRef: "acme/svc-api-other" }, "product-services", "summary")).toEqual(["push"]);
+    expect(resolveOutputChannelsLegacy(config, { ...PR_EVENT, triggerName: "other" }, "product-services", "summary")).toEqual([]);
+    expect(() => configWith({ outputs: { channels: [], routes: { rules: [{ match: { repo_ref: "" } }] } } })).toThrow();
+  });
+
   it("unified entry dispatches by graph mode", () => {
     const legacy = parseEffectiveConfig(
       {

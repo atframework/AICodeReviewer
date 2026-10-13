@@ -38,6 +38,13 @@ describe("parseConfigSecretsKeyMaterial", () => {
 });
 
 describe("envelope round-trip", () => {
+  it("seals nested Slack app-level tokens and preserves env references", () => {
+    const source = {im: {connections: {bot: {kind: "slack_app", socket_mode: {enabled: true, app_token: "xapp-private", app_token_env: "APP_TOKEN"}}}}};
+    const encrypted = sealConfigSecretLiterals(source, sealing());
+    expect(JSON.stringify(encrypted)).not.toContain("xapp-private");
+    expect(encrypted.im.connections.bot.socket_mode.app_token_env).toBe("APP_TOKEN");
+    expect(openConfigSecretLiterals(encrypted, sealing())).toEqual(source);
+  });
   it("seals social Bot credentials while preserving Discord public verification data", () => {
     const config = { im: { connections: { bot: { kind: "discord_bot", token: "bot-secret", callback: { signing_secret: "hmac-secret", secret_token: "webhook-secret", public_key: "11".repeat(32) } } } } };
     const sealed = sealConfigSecretLiterals(config, sealing());

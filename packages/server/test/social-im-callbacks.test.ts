@@ -150,9 +150,24 @@ it.each(platforms)(
   },
 );
 it.each(platforms)(
+  "admits two authenticated %s users under the shared conversation policy", async platform => {
+    const { config } = fixture(platform);
+    config.im!.command_bindings!.reviewers!.actors = [{ kind: "conversation_users" }];
+    const client = await readyClient(platform);
+    const app = new Hono();
+    registerImCallbackRoutes(app, { store, namespace: "social", getConfig: () => config, getConfigGeneration: () => ({ config, snapshotId: "snapshot", fileDigest: "digest" }), socialClient: () => client, reviewReady: () => true, env: () => undefined, now: () => NOW });
+    for (const [index, actor] of [platform === "slack" ? "U234" : platform === "discord" ? "123456789012345681" : "234567891", platform === "slack" ? "U999" : "999"].entries()) {
+      const response = await app.fetch(callbackRequest(platform, "review demo " + (index === 0 ? SHA : "1".repeat(40)), 900 + index, actor));
+      expect(response.status).toBe(200);
+    }
+    expect(store.db.select().from(imReviewRequests).all()).toHaveLength(2);
+  },
+);
+it.each(platforms)(
   "rejects forged %s requests before admission",
   async (platform) => {
     const { config } = fixture(platform);
+    config.im!.command_bindings!.reviewers!.actors = [{ kind: "conversation_users" }];
     const client = await readyClient(platform);
     const app = new Hono();
     registerImCallbackRoutes(app, {

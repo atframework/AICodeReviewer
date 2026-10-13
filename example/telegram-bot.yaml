@@ -7,6 +7,15 @@ im:
       kind: telegram_bot
       bot_id: "123456789"
       token_env: AICR_TELEGRAM_TOKEN
+  command_bindings:
+    reviewers:
+      enabled: false # Shared groups only; private chats require explicit user IDs.
+      connection: bot
+      actors: [{ kind: conversation_users }]
+      conversations: [{ kind: group, id: "-1001234567890" }]
+      commands: [help, chat-id, review, status]
+      repositories:
+        demo: { workspace: ws, source_trigger: git, repo_ref: org/demo }
 triggers:
   - name: git
     kind: github

@@ -27,6 +27,10 @@ file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，�
 
 ## 启用命令
 
+按仓库选择报告时，旧路由可用 `outputs.routes.rules[].match.repo_ref` 与 `trigger`、`target_kind` 取交集。
+仓库引用精确匹配并区分大小写；把这些规则放在宽泛规则之前，追加 Bot 输出时保留原有渠道列表。
+匹配的旧路由优先于 workspace 输出列表。字段见[配置参考](/zh-cn/reference/config-fields/)。
+
 合并下面片段，保留连接身份和 token，替换 actor、会话、仓库与public key。
 review 需要持久 SQLite/PostgreSQL store、数据库配置来源、snapshot 和运行中的 worker；
 file-only 在创建请求前拒绝 review。平台 callback 无需管理员会话，管理 API 保留原认证。
@@ -65,7 +69,11 @@ im:
       report_policy: workspace_routes
 ```
 
-连接、actor、会话、仓库映射的精确交集决定权限，不接受任意用户、目录 scope、通配仓库或额外命令。
+连接、actor 策略、会话和仓库映射的交集决定权限。
+允许配置 guild 文字频道内的用户触发命令时，设置 `actors: [{kind: conversation_users}]`，无需逐个维护用户 ID。
+该策略使用平台认证的 interaction 发送人和频道上下文，不查询成员目录；新增成员无需改配置，离开 guild 不自动取消已接受请求。
+私聊不能使用此策略；仍拒绝 `any`、目录 scope、通配仓库和额外命令。
+`expires_at` 仍生效；重叠 binding 须合并，status 仍只允许原操作人查询原请求。
 
 把 application 的 **Interactions Endpoint URL** 设置为公网 HTTPS 地址加 `server.path_prefix`（若有）和 `/callbacks/im/bot`。服务先验证 Ed25519 签名，再响应 PING。注册一个 guild `aicr` CHAT_INPUT 命令，只包含必填 STRING 参数 `command`：
 
@@ -89,10 +97,26 @@ node scripts/register-social-im.mjs --platform discord --application-id 12345678
 
 ACK 只代表接收，不代表完成分析。后台 readiness 核对平台身份及已配置目的地元数据，缓存 300 秒；
 不可用时拒绝接收。本地接收预算为一秒，callback 不等待 VCS、模型、readiness 网络请求或消息发送。
+后台在过期前刷新；刷新期间保留原有效期限，成功才续期，失败立即停用目的地。验证命令回复时须跨越缓存刷新周期。
 
 ## 运维与排障
 
+命令没有回复时，在配置的文字频道键入 `/aicr`，从斜杠菜单选择正确的应用，
+在 `command` 输入框填 `help` 后发送。指南中的 `command:` 表示参数栏，不能作为普通聊天文本发送。
+初始回复仅操作者可见。若没有命令菜单，检查 guild 命令注册、应用安装及操作者的应用命令权限；
+若客户端提示应用没有响应，记录原始错误和命令时间，再核对 Interactions Endpoint URL、回调 HTTP 状态及验签/readiness。
+
+成功接收的合法命令会留下 `im_inbox` 记录；没有记录也可能是接收前拒绝，不能据此断定没有请求。
+`help`、`chat-id` 直接使用 HTTP interaction 响应，不经过 Bot 消息 outbox。
+Bot 的 **Send Messages** 用于报告和终态通知，应结合出站失败证据检查。
+日志只保留必要元数据，禁止记录 interaction token、签名或完整请求体。
+依据：[应用命令](https://docs.discord.com/developers/interactions/application-commands)、
+[初始响应](https://docs.discord.com/developers/interactions/receiving-and-responding)。
+
 PING/命令 401 时核对 public key 和时间戳头；AICR 本地要求五分钟内的新请求。出站 403 应检查 Bot 的频道权限。429 的 `retry_after` 单位是秒，回复 outbox 持久保存到期时间。不要把 interaction token 当作 Bot token。其他 guild 或非普通文字频道会在发送前被 readiness 拒绝。
+
+出站超时时，从运行中的 Node 容器核验平台 API 访问。若部署使用代理，按
+[运行时 HTTP 代理配置](/zh-cn/deployment/docker/#运行时-http-代理)核验；宿主请求成功不能代替 readiness。
 
 每次新的 VCS、分析和远端发布前复查当前权限，执行内容继续使用接收时的 snapshot。
 停用 binding、connection 或 callback 可停止新的授权工作。通过正常配置发布流程轮换秘密，保持平台身份稳定。

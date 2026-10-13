@@ -557,15 +557,14 @@ export const outputRouteTargetKindSchema = z.preprocess((value) => {
   return value === "pr" ? "pull_request" : value;
 }, reviewTargetKindSchema);
 
+const legacyOutputRouteMatchSchema = z.object({
+  trigger: z.string().min(1).optional(),
+  target_kind: outputRouteTargetKindSchema.optional(),
+}).passthrough();
+
 export const outputRouteSchema = z
   .object({
-    match: z
-      .object({
-        trigger: z.string().min(1).optional(),
-        target_kind: outputRouteTargetKindSchema.optional(),
-      })
-      .passthrough()
-      .optional(),
+    match: legacyOutputRouteMatchSchema.extend({ repo_ref: z.string().min(1).optional() }).optional(),
     line_comments: z.array(z.string()).optional(),
     summary: z.array(z.string()).optional(),
   })
@@ -1184,7 +1183,7 @@ export const outputsConfigSchema = z
     author_resolution: outputAuthorResolutionSchema,
     routes: z
       .object({
-        default: outputRouteSchema.optional(),
+        default: outputRouteSchema.extend({ match: legacyOutputRouteMatchSchema.optional() }).optional(),
         rules: z.array(outputRouteSchema).default([]),
       })
       .passthrough()

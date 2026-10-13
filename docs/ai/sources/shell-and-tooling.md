@@ -46,3 +46,11 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `last_checked`: 2026-09-12
 - `next_review`: 2026-12-12
 - `update_trigger`: Windows Node helper imports or pnpm dependency-resolution guidance changes.
+
+## Node runtime HTTP proxy
+
+- Source: [Node 24 HTTP proxy support](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support), including `http.setGlobalProxyFromEnv`.
+- Evidence: On supported Node versions, `NODE_USE_ENV_PROXY=1` enables environment proxy support for the default `fetch` and HTTP/HTTPS clients at startup. Lowercase proxy/bypass variables take precedence. Build-tool proxy configuration does not enable it. Verified against Node v24.21.0; validate the deployed version and actual client before changing runtime env.
+- `last_checked`: 2026-10-12
+- `next_review`: 2027-01-12
+- `update_trigger`: Node image/version changes or runtime proxy and bypass configuration changes.
