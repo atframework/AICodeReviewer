@@ -8,9 +8,43 @@ Native author mentions, directories, buttons and natural-language requests are o
 
 ## Create and install
 
-Create an application and Bot in the Discord Developer Portal. Copy the application ID, public key and Bot token; store the token in `AICR_DISCORD_TOKEN`. Enable Developer Mode to copy guild, channel and user IDs; keep all snowflakes as quoted strings. Replace the synthetic public key below with the Portal's actual public key.
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and select **New Application**.
+2. Copy **Application ID** and **Public Key** from **General Information**. Obtain the Bot token on the **Bot** page
+   and inject it into `AICR_DISCORD_TOKEN` through your deployment environment. The public key verifies signatures; the token cannot replace it.
+3. Under **Installation**, enable **Guild Install**, set the scopes and permissions below and use the installation link for your server.
+4. In the Discord client, enable **User Settings → Advanced → Developer Mode**.
+   Right-click the server, channel and person to copy their Server ID, Channel ID and User ID.
+
+See [Discord's application setup guide](https://docs.discord.com/developers/quick-start/getting-started).
+
+| AICR field | Platform value |
+| --- | --- |
+| `application_id` | Application ID |
+| `guild_id` | Server ID |
+| `callback.public_key` | Public Key: 64 hexadecimal characters |
+| Conversation/report `channel_id` | Channel ID |
+| Actor ID for an explicit allowlist | The person's User ID |
+
+Keep all IDs as quoted strings. Replace the synthetic public key below with the Portal's actual public key.
 
 Install into the selected guild with `bot` and `applications.commands` scopes. Grant **View Channel** and **Send Messages** in the command/report channels. This implementation does not request Administrator, Message Content or other privileged Gateway intents; it uses HTTP interactions and the Bot message API. Only ordinary guild text channels (type 0) in the configured guild are supported. DMs, forum posts, threads, announcements and Gateway receive are not implemented. [Application commands](https://docs.discord.com/developers/interactions/application-commands), [channel types](https://docs.discord.com/developers/resources/channel).
+
+## Configure AICR
+
+Merge the YAML below, or sign in to the Dashboard and open **Config → IM connections → New im connection**.
+Choose `discord_bot` and enter its identity and credential. Expand **Callback credentials**, enable the callback and enter the public key.
+The screenshot shows the real local form with synthetic IDs; callback fields are outside the pictured section.
+
+[![AICR Discord connection form with Application ID, Guild ID and Token env](/images/integrations/discord-connection.png)](/images/integrations/discord-connection.png)
+
+Open the image for full resolution.
+
+The connection name must match the output/binding's `connection` and the last callback URL segment;
+the screenshot uses `discord-demo`, while the YAML below uses `bot`.
+For database configuration, allow environment references by purpose and destination in the file's
+`config_sources.secret_refs`, then save, publish and verify the active revision and snapshot.
+See [dynamic configuration](/en/configuration/overview/#dynamic-configuration-api).
+Continue with report channels and command bindings; creating a connection does not authorize reviews.
 
 ## Send reports
 
@@ -22,6 +56,12 @@ See [output policy](/en/configuration/outputs/) for overrides.
 
 Named, workspace and built-in templates retain the normal priority. The final message budget is 1900 UTF-16 units including
 the truncation notice and optional safe report link. Discord disables allowed mentions and URL previews are controlled by the platform.
+
+Reports have Review target, Summary and Problems sections, with each problem label on one line.
+CRLF and excess prose spacing are normalized. Internal review markers are hidden outside code,
+while code fences, language labels and content are preserved. Custom templates retain the priority above;
+messages that exceed the total budget include a truncation notice.
+See [Discord's message formatting reference](https://docs.discord.com/developers/reference#message-formatting).
 
 ## Enable commands
 
@@ -74,7 +114,10 @@ leaving a guild does not cancel previously accepted requests. It does not query 
 Private chats cannot use this policy. `any`, directory scopes, wildcard repositories and extra commands are rejected.
 The `expires_at` field still applies. Merge overlapping bindings; status stays limited to the original request owner.
 
-Set the application's **Interactions Endpoint URL** to your public HTTPS origin plus any `server.path_prefix` and `/callbacks/im/bot`. The server validates Ed25519 signatures before replying to PING. Register exactly one guild command with one required STRING option named `command`:
+Deploy and activate the AICR configuration with the public key first. Then set the application's
+**General Information → Interactions Endpoint URL** to your public HTTPS origin plus any `server.path_prefix` and `/callbacks/im/bot`.
+Discord sends a PING when you save the URL; the server validates its Ed25519 signature before replying.
+Next, register exactly one guild command with one required STRING option named `command`:
 
 ```bash
 node scripts/register-social-im.mjs --platform discord --application-id 123456789012345678 --guild-id 123456789012345679 --token-env AICR_DISCORD_TOKEN

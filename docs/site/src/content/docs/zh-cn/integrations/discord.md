@@ -8,12 +8,44 @@ AICR 支持 `discord_bot`，每次发布一条聚合报告，通过 HTTP 接收 
 
 ## 创建和安装
 
-在 Discord Developer Portal 创建 application 和 Bot。复制 application ID、public key、Bot token，把 token 放入 `AICR_DISCORD_TOKEN`。启用 Developer Mode 后复制 guild、channel 和 user ID；snowflake 一律保留为带引号的字符串。下方合成 public key 必须替换为 Portal 中的实际值。
+1. 打开 [Discord Developer Portal](https://discord.com/developers/applications)，选择 **New Application**。
+2. 在 **General Information** 复制 **Application ID** 和 **Public Key**；在 **Bot** 页取得 Bot token，
+   通过部署环境注入 `AICR_DISCORD_TOKEN`。Public Key 用于验签，不能用 Bot token 替代。
+3. 在 **Installation** 中启用 **Guild Install**，设置下面的 scopes 和频道权限，使用安装链接添加到目标服务器。
+4. 在 Discord 客户端 **User Settings → Advanced → Developer Mode** 开启开发者模式。
+   右键服务器、频道和用户，分别复制 Server ID、Channel ID、User ID。
+
+依据：[Discord 官方应用安装教程](https://docs.discord.com/developers/quick-start/getting-started)。
+
+| AICR 字段 | 平台字段 |
+| --- | --- |
+| `application_id` | Application ID |
+| `guild_id` | Server ID |
+| `callback.public_key` | Public Key，64 位十六进制字符 |
+| 会话及报告的 `channel_id` | Channel ID |
+| 精确授权的 actor ID | 人的 User ID |
+
+ID 一律保留为带引号的字符串；下方合成 public key 必须替换为 Portal 中的实际值。
 
 用 `bot` 和 `applications.commands` scopes 安装到指定 guild。在命令/报告频道授予 **View Channel** 和 **Send Messages**。
 此接入使用 HTTP interactions 和 Bot 消息 API，不需要 Administrator 或 Message Content 等 Gateway 特权 intents。
 仅支持配置 guild 的普通文字频道（type 0）；DM、论坛帖子、线程、公告频道和 Gateway 接收未实现。
 依据：[应用命令](https://docs.discord.com/developers/interactions/application-commands)、[频道类型](https://docs.discord.com/developers/resources/channel)。
+
+## 在 AICR 中配置
+
+可直接合并下文 YAML，或登录 Dashboard，打开 **Config → IM connections → New im connection**，
+选择 `discord_bot`，填写身份和凭据，在 **Callback credentials** 中开启 callback 并填入 public key。
+下图为本地真实表单，所有 ID 均为示例值，未展示的 callback 字段需另行填写。
+
+[![AICR Discord 连接表单：Application ID、Guild ID 和 Token env](/images/integrations/discord-connection.png)](/images/integrations/discord-connection.png)
+
+点击图片可查看原图。
+
+连接名须与 output、binding 的 `connection` 和回调 URL 末段一致；截图为 `discord-demo`，下文为 `bot`。
+使用数据库配置时，先在文件 `config_sources.secret_refs` 中按用途和目的地授权 env 引用，
+再保存、发布并核验已激活版本及 snapshot，见[动态配置](/zh-cn/configuration/overview/#动态配置-api)。
+继续配置报告渠道及命令 binding；只有连接还不能授权审查。
 
 ## 发送报告
 
@@ -24,6 +56,11 @@ file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，�
 
 模板仍按 named、workspace、内置的正常优先级选择。总预算为 1900 个 UTF-16 单位，
 包含截断提示及可用的安全报告链接。Discord 禁用 allowed mentions。
+
+报告按 Review target、Summary、Problems 分节，问题标题保持单行。
+CRLF 与正文多余空行会归一化；内部审查标记不显示，代码围栏、语言提示和正文保留。
+自定义模板仍按上述优先级生效；消息达到总预算时显示截断提示。
+平台语法见 [Discord 消息格式](https://docs.discord.com/developers/reference#message-formatting)。
 
 ## 启用命令
 
@@ -75,7 +112,10 @@ im:
 私聊不能使用此策略；仍拒绝 `any`、目录 scope、通配仓库和额外命令。
 `expires_at` 仍生效；重叠 binding 须合并，status 仍只允许原操作人查询原请求。
 
-把 application 的 **Interactions Endpoint URL** 设置为公网 HTTPS 地址加 `server.path_prefix`（若有）和 `/callbacks/im/bot`。服务先验证 Ed25519 签名，再响应 PING。注册一个 guild `aicr` CHAT_INPUT 命令，只包含必填 STRING 参数 `command`：
+先部署并激活包含 public key 的 AICR 配置，再把 application 的 **General Information → Interactions Endpoint URL**
+设为公网 HTTPS 地址加 `server.path_prefix`（若有）和 `/callbacks/im/bot`。
+保存时 Discord 会发送 PING；服务先验证 Ed25519 签名，再响应 PING。
+然后注册一个 guild `aicr` CHAT_INPUT 命令，只包含必填 STRING 参数 `command`：
 
 ```bash
 node scripts/register-social-im.mjs --platform discord --application-id 123456789012345678 --guild-id 123456789012345679 --token-env AICR_DISCORD_TOKEN

@@ -10,6 +10,20 @@
 
 ## Slack
 
+2026-10-13 复核安装指南相关条目：S3、S7、S9、S12、D2、T1–T3、T5–T6；
+另外核验 [Slack OAuth 安装](https://docs.slack.dev/authentication/installing-with-oauth/)、
+[Discord 应用安装教程](https://docs.discord.com/developers/quick-start/getting-started)及
+[Telegram Bot 创建教程](https://core.telegram.org/bots/tutorial)。其余条目的日期仍为顶部记录。
+Bot scopes 与 User scopes、Bot token 与 App-Level Token、Bot ID 与操作人/会话 ID 必须分别配置；
+用户指南只输出所需身份字段，实际平台控制台步骤与 AICR 本地表单截图分开标注。
+
+同日复核消息格式：[Slack mrkdwn](https://docs.slack.dev/messaging/formatting-message-text/)、
+[Discord Markdown 与控制标记](https://docs.discord.com/developers/reference#message-formatting)、
+[Telegram MessageEntity](https://core.telegram.org/bots/api#messageentity)与[实体嵌套限制](https://core.telegram.org/bots/api#formatting-options)。
+Slack 的加粗及代码围栏按 mrkdwn 处理；本地转换去掉通用 Markdown 的围栏语言提示。
+Telegram 的 pre 可携带 language；bold 等样式不能包含 code/pre，因此含行内代码的标签须拆分实体。
+内部 `aicr:` 注释清理和正文空行收敛是 AICR 的显示策略，不是平台提供的隐藏机制。
+
 | 编号 | 官方资料 | 本次确认及设计影响 |
 | --- | --- | --- |
 | S1 | [请求验签](https://docs.slack.dev/authentication/verifying-requests-from-slack/) | 对原始 body 和 timestamp 计算 HMAC-SHA256，格式为 `v0:timestamp:body`；检查签名并采用文档示例的 5 分钟时间窗；不能用旧 verification token 替代 |

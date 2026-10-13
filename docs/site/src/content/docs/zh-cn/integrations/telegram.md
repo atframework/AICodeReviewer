@@ -8,8 +8,39 @@ AICR 支持 `telegram_bot`，每次发布一条聚合报告，通过 HTTP 接收
 
 ## 创建和安装
 
-通过 BotFather 创建 Bot。把 Bot API token 放入 `AICR_TELEGRAM_TOKEN`，用 `getMe` 获取数字 Bot ID 和 username。
-另设 `AICR_TELEGRAM_WEBHOOK_SECRET`，长度 1–256，仅含字母、数字、下划线或连字符；webhook secret 与 Bot token 是不同秘密。
+打开 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，按提示设置显示名和唯一 username。
+把 Bot API token 通过部署环境注入 `AICR_TELEGRAM_TOKEN`，不要贴入浏览器地址栏、截图或聊天。
+创建流程见 [Telegram 官方教程](https://core.telegram.org/bots/tutorial)。
+
+### 获取 Bot ID 和 username
+
+以下命令使用 PowerShell 7，只输出身份字段。辅助函数也用于下节的只读查询；失败时不打印含 token 的请求 URL。
+
+```powershell
+function Get-AicrTelegramInfo {
+  param(
+    [ValidateSet('getMe', 'getWebhookInfo', 'getUpdates', 'getChat', 'getChatMember')]
+    [string] $Method,
+    [hashtable] $Body = @{}
+  )
+  if (-not $env:AICR_TELEGRAM_TOKEN) { throw 'Set AICR_TELEGRAM_TOKEN first.' }
+  try {
+    $response = Invoke-RestMethod -Method Post -ContentType 'application/json' -Uri (
+      'https://api.telegram.org/bot' + $env:AICR_TELEGRAM_TOKEN + '/' + $Method
+    ) -Body ($Body | ConvertTo-Json -Compress) -ErrorAction Stop
+  } catch { throw 'Telegram request failed; check credentials and network locally.' }
+  if (-not $response.ok) { throw 'Telegram rejected the request.' }
+  return $response.result
+}
+$me = Get-AicrTelegramInfo -Method getMe
+$me | Select-Object id, username, is_bot
+```
+
+`id` 填入 `im.connections.bot.bot_id`，`username` 用于 `/aicr@你的机器人用户名`。
+它们都不是群 ID；命令授权的 actor 则是人的数字 ID，不是人的 username。
+依据：[getMe](https://core.telegram.org/bots/api#getme)。
+
+### 获取群 ID
 
 私聊由用户先启动 Bot；群聊先添加 Bot 并允许发送消息，普通群不需要管理员权限。
 保持 privacy mode，群中使用 `/aicr@BotUsername` 定向命令。
@@ -30,6 +61,66 @@ ID 使用带引号的十进制字符串，群 ID 可以为负数。仅支持已�
 forum/topic、channel、business、匿名 `sender_chat`、Bot 自己发送及编辑更新不触发审查。
 依据：[Bot API](https://core.telegram.org/bots/api)、[privacy mode](https://core.telegram.org/bots/features#privacy-mode)。
 
+对于尚未设置 webhook 的新 Bot，先执行上节辅助函数，再运行：
+
+```powershell
+$webhook = Get-AicrTelegramInfo -Method getWebhookInfo
+if ($webhook.url) { throw 'Webhook exists. Use its current receiver; do not poll or delete it.' }
+$targetGroupName = 'Your group name' # 改为目标群显示名，仅用于筛选候选事件
+$updates = Get-AicrTelegramInfo -Method getUpdates -Body @{
+  allowed_updates = @('message', 'my_chat_member'); timeout = 0
+}
+foreach ($update in $updates) {
+  $event = if ($update.message) { $update.message } else { $update.my_chat_member }
+  if ($event.chat.title -eq $targetGroupName) {
+    [pscustomobject]@{
+      chat_id = [string]$event.chat.id; type = $event.chat.type; title = $event.chat.title
+      actor_id = [string]$event.from.id
+    }
+  }
+}
+```
+
+先查询一次以设置事件类型，再在群内发送 `/aicr@你的机器人用户名 chat-id` 后重复查询；
+若仍为空，移出并重新加入已核验的 Bot 后再查。此时 AICR 尚未接收消息，没有命令回复是正常的。
+显示名筛选只用于找候选，重名时须结合自己刚发送命令或重新加群的操作核对。
+成员事件的 `actor_id` 是执行成员变更的人，不一定是要授权的审查人。
+取得数字 ID 后查询目标并核验机器人的成员状态：
+
+```powershell
+$chatId = '-1001234567890' # 替换为上一步核验的实际值，不能由邀请链接猜测
+$chat = Get-AicrTelegramInfo -Method getChat -Body @{ chat_id = $chatId }
+$chat | Select-Object id, type, title, is_forum
+$member = Get-AicrTelegramInfo -Method getChatMember -Body @{ chat_id = $chatId; user_id = $me.id }
+$member | Select-Object status, is_member, can_send_messages
+```
+
+`type` 应为 `group` 或非 forum 的 `supergroup`，并确认 Bot 可在群中发言。
+已有 webhook 时通过当前接收器的授权管理流程取得 ID；不要删除 webhook 来执行此流程。
+权限绑定建立后，`chat-id` 才能直接回复当前 actor 和 conversation。
+
+## 在 AICR 中配置
+
+另设 `AICR_TELEGRAM_WEBHOOK_SECRET`，长度 1–256，仅含字母、数字、下划线或连字符；
+它与 Bot token 是不同秘密。例如在部署会话中生成，随后由部署工具传入服务环境，不打印其值：
+
+```powershell
+$env:AICR_TELEGRAM_WEBHOOK_SECRET = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+```
+
+可合并下文 YAML，或登录 Dashboard，打开 **Config → IM connections → New im connection**，
+选择 `telegram_bot`。在 **Callback credentials** 中开启 callback 并填写 secret env。
+下图为本地真实表单的身份部分，ID 为示例值。
+
+[![AICR Telegram 连接表单：数字 Bot ID 和 Token env](/images/integrations/telegram-connection.png)](/images/integrations/telegram-connection.png)
+
+点击图片可查看原图。
+
+连接名须与 output、binding 的 `connection` 和回调 URL 末段一致；截图为 `telegram-demo`，下文为 `bot`。
+使用数据库配置时，先在文件 `config_sources.secret_refs` 中按用途和目的地授权 env 引用，
+再保存、发布并核验已激活版本及 snapshot，见[动态配置](/zh-cn/configuration/overview/#动态配置-api)。
+接着填写群 ID、命令授权和报告渠道，部署完成后再注册 webhook。
+
 ## 发送报告
 
 从 [example/telegram-bot.yaml](https://github.com/atframework/AICodeReviewer/blob/main/example/telegram-bot.yaml) 开始，
@@ -39,6 +130,12 @@ file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，�
 
 模板仍按 named、workspace、内置的正常优先级选择。总预算为 3900 个 UTF-16 单位，
 包含截断提示及可用的安全报告链接。Telegram 使用显式 UTF-16 entities，不开启 parse_mode。
+
+报告按 Review target、Summary、Problems 分节，标题和严重级别使用加粗实体，问题标题保持单行。
+代码使用独立的 code/pre 实体，围栏语言提示写入 pre 的 language，不作为正文显示。
+含行内代码的加粗标签会分段，避免样式与代码实体重叠。
+CRLF 与正文多余空行会归一化；内部审查标记不显示，代码示例内容保留。
+实体及嵌套规则见 [Telegram 格式说明](https://core.telegram.org/bots/api#formatting-options)。
 
 ## 启用命令
 

@@ -155,11 +155,31 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
   const handler = async (context: { req: { method: "GET" | "POST"; param: (name: string) => string; query: () => URLSearchParams; raw: () => Request } }, response: (body: string, status: number, headers?: Record<string, string>) => Response) => {
 
     const name = context.req.param("connection");
-    const generation = options.getConfigGeneration !== undefined ? await options.getConfigGeneration() : undefined;
-    const config = generation?.config ?? await options.getConfig();
+    // Capture is part of admission: a late config read must never create work after the ACK budget.
+    const deadlineAt = Date.now() + 1000;
+    let captureTimer: ReturnType<typeof setTimeout> | undefined;
+    const unavailable = () => response(JSON.stringify({ error: "admission_unavailable" }), 503, { "content-type": "application/json" });
+    const capture = async () => {
+      const generation = await options.getConfigGeneration?.();
+      const config = generation?.config ?? await options.getConfig();
+      return { generation, config };
+    };
+    let captured: Awaited<ReturnType<typeof capture>> | undefined;
+    try {
+      captured = await Promise.race([
+        capture(),
+        new Promise<undefined>(resolve => { captureTimer = setTimeout(() => resolve(undefined), 1000); }),
+      ]);
+    } catch {
+      return unavailable();
+    } finally {
+      clearTimeout(captureTimer);
+    }
+    if (!captured || Date.now() >= deadlineAt) return unavailable();
+    const { generation, config } = captured;
     const connection = config.im?.connections?.[name];
     if (connection && (connection.kind === "slack_app" || connection.kind === "discord_bot" || connection.kind === "telegram_bot")) {
-      return handleSocialCallback(context.req.raw(), name, config, connection, generation, options);
+      return handleSocialCallback(context.req.raw(), name, config, connection, generation, options, deadlineAt);
     }
     const resolved = resolveConnection(config, options, name);
     if (typeof resolved === "string") {

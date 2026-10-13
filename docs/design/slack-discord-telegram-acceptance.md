@@ -56,6 +56,17 @@ generic auth 遮罩抢先分类 JWT，均已修复。后续 `social-im-coverage-
 
 ## 证据填写方式
 
+2026-10-13 复审增加以下回归断言，执行结果与完整门禁由本轮日志单独记录，不沿用上方历史计数：
+
+| 对应断言 | 故障与必须观察的结果 | 测试位置 |
+| --- | --- | --- |
+| S08 | 三平台 generation/config 读取阻塞或拒绝，1 秒内脱敏 503；迟到结果零 request/inbox；配置与 body 共用 deadline | server `social-im-callbacks.test.ts` |
+| O03–O07 | 三平台同目的地并发 refresh 只探测一次；成功续期、失败撤销，完成后可再次刷新 | outputs `social-im.test.ts` |
+| O02 | Telegram 围栏代码及行内代码中的 `#` 不丢失；保留空白与 UTF-16 entity 位置 | outputs `social-im.test.ts` |
+| O02、D01 | 实际磁盘模板与 inline fallback 一致；三平台 payload 中单行问题标题、Problems 分节、无正文 fingerprint、CRLF 收敛且代码空行保留；Slack 不显示围栏语言提示，Telegram bold 与 code/pre 不重叠 | outputs `template-engine.test.ts`、`social-im.test.ts`；server `social-im-publishing.test.ts` |
+| SM04 | 连接失败按 1/2/4/8/16/30 秒封顶重试；停止后零重连，日志不含 SDK 错误中的秘密 | server `slack-socket-mode.test.ts` |
+| D01–D03 | 六篇用户指南包含身份获取、平台设置和三张实际 AICR 表单截图；示例数据不含凭据 | 双语文档门禁、真实本地 Dashboard 与文档站浏览器检查 |
+
 每个 ID 最终记录：实现符号、测试文件与用例名、命令/日期、实际发现及通过数量、日志路径、未覆盖边界。
 每个平台各有的用例必须参数化执行三个 kind，不能只测一个平台后把整行标完成。
 状态使用“待实施/本地通过/真实服务通过/真实平台通过/失败/环境跳过”。

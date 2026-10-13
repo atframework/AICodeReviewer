@@ -20,6 +20,7 @@ export { channelIdentityCapability, matchChannelAuthor, memberDirectoryChannelUs
 export const outputsPackageName = "@aicr/outputs";
 export { SocialImClient, type SocialImConnection, type SocialImSendResult, type SocialImReceipt, type SocialImMessage, type TelegramMessageEntity } from "./social-im.js";
 export { toDiscordMarkdown, toTelegramMessage, toBoundedSlackMarkdown, boundSocialMarkdown } from "./social-im-markdown.js";
+export { normalizeSocialImMarkdown } from "./markdown-code.js";
 
 export {
 	clearTemplateCache,

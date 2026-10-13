@@ -76,16 +76,19 @@ export async function handleSocialCallback(
     | { readonly snapshotId: string | null; readonly fileDigest: string }
     | undefined,
   options: ImCallbackRoutesOptions,
+  deadlineAt = Date.now() + 1000,
 ): Promise<Response> {
   if (request.method !== "POST")
     return response({ error: "method_not_allowed" }, 405);
   if (connection.enabled === false || connection.callback?.enabled !== true)
     return response({ error: "callback_unavailable" }, 503);
   const abort = new AbortController();
-  const deadlineAt = Date.now() + 1000;
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0)
+    return response({ error: "admission_unavailable" }, 503);
   const timer = setTimeout(
     () => abort.abort(new Error("IM admission deadline.")),
-    1000,
+    remainingMs,
   );
   const unavailable = new Promise<Response>((resolve) =>
     abort.signal.addEventListener(

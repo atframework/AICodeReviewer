@@ -8,7 +8,16 @@ AICR 支持 `slack_app`，每次发布一条聚合报告，通过 HTTP 或 Socke
 
 ## 创建和安装
 
-创建 Slack app。从仓库根目录生成 manifest：
+先选择接收方式；两种方式都需要 Bot OAuth token、Bot scopes 和频道成员资格。
+
+| 接收方式 | Slack 控制台 | AICR 配置 | 额外凭据 |
+| --- | --- | --- | --- |
+| HTTP | 关闭 Socket Mode；设置 `/aicr` Request URL | `callback.enabled: true` | Signing Secret |
+| Socket Mode | 开启 Socket Mode；命令页不显示 Request URL | `callback.enabled: false`、`socket_mode.enabled: true` | 带 `connections:write` 的 App-Level Token |
+
+在 [Slack 应用控制台](https://api.slack.com/apps) 选择 **Create New App → From a manifest**。
+已有应用则打开 **App Manifest**，合并生成的命令和 Bot scopes，保留原有配置。
+HTTP 模式从仓库根目录生成 manifest（Socket Mode 使用后文的 `--slack-mode socket`）：
 
 ```bash
 node scripts/register-social-im.mjs --platform slack --callback-url https://aicr.example.org/callbacks/im/bot
@@ -41,6 +50,54 @@ Socket Mode 是应用级设置；切换时须核对该应用已有的事件和�
 不能靠 ID 前缀判断频道类型。依据：[manifest](https://docs.slack.dev/reference/app-manifest/)、
 [频道元数据](https://docs.slack.dev/reference/methods/conversations.info/)。
 
+在 **OAuth & Permissions → Bot Token Scopes** 核对上表权限，或将它们合并到
+`oauth_config.scopes.bot`；**User Token Scopes** 中的同名权限不能替代 Bot 权限。
+修改后执行 **Reinstall to Workspace**，更新服务使用的 **Bot User OAuth Token**。
+在每个目标频道执行 `/invite @你的机器人`；私有频道也必须显式邀请。
+依据：[OAuth 安装与 scope](https://docs.slack.dev/authentication/installing-with-oauth/)。
+
+| AICR 字段或变量 | 从哪里获取 |
+| --- | --- |
+| `app_id` | 应用 **Basic Information → App Credentials → App ID** |
+| `team_id`、`bot_user_id` | 使用 Bot token 调用 `auth.test`，分别取 `team_id`、`user_id` |
+| `AICR_SLACK_TOKEN` | **OAuth & Permissions → Bot User OAuth Token** |
+| `AICR_SLACK_SIGNING_SECRET` | **Basic Information → App Credentials → Signing Secret**，HTTP 模式使用 |
+| `AICR_SLACK_APP_TOKEN` | **Basic Information → App-Level Tokens**，Socket Mode 使用 |
+| 会话及报告的 `channel_id` | Slack 客户端打开目标频道详情，复制底部频道 ID |
+| 精确授权的 actor ID | 操作人个人资料菜单中的 **Copy member ID**，不是 Bot ID |
+
+先通过部署环境注入 `AICR_SLACK_TOKEN`，再在 PowerShell 7 中只读取所需身份字段：
+
+```powershell
+if (-not $env:AICR_SLACK_TOKEN) { throw 'Set AICR_SLACK_TOKEN first.' }
+try {
+  $identity = Invoke-RestMethod -Method Post -Uri 'https://slack.com/api/auth.test' -Headers @{
+    Authorization = 'Bearer ' + $env:AICR_SLACK_TOKEN
+  } -ErrorAction Stop
+} catch { throw 'Slack auth.test failed; check the token and network locally.' }
+if (-not $identity.ok) { throw 'Slack rejected auth.test.' }
+$identity | Select-Object team_id, user_id
+```
+
+`bot_user_id` 填这里的 `user_id`，不能填 `bot_id` 或人的 member ID。
+依据：[auth.test 返回字段](https://docs.slack.dev/reference/methods/auth.test/)。
+
+## 在 AICR 中配置
+
+可直接合并下文 YAML，或登录 Dashboard，打开 **Config → IM connections → New im connection**，
+选择 `slack_app`。下图来自本地真实表单，所有 ID 均为示例值；截图只展示连接身份部分。
+
+[![AICR Slack 连接表单：App ID、Team ID、Bot user ID 和 Token env](/images/integrations/slack-connection.png)](/images/integrations/slack-connection.png)
+
+点击图片可查看原图。
+
+连接名须与 output、binding 的 `connection` 及 HTTP URL 末段一致。
+例如连接名为 `slack-demo` 时，回调为 `/callbacks/im/slack-demo`；下文 YAML 使用 `bot`。
+展开 **Callback credentials** 或 **Socket Mode** 填入所选方式的配置，再配置报告渠道和命令授权。
+使用数据库配置时，环境变量引用须先在文件 `config_sources.secret_refs` 中按用途和目的地授权；
+数据库表单修改保存后，核验已激活版本及 snapshot；文件中显式配置的连接字段在界面保持只读。
+具体操作见[动态配置 API 与管理页面](/zh-cn/configuration/overview/#动态配置-api)。
+
 ## 发送报告
 
 从 [example/slack-app.yaml](https://github.com/atframework/AICodeReviewer/blob/main/example/slack-app.yaml) 开始，
@@ -50,6 +107,11 @@ file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，�
 
 模板仍按 named、workspace、内置的正常优先级选择。总预算为 3900 个 UTF-16 单位，
 包含截断提示及可用的安全报告链接。Slack 转义不可信提醒标记并关闭链接展开。
+
+报告按 Review target、Summary、Problems 分节，问题标题保持单行。
+Slack 使用自己的 `mrkdwn`：标题和严重级别转为单星号加粗，代码围栏去掉语言提示，保留代码正文。
+CRLF 与正文多余空行会归一化；内部审查标记不显示，代码示例中的同类文本保留。
+自定义模板仍按上述优先级生效。平台语法见 [Slack 格式说明](https://docs.slack.dev/messaging/formatting-message-text/)。
 
 ## 启用命令
 
@@ -173,7 +235,8 @@ ACK 只代表接收，不代表完成分析。后台 readiness 核对平台身�
 命令没有回复时，在已配置频道的主输入框键入 `/aicr`，从斜杠菜单选择此应用，再输入 `help`。
 回复仅操作者可见。在线程、App Agent 分栏或普通 `@Bot` 消息中发送不会触发此接入。
 在应用控制台 **Features → Slash Commands** 核对 `/aicr` 的 **Request URL**；
-若此字段不可见且页面提示 Socket Mode 已开启，先到 **Socket Mode** 关闭 **Enable Socket Mode**，再返回编辑页。
+HTTP 模式下，若此字段不可见且页面提示 Socket Mode 已开启，先关闭 **Enable Socket Mode**，再返回编辑页。
+Socket Mode 下隐藏 URL 是正常行为；核验 App-Level Token、连接状态与实际 envelope ACK。
 `commands` scope 和安装成功仍需配合实际命令定义。同名命令可能被其他应用占用。
 已有 App Agent 配置应合并 `features.slash_commands`，保留其他 manifest 字段。
 依据：[命令创建、调用位置和同名规则](https://docs.slack.dev/interactivity/implementing-slash-commands/)。

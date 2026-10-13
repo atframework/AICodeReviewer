@@ -1,6 +1,7 @@
 # Valid output configuration. Replace synthetic IDs and set the token environment variable.
 # Merge your LLM/provider and VCS credentials before enabling review commands.
 # Command setup: docs/site/src/content/docs/en/integrations/discord.md
+# Deploy the callback/public key before saving the Interactions Endpoint URL; register the guild command separately.
 im:
   connections:
     bot:

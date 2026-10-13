@@ -107,6 +107,44 @@ function api(
 describe.each(fixtures)(
   "$connection.kind API and publication recovery",
   (fixture) => {
+    it.each([true, false])(
+      "shares overlapping readiness reads and clears the in-flight result after success=%s",
+      async (success) => {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let blocked = false;
+        let fail = false;
+        const normal = api(fixture, () => response(fixture.receipt));
+        const fetch = vi.fn<FetchLike>(async (url, init) => {
+          if (blocked) await gate;
+          if (fail) throw new Error("metadata unavailable");
+          return normal(url, init);
+        });
+        const client = new SocialImClient(
+          fixture.connection,
+          "123:test-token",
+          { fetch, now: () => 1000 },
+        );
+        expect(await client.refreshReadiness(fixture.destination)).toBe(true);
+        fetch.mockClear();
+        blocked = true;
+        fail = !success;
+        const first = client.refreshReadiness(fixture.destination);
+        const second = client.refreshReadiness(fixture.destination);
+        expect(client.isReady(fixture.destination)).toBe(true);
+        release();
+        expect(await Promise.all([first, second])).toEqual([success, success]);
+        expect(fetch).toHaveBeenCalledTimes(success ? 2 : 1);
+        expect(client.isReady(fixture.destination)).toBe(success);
+        blocked = false;
+        fail = false;
+        fetch.mockClear();
+        expect(await client.refreshReadiness(fixture.destination)).toBe(true);
+        expect(fetch).toHaveBeenCalledTimes(2);
+      },
+    );
     it("keeps unexpired readiness during refresh, expires on time, and renews only on success", async () => {
       let time = 1000;
       let blocked = false;
@@ -396,6 +434,80 @@ describe.each(fixtures)(
   },
 );
 describe("social IM message formatting", () => {
+  it("treats heading-like inline content literally without recursive heading parsing", () => {
+    expect(toTelegramMessage("**# literal**").text).toBe("# literal");
+    expect(toTelegramMessage("# # `literal`").text).toBe("# literal");
+    const result = toTelegramMessage("# ".repeat(5000) + "end");
+    expect(result.text.length).toBeLessThanOrEqual(3900);
+    expect(result.text).toContain("truncated");
+  });
+  it.each(["````", "~~~~"])("preserves %s fenced source through Telegram entity conversion", fence => {
+    const code = "# literal 🙂\n```\n<!-- aicr:fingerprint=source -->\n\n\nvalue\n";
+    const result = toTelegramMessage(`## Code\r\n\r\n${fence}md\r\n${code.replace(/\n/gu, "\r\n")}${fence}`);
+    expect(result.text).toBe("Code\n\n" + code);
+    expect(result.entities).toContainEqual({ type: "pre", offset: 6, length: code.length, language: "md" });
+  });
+  it("keeps unfinished fences and inline mentions as source instead of metadata or control markup", () => {
+    const source = "`@everyone **source**`\n\n```md\n<!-- aicr:fingerprint=source -->\n# source\n";
+    expect(toDiscordMarkdown(source)).toBe(source);
+    const result = toTelegramMessage(source);
+    expect(result.text).toBe("@everyone **source**\n\n<!-- aicr:fingerprint=source -->\n# source\n");
+    expect(result.entities?.filter(e => e.type === "pre")).toHaveLength(1);
+  });
+  it.each(["slack", "discord", "telegram"] as const)("normalizes %s CRLF reports outside code and hides only internal metadata", platform => {
+    const source = "## Report\r\n\r\n\r\n**HIGH · correctness**\r\n\r\n<!-- aicr:fingerprint=hidden -->\r\n\r\n\r\nBody\r\n\r\n```cpp\r\n// **literal**\r\n\r\n\r\n// <!-- aicr:fingerprint=source-code -->\r\n```\r\n\r\n`<!-- aicr:fingerprint=inline-code -->`";
+    const text = platform === "slack" ? toBoundedSlackMarkdown(source) : platform === "discord" ? toDiscordMarkdown(source) : toTelegramMessage(source).text;
+    expect(text).not.toContain("\r");
+    expect(text).not.toContain("aicr:fingerprint=hidden");
+    expect(text).toContain(platform === "slack" ? "&lt;!-- aicr:fingerprint=source-code --&gt;" : "<!-- aicr:fingerprint=source-code -->");
+    expect(text).toContain("aicr:fingerprint=inline-code");
+    expect(text).toContain("// **literal**\n\n\n// ");
+    expect(text).not.toContain("correctness**\n\n\n");
+  });
+  it("renders Telegram headings and bold containing code without overlapping code entities", () => {
+    const result = toTelegramMessage("## 🙂 Report\n\n**Referenced code (`src/a.cpp:42`):**\n\n**two\nlines**");
+    expect(result.text).toBe("🙂 Report\n\nReferenced code (src/a.cpp:42):\n\ntwo\nlines");
+    expect(result.entities).toContainEqual({ type: "bold", offset: 0, length: "🙂 Report".length });
+    const code = result.entities!.find(e => e.type === "code")!;
+    expect(result.text.slice(code.offset, code.offset + code.length)).toBe("src/a.cpp:42");
+    for (const entity of result.entities!.filter(e => e.type === "bold")) {
+      expect(entity.offset >= code.offset + code.length || entity.offset + entity.length <= code.offset).toBe(true);
+    }
+    expect(result.entities!.some(e => e.type === "bold" && result.text.slice(e.offset, e.offset + e.length) === "two\nlines")).toBe(true);
+  });
+  it("keeps Slack inline source literal and removes only fence language metadata", () => {
+    const text = toBoundedSlackMarkdown("**label** `**literal** [not a link](https://example.org)`\n\n```cpp\ncpp\n// **literal**\n```\n\n**two\nlines**");
+    expect(text).toContain("`**literal** [not a link](https://example.org)`");
+    expect(text).toContain("```\ncpp\n// **literal**\n```");
+    expect(text).toContain("*two*\n*lines*");
+    expect(toBoundedSlackMarkdown("**Referenced code (`src/a.cpp:42`):**")).toBe("*Referenced code (`src/a.cpp:42`):*");
+  });
+  it.each(["python", "sh", ""])(
+    "preserves heading-like source lines in Telegram %s code blocks",
+    (language) => {
+      const code = "# keep this comment\n## keep this too\nprint(1)\n";
+      const result = toTelegramMessage(
+        "# Report\n\n```" +
+          language +
+          "\n" +
+          code +
+          "```\n\n## Details\n`# inline`\n#\n\nplain",
+      );
+      expect(result.text).toBe(
+        "Report\n\n" + code + "\n\nDetails\n# inline\n#\n\nplain",
+      );
+      expect(result.entities?.find((entity) => entity.type === "pre")).toEqual({
+        type: "pre",
+        offset: 8,
+        length: code.length,
+        ...(language ? { language } : {}),
+      });
+      const inline = result.entities?.find((entity) => entity.type === "code");
+      expect(
+        result.text.slice(inline!.offset, inline!.offset + inline!.length),
+      ).toBe("# inline");
+    },
+  );
   it("escapes untrusted Slack controls and converts bold and safe links", () => {
     const text = toBoundedSlackMarkdown(
       "**bold** <@U123> <!channel> [safe](https://example.org) [unsafe](javascript:alert)",

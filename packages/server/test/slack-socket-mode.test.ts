@@ -47,7 +47,7 @@ const body = (text = "help") => ({
   text,
   trigger_id: "123.456.hash",
 });
-async function setup(cold = false) {
+async function setup(cold = false, failStarts = false) {
   const f = fixture("slack");
   let config = appConfigSchema.parse({
     ...f.config,
@@ -93,6 +93,8 @@ async function setup(cold = false) {
       const transport = {
         options,
         start: vi.fn(async () => {
+          if (failStarts)
+            throw new Error("xapp-private-url-must-not-be-logged");
           options.onStatus("connected");
         }),
         stop: vi.fn(async () => {}),
@@ -273,6 +275,27 @@ it("reconnects after disconnect and cancels scheduled retries on drain", async (
   await f.service.stop();
   await vi.advanceTimersByTimeAsync(60_000);
   expect(f.transports).toHaveLength(2);
+});
+it("bounds repeated start failures at a 30-second retry and cancels retries on stop", async () => {
+  vi.useFakeTimers();
+  const f = await setup(false, true);
+  await vi.advanceTimersByTimeAsync(0);
+  for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+    const before = f.transports.length;
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(f.transports).toHaveLength(before);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.transports).toHaveLength(before + 1);
+    expect(f.transports[before - 1]!.stop).toHaveBeenCalledOnce();
+  }
+  expect(
+    f.status.mock.calls.every((call) => call[1] === "connect_failed"),
+  ).toBe(true);
+  expect(JSON.stringify(f.status.mock.calls)).not.toContain("xapp-private");
+  await f.service.stop();
+  const stoppedCount = f.transports.length;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.transports).toHaveLength(stoppedCount);
 });
 it("bounds blocked config capture and refuses late admission after timeout", async () => {
   const f = await setup();

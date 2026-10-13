@@ -1,6 +1,7 @@
 # Valid output configuration. Replace synthetic IDs and set the token environment variable.
 # Merge your LLM/provider and VCS credentials before enabling review commands.
 # Command setup: docs/site/src/content/docs/en/integrations/slack.md
+# Enable Socket Mode in Slack too; the connections:write App-Level Token is separate from the Bot token.
 im:
   connections:
     bot:

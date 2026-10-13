@@ -7,7 +7,16 @@ AICR supports `slack_app` for one aggregated report per publication and four com
 
 ## Create and install
 
-Create a Slack app from a manifest. From the repository root, generate the manifest with:
+Choose a receiver first. Both modes require a Bot OAuth token, Bot scopes and channel membership.
+
+| Receiver | Slack console | AICR configuration | Additional credential |
+| --- | --- | --- | --- |
+| HTTP | Disable Socket Mode; set `/aicr` Request URL | `callback.enabled: true` | Signing Secret |
+| Socket Mode | Enable Socket Mode; the command has no Request URL field | `callback.enabled: false`, `socket_mode.enabled: true` | App-Level Token with `connections:write` |
+
+Open [Slack's app console](https://api.slack.com/apps), then **Create New App → From a manifest**.
+For an existing app, open **App Manifest** and merge the command and Bot scopes while preserving other settings.
+Generate the HTTP manifest from the repository root (use `--slack-mode socket` below for Socket Mode):
 
 ```bash
 node scripts/register-social-im.mjs --platform slack --callback-url https://aicr.example.org/callbacks/im/bot
@@ -40,6 +49,55 @@ See [Socket Mode delivery and console settings](https://docs.slack.dev/apis/even
 
 Only joined public/private channels are supported. DMs, group DMs, threads and Slack Connect tenant expansion are outside this integration. A channel ID prefix is not proof of its type. [Slack manifest reference](https://docs.slack.dev/reference/app-manifest/), [channel metadata](https://docs.slack.dev/reference/methods/conversations.info/).
 
+Check the scopes above in **OAuth & Permissions → Bot Token Scopes**, or merge them into
+`oauth_config.scopes.bot`. Identical entries under **User Token Scopes** do not grant Bot permissions.
+After a change, **Reinstall to Workspace** and update the server's **Bot User OAuth Token**.
+Run `/invite @your-bot` in each destination, including private channels.
+See [OAuth installation and scopes](https://docs.slack.dev/authentication/installing-with-oauth/).
+
+| AICR field or variable | Where to find it |
+| --- | --- |
+| `app_id` | **Basic Information → App Credentials → App ID** |
+| `team_id`, `bot_user_id` | Call `auth.test` with the Bot token; use `team_id` and `user_id` respectively |
+| `AICR_SLACK_TOKEN` | **OAuth & Permissions → Bot User OAuth Token** |
+| `AICR_SLACK_SIGNING_SECRET` | **Basic Information → App Credentials → Signing Secret**, for HTTP |
+| `AICR_SLACK_APP_TOKEN` | **Basic Information → App-Level Tokens**, for Socket Mode |
+| Conversation/report `channel_id` | Copy the channel ID at the bottom of its details in the Slack client |
+| Actor ID for an explicit allowlist | **Copy member ID** in the person's profile menu; not the Bot ID |
+
+Inject `AICR_SLACK_TOKEN` through your deployment environment, then use PowerShell 7 to print only the required IDs:
+
+```powershell
+if (-not $env:AICR_SLACK_TOKEN) { throw 'Set AICR_SLACK_TOKEN first.' }
+try {
+  $identity = Invoke-RestMethod -Method Post -Uri 'https://slack.com/api/auth.test' -Headers @{
+    Authorization = 'Bearer ' + $env:AICR_SLACK_TOKEN
+  } -ErrorAction Stop
+} catch { throw 'Slack auth.test failed; check the token and network locally.' }
+if (-not $identity.ok) { throw 'Slack rejected auth.test.' }
+$identity | Select-Object team_id, user_id
+```
+
+Set `bot_user_id` to this `user_id`, not `bot_id` or a human member ID.
+See the [auth.test response fields](https://docs.slack.dev/reference/methods/auth.test/).
+
+## Configure AICR
+
+Merge the YAML below, or sign in to the Dashboard and open **Config → IM connections → New im connection**.
+Select `slack_app`. This screenshot shows the identity fields of the real local form, using synthetic IDs.
+
+[![AICR Slack connection form with App ID, Team ID, Bot user ID and Token env](/images/integrations/slack-connection.png)](/images/integrations/slack-connection.png)
+
+Open the image for full resolution.
+
+The connection name must match the output/binding's `connection` and the last HTTP URL segment.
+For example, `slack-demo` uses `/callbacks/im/slack-demo`; the YAML below uses `bot`.
+Expand **Callback credentials** or **Socket Mode** for your chosen receiver, then configure reports and command authorization.
+For database configuration, first allow environment references by purpose and destination in the file's
+`config_sources.secret_refs`. After saving database form changes, verify the active revision and snapshot.
+Connection fields explicitly set in the file remain read-only in the UI.
+See [dynamic configuration and the management UI](/en/configuration/overview/#dynamic-configuration-api).
+
 ## Send reports
 
 Start from [example/slack-app.yaml](https://github.com/atframework/AICodeReviewer/blob/main/example/slack-app.yaml). Replace every synthetic ID and set its token variable. Keep credentials in `im.connections.bot`; the output channel references that connection and its exact destination. The example's `ws.outputs.summary: [report]` selects the report channel.
@@ -47,6 +105,12 @@ Start from [example/slack-app.yaml](https://github.com/atframework/AICodeReviewe
 File configuration alone can send reports. Merge your existing VCS/LLM configuration before running an actual review. A clean review sends only when the summary has content by default (`publish_if_summary`). Override `no_problems` per [output policy](/en/configuration/outputs/).
 
 Reports use named, workspace or built-in templates in the normal priority order. Slack/Telegram are bounded to 3900 UTF-16 units including the truncation notice and optional safe report link. Telegram sends text plus explicit entities; Discord disables allowed mentions; Slack escapes native controls.
+
+Reports have Review target, Summary and Problems sections, with each problem label on one line.
+Slack uses its own `mrkdwn`: headings and severity labels become single-asterisk bold text,
+and fence language labels are removed while code content is preserved.
+CRLF and excess prose spacing are normalized. Internal review markers are hidden outside code examples.
+Custom templates retain the priority described above. See [Slack's formatting reference](https://docs.slack.dev/messaging/formatting-message-text/).
 
 ## Enable commands
 

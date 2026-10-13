@@ -58,8 +58,139 @@ beforeEach(() => {
   store = createStoreDb(join(dir, "store.db"));
 });
 afterEach(async () => {
+  vi.useRealTimers();
   await closeStoreDb(store);
   rmSync(dir, { recursive: true, force: true });
+});
+it.each(
+  platforms.flatMap((platform) => [
+    [platform, "generation"] as const,
+    [platform, "config"] as const,
+  ]),
+)(
+  "includes blocked %s %s capture in the HTTP admission deadline",
+  async (platform, source) => {
+    const { config } = fixture(platform);
+    const client = await readyClient(platform);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const captured = vi.fn();
+    const app = new Hono();
+    registerImCallbackRoutes(app, {
+      store,
+      namespace: "social",
+      env: () => undefined,
+      now: () => NOW,
+      getConfig: async () => {
+        captured();
+        await gate;
+        return config;
+      },
+      ...(source === "generation"
+        ? {
+            getConfigGeneration: async () => {
+              captured();
+              await gate;
+              return { config, snapshotId: "snapshot", fileDigest: "digest" };
+            },
+          }
+        : {}),
+      socialClient: () => client,
+      reviewReady: () => true,
+    });
+    vi.useFakeTimers();
+    let received: Response | undefined;
+    const pending = app
+      .fetch(
+        callbackRequest(
+          platform,
+          source === "generation" ? "review demo " + SHA : "help",
+        ),
+      )
+      .then((value) => {
+        received = value;
+        return value;
+      });
+    try {
+      await vi.advanceTimersByTimeAsync(1001);
+      expect(captured).toHaveBeenCalledOnce();
+      expect(received?.status).toBe(503);
+    } finally {
+      release();
+      await pending;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(store.db.select().from(imReviewRequests).all()).toHaveLength(0);
+    expect(
+      store.sqlite.prepare("SELECT COUNT(*) AS count FROM im_inbox").get(),
+    ).toEqual({ count: 0 });
+  },
+);
+
+it.each(platforms)(
+  "returns a sanitized 503 when %s config capture rejects",
+  async (platform) => {
+    const { config } = fixture(platform);
+    const app = new Hono();
+    registerImCallbackRoutes(app, {
+      store,
+      namespace: "social",
+      env: () => undefined,
+      getConfig: () => config,
+      getConfigGeneration: async () => {
+        throw new Error("private connection details");
+      },
+    });
+    const response = await app.fetch(callbackRequest(platform, "help"));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "admission_unavailable" });
+    expect(
+      store.sqlite.prepare("SELECT COUNT(*) AS count FROM im_inbox").get(),
+    ).toEqual({ count: 0 });
+  },
+);
+
+it("does not reset the HTTP deadline after a slow generation capture", async () => {
+  const { config } = fixture("telegram");
+  const app = new Hono();
+  const client = await readyClient("telegram");
+  const cancel = vi.fn();
+  registerImCallbackRoutes(app, {
+    store,
+    namespace: "social",
+    env: () => undefined,
+    now: () => NOW,
+    getConfig: () => config,
+    getConfigGeneration: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      return { config, snapshotId: "snapshot", fileDigest: "digest" };
+    },
+    socialClient: () => client,
+  });
+  vi.useFakeTimers();
+  let received: Response | undefined;
+  const pending = app
+    .fetch(
+      new Request("http://localhost/callbacks/im/bot", {
+        method: "POST",
+        body: new ReadableStream<Uint8Array>({ cancel }),
+        duplex: "half",
+      } as RequestInit),
+    )
+    .then((value) => {
+      received = value;
+      return value;
+    });
+  try {
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(received?.status).toBe(503);
+    expect(cancel).toHaveBeenCalledOnce();
+  } finally {
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+  }
 });
 it.each(platforms)(
   "authenticates, persists and deduplicates %s without waiting for outbound work",

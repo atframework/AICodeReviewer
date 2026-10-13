@@ -1,4 +1,9 @@
 import { toSlackMarkdown } from "./im-markdown.js";
+import {
+  normalizeSocialImMarkdown,
+  splitMarkdownCode,
+  splitMarkdownFences,
+} from "./markdown-code.js";
 import type { SocialImMessage, TelegramMessageEntity } from "./social-im.js";
 
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
@@ -53,9 +58,15 @@ export function boundSocialMarkdown(
 export function toDiscordMarkdown(content: string, detailUrl?: string): string {
   // allowed_mentions also disables notifications; escaping avoids misleading mention markup.
   return boundSocialMarkdown(
-    content
-      .replace(/@(?=everyone|here|[!&]?\d)/gu, "@\u200b")
-      .replace(/<@/gu, "<@\u200b"),
+    splitMarkdownCode(normalizeSocialImMarkdown(content))
+      .map((segment) =>
+        segment.kind === "text"
+          ? segment.raw
+              .replace(/@(?=everyone|here|[!&]?\d)/gu, "@\u200b")
+              .replace(/<@/gu, "<@\u200b")
+          : segment.raw,
+      )
+      .join(""),
     1900,
     detailUrl,
   );
@@ -75,32 +86,53 @@ export function toTelegramMessage(
 ): SocialImMessage {
   let text = "";
   const entities: TelegramMessageEntity[] = [];
-  const input = content.replace(/^#{1,6}\s+/gmu, "");
-  const tokens =
-    /```[^\n]*\n([\s\S]*?)```|`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\(([^\n)]+)\)/gu;
-  let offset = 0;
-  for (const match of input.matchAll(tokens)) {
-    text += input.slice(offset, match.index);
-    const body = match[1] ?? match[2] ?? match[3] ?? match[4]!;
-    const type =
-      match[1] !== undefined
-        ? "pre"
-        : match[2] !== undefined
-          ? "code"
-          : match[3] !== undefined
-            ? "bold"
-            : "text_link";
-    if (type !== "text_link" || safeUrl(match[5]!))
-      entities.push({
-        type,
-        offset: text.length,
-        length: body.length,
-        ...(type === "text_link" ? { url: match[5]! } : {}),
-      });
+  const append = (
+    body: string,
+    bold: boolean,
+    entity?: Omit<TelegramMessageEntity, "offset" | "length">,
+  ) => {
+    if (!body) return;
+    if (entity)
+      entities.push({ ...entity, offset: text.length, length: body.length });
+    // Telegram forbids any style entity from overlapping code/pre, including full containment.
+    if (bold && entity?.type !== "code" && entity?.type !== "pre")
+      entities.push({ type: "bold", offset: text.length, length: body.length });
     text += body;
-    offset = match.index + match[0].length;
+  };
+  const inline = (source: string, bold = false, headings = true): void => {
+    const tokens = new RegExp(
+      /(?<!`)(`+)([^\n]*?)\1(?!`)|\*\*([^*]+)\*\*|\[([^\]\n]+)\]\(([^\n)]+)\)/u
+        .source + (headings ? /|^#{1,6}[ \t]+([^\n]*)/u.source : ""),
+      "gmu",
+    );
+    let offset = 0;
+    for (const match of source.matchAll(tokens)) {
+      append(source.slice(offset, match.index), bold);
+      if (match[2] !== undefined) append(match[2], false, { type: "code" });
+      else if (match[3] !== undefined) inline(match[3], true, false);
+      else if (match[4] !== undefined)
+        append(
+          match[4],
+          bold,
+          safeUrl(match[5]!)
+            ? { type: "text_link", url: match[5]! }
+            : undefined,
+        );
+      else inline(match[6]!, true, false);
+      offset = match.index + match[0].length;
+    }
+    append(source.slice(offset), bold);
+  };
+  for (const segment of splitMarkdownFences(
+    normalizeSocialImMarkdown(content),
+  )) {
+    if (segment.kind === "code_block")
+      append(segment.body, false, {
+        type: "pre",
+        ...(segment.language ? { language: segment.language } : {}),
+      });
+    else inline(segment.raw);
   }
-  text += input.slice(offset);
   const bounded = boundSocialMarkdown(text, 3900, detailUrl);
   const cut = bounded === text ? text.length : bounded.lastIndexOf(notice);
   return {

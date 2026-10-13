@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -27,6 +28,16 @@ const sampleProblem = {
 	codeLanguage: "ts",
 	fingerprint: "fp-1",
 };
+
+it.each(["slack_app", "discord_bot", "telegram_bot", "gitea_pr_review"])("keeps shipped %s problem templates consistent with the inline fallback", channelKind => {
+	const context = { problem: toTemplateProblem(sampleProblem) };
+	const fromFiles = createTemplateResolver({ channelKind, builtinTemplatesBaseDir: fileURLToPath(new URL("../../../templates/builtin", import.meta.url)) }).render("problem", context);
+	const fallback = renderBuiltinTemplate(channelKind, "problem", context);
+	expect(fromFiles.replace(/\r\n/gu, "\n")).toBe(fallback.replace(/\r\n/gu, "\n"));
+	expect(fromFiles).toContain("**HIGH · correctness**");
+	// Git publishers still need the bookkeeping marker; only IM presentation removes it.
+	expect(fromFiles).toContain("<!-- aicr:fingerprint=fp-1 -->");
+});
 
 it("lists the deployed built-in template document with the same fallback as rendering", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "aicr-builtin-list-"));

@@ -44,10 +44,16 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   (`social-callback.ts`), while Telegram uses the reply outbox. An absent inbox
   row may mean rejection before admission; require callback status/client error
   evidence before changing authentication, readiness or outbound permissions.
+  Start the HTTP admission deadline before asynchronous generation/config reads
+  in `callback-routes.ts`; carry that same deadline through body reads and the
+  transaction. A late config result must not admit work after a 503. Cover stalled
+  and rejected capture with `social-im-callbacks.test.ts`.
   For periodic `destination_not_ready`, trace cache expiry and refresh timing.
   Refresh before expiry and retain the original deadline during pending reads;
-  successful checks renew it, failed checks revoke it. Keep callbacks free of
-  metadata network calls. Cover pending refresh, expiry and failure with
+  successful checks renew it, failed checks revoke it. Share in-flight reads for
+  the same client/destination so overlapping checks cannot overwrite each other
+  out of order; release the pending entry on success and failure. Keep callbacks
+  free of metadata network calls. Cover overlap, pending refresh, expiry and failure with
   `social-im-readiness.test.ts` and outputs `social-im.test.ts`.
   Never log raw callback bodies, signatures, response URLs or interaction tokens.
   If Telegram commands yield no updates and no message link is available, use the

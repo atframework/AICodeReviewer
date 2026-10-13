@@ -6,6 +6,38 @@ import {
 } from "../src/bootstrap.js";
 import { fixture, platforms, apiFixture, SHA } from "./social-im-fixtures.js";
 afterEach(() => vi.unstubAllGlobals());
+it.each(platforms)("renders deployed templates into readable %s report payloads", async platform => {
+  const { config } = fixture(platform);
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  vi.stubGlobal("fetch", apiFixture(platform, calls));
+  const publisher = createOutputPublisherFromConfig(config, "report", undefined, "ws")!;
+  await publisher.publishSummary!("Review completed.", [{
+    file: "src/example.cpp", line: 42, severity: "high", category: "correctness",
+    message: "Check `row->value()` before use.", suggestion: "Add a guard.",
+    codeSnippet: "// keep code spacing\n\n\nif (row) { use(row->value()); }", codeLanguage: "cpp", fingerprint: "synthetic-fingerprint",
+  }]);
+  const writes = calls.filter(c => /chat\.postMessage$|\/messages$|sendMessage$/u.test(c.url));
+  expect(writes).toHaveLength(1);
+  const body = writes[0]!.body;
+  const text = String(body.text ?? body.content);
+  expect(text).toContain("HIGH · correctness");
+  expect(text).toContain("Problems (1)");
+  expect(text).not.toContain("aicr:fingerprint");
+  expect(text).not.toContain("\r");
+  expect(text).toContain("// keep code spacing\n\n\nif (row)");
+  expect(text).not.toContain("\n\n\n\n");
+  if (platform === "slack") {
+    expect(text).toContain("*HIGH · correctness*");
+    expect(text).not.toContain("```cpp");
+  }
+  if (platform === "telegram") {
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("`");
+    const entities = body.entities as { type: string; offset: number; length: number; language?: string }[];
+    expect(entities.some(e => e.type === "bold" && text.slice(e.offset, e.offset + e.length) === "HIGH · correctness")).toBe(true);
+    expect(entities.find(e => e.type === "pre")?.language).toBe("cpp");
+  }
+});
 it.each(platforms)(
   "restricts the %s legacy summary route to an exact repository and target kind",
   async (platform) => {

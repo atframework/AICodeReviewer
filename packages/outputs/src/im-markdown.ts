@@ -1,4 +1,5 @@
 import { fixAndValidateMarkdown } from "@aicr/core";
+import { normalizeSocialImMarkdown, splitMarkdownFences } from "./markdown-code.js";
 
 const FENCE_LINE_RE = /^(\s{0,3})(`{3,}|~{3,})/u;
 
@@ -210,7 +211,7 @@ export function toDingTalkMarkdown(content: string): string {
 // Does NOT support: headings (#), [text](url) links, tables.
 
 const SLACK_LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/gu;
-const SLACK_HEADING_RE = /^(#{1,6})\s+(.+)$/gmu;
+const SLACK_HEADING_RE = /^(#{1,6})[ \t]+(.+)$/gmu;
 const SLACK_BLOCKQUOTE_RE = /^>[ \t]?(.*)$/gmu;
 
 function slackFixLinks(text: string): string {
@@ -285,17 +286,24 @@ function slackFixTables(text: string): string {
  * - Links (`[text](url)` → `<url|text>`)
  * - Blockquotes (`> …` → `_…_`)
  * - Tables → plain-text rows
- * - Trailing spaces / consecutive blank lines cleaned via {@link fixAndValidateMarkdown}
+ * - Prose whitespace and internal metadata normalized without rewriting code
  */
 export function toSlackMarkdown(content: string): string {
-  const fixed = fixAndValidateMarkdown(content).replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
-  let transformed = applyTextTransform(fixed, (text) => {
-    let t = slackFixHeadings(text.replace(/\*\*([^*]+)\*\*/gu, "*$1*"));
-    t = slackFixLinks(t);
+  const escape = (text: string) => text.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+  const inline = (text: string): string => text.replace(
+    /(?<!`)(`+)([^\n]*?)\1(?!`)|\*\*([^*]+)\*\*|\[[^\]\n]+\]\([^\n)]+\)/gu,
+    (match, code: string | undefined, _body: string | undefined, bold: string | undefined) => {
+      if (code !== undefined) return match;
+      if (bold !== undefined) return inline(bold).split("\n").map(line => line ? `*${line}*` : "").join("\n");
+      return slackFixLinks(match);
+    },
+  );
+  // Protect inline source as well as fences; Slack does not interpret fence language labels.
+  return splitMarkdownFences(normalizeSocialImMarkdown(content)).map(segment => {
+    if (segment.kind === "code_block") return escape(segment.raw.replace(/^( {0,3})(`{3,}|~{3,})[^\n]*\n/u, "$1$2\n"));
+    let t = slackFixHeadings(inline(escape(segment.raw)));
     t = slackFixBlockquotes(t);
     t = slackFixTables(t);
     return t;
-  });
-  transformed = transformed.replace(/\n{3,}/gu, "\n\n");
-  return transformed.trim();
+  }).join("");
 }

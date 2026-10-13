@@ -1,6 +1,7 @@
 # Valid output configuration. Replace synthetic IDs and set the token environment variable.
 # Merge your LLM/provider and VCS credentials before enabling review commands.
 # Command setup: docs/site/src/content/docs/en/integrations/slack.md
+# bot_user_id is auth.test.user_id from the Bot token, not bot_id or a human actor.
 im:
   connections:
     bot:

@@ -92,6 +92,7 @@ id/username 及 getChat 的目标类型。不能按 ID 前缀猜测会话类型�
 元数据缓存有效期 300 秒（本地设计值），按 generation/身份/目的地隔离；失败或到期且未刷新则不 ready。
 后台每 30 秒检查，在剩余有效期不超过 60 秒时刷新，覆盖轮询间隔和两次各至多 10 秒的元数据请求。
 刷新期间保留原有效期限；成功才续期，失败立即失效。不能等过期才刷新，也不能在请求开始时清空仍有效的缓存。
+同一 client/目的地的并发刷新共享一次正在进行的探测，避免重复 API 请求和结果乱序覆盖；成功和失败都释放该入口，后续刷新可重新探测。
 预热范围只含已配置的输出和 binding 会话；不自动发现其他频道。Slack 增加 channels:read，
 使用私有频道时增加 groups:read；不申请历史或成员目录权限。
 readiness 不在 callback 内请求网络，失败则新接收/发送返回明确不可用，不能改用其他连接。
@@ -129,6 +130,8 @@ Telegram 无平台签名 timestamp，不能套用 Slack 5 分钟规则误拒合�
 对所有协议的同 key 不同业务 digest 返回冲突，不创建第二个请求；不保存原始聊天全文/response_url/token。
 
 内部 ACK 目标 1 秒，Slack/Discord 平台硬期限 3 秒（S2/D2）。实现须有可取消的接收预算：
+预算从异步读取 generation/config 前开始，配置读取、body 和事务共用同一 deadline；
+配置读取拒绝或超时返回脱敏 503，迟到的读取结果不能再进入命令接收。
 超时后不能启动新的提交或副作用；若事务结果不确定，按 delivery key 查询恢复，不返回虚假 accepted。
 验证失败 401；超限 413；存储不可用 503。已认证但未授权的命令可返回平台格式的通用拒绝，不能泄露仓库存在性。
 已认证未知非命令事件 2xx 忽略；有效 Discord PING 不写 inbox/request。
@@ -163,6 +166,11 @@ summary-only、line-comments-only、重复 summary 的发送次数沿用已有 p
 作者、路径、提交正文、模型文本及自定义模板全部是不可信消息内容；禁止把 `<@...>`、`<!channel>`、
 `@everyone` 或 Telegram mention entity 从正文自动升级为通知。
 Telegram transformer 将通用 Markdown 转成普通 text 与加粗/代码/安全 URL 等白名单实体；不直接把 Markdown 当 HTML/MarkdownV2。
+去除标题标记时须先识别代码块和行内代码，保留其中的 `#` 注释及换行；仅匹配同行空白，实体 offset/length 基于转换后实际文本。
+三平台先规范化 CRLF；只清理正文空白及 `aicr:` HTML 注释，不改代码中的空行、格式字符或同名注释。
+内置问题模板的磁盘文件与 inline fallback 保持一致，严重级别/分类在同一行；报告补齐 Problems 分节。
+Slack 去掉通用 Markdown 围栏的语言提示，转换加粗时保护行内代码；Telegram 标题转 bold，围栏语言写入 pre.language，bold 不与 code/pre 重叠。
+Git 发布仍保留 fingerprint 注释；命名/工作区模板的优先级不变，三平台转换在最终发布前执行。
 
 输出层可使用已有 summaryIssueUrl，但本期不扩展飞书专属 issue_link_card 模式和隐式跨渠道摘要链接策略。
 模板 named reference、workspace templates、built-in 的查找顺序不改变；新增内建模板必须进入资源打包和测试。

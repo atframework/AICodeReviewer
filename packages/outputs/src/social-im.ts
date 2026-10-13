@@ -26,6 +26,7 @@ export interface TelegramMessageEntity {
   readonly offset: number;
   readonly length: number;
   readonly url?: string;
+  readonly language?: string;
 }
 export interface SocialImMessage {
   readonly text: string;
@@ -49,6 +50,7 @@ export class SocialImClient {
   private readonly fetch: FetchLike;
   private readonly now: () => number;
   private readonly ready = new Map<string, number>();
+  private readonly readinessReads = new Map<string, Promise<boolean>>();
   private readonly rateLimits = new Map<string, number>();
   private botUsername: string | undefined;
   private readonly origin: string;
@@ -114,7 +116,17 @@ export class SocialImClient {
     return raw;
   }
   /** Called by background prewarming or an output worker, never by the callback handler. */
-  async refreshReadiness(destination: string): Promise<boolean> {
+  refreshReadiness(destination: string): Promise<boolean> {
+    const active = this.readinessReads.get(destination);
+    if (active) return active;
+    // Background refresh and concurrent output workers share one metadata result per target.
+    const pending = this.checkReadiness(destination).finally(() => {
+      this.readinessReads.delete(destination);
+    });
+    this.readinessReads.set(destination, pending);
+    return pending;
+  }
+  private async checkReadiness(destination: string): Promise<boolean> {
     let refreshed = false;
     try {
       const connection = this.connection;

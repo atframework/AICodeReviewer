@@ -8,7 +8,40 @@ Native author mentions, directories, buttons and natural-language requests are o
 
 ## Create and install
 
-Create a Bot with BotFather. Put its Bot API token in `AICR_TELEGRAM_TOKEN` and use `getMe` to obtain the numeric Bot ID and username. Set a separate `AICR_TELEGRAM_WEBHOOK_SECRET` containing 1–256 letters, digits, underscores or hyphens. The webhook secret is not the Bot token.
+Open [@BotFather](https://t.me/BotFather), send `/newbot` and follow the prompts for a display name and unique username.
+Inject the Bot API token into `AICR_TELEGRAM_TOKEN` through your deployment environment; keep it out of browser URLs, screenshots and chats.
+See [Telegram's creation tutorial](https://core.telegram.org/bots/tutorial).
+
+### Get the Bot ID and username
+
+Use PowerShell 7 to print only identity fields. This helper also supports the read queries below;
+errors omit the request URL, which contains the token.
+
+```powershell
+function Get-AicrTelegramInfo {
+  param(
+    [ValidateSet('getMe', 'getWebhookInfo', 'getUpdates', 'getChat', 'getChatMember')]
+    [string] $Method,
+    [hashtable] $Body = @{}
+  )
+  if (-not $env:AICR_TELEGRAM_TOKEN) { throw 'Set AICR_TELEGRAM_TOKEN first.' }
+  try {
+    $response = Invoke-RestMethod -Method Post -ContentType 'application/json' -Uri (
+      'https://api.telegram.org/bot' + $env:AICR_TELEGRAM_TOKEN + '/' + $Method
+    ) -Body ($Body | ConvertTo-Json -Compress) -ErrorAction Stop
+  } catch { throw 'Telegram request failed; check credentials and network locally.' }
+  if (-not $response.ok) { throw 'Telegram rejected the request.' }
+  return $response.result
+}
+$me = Get-AicrTelegramInfo -Method getMe
+$me | Select-Object id, username, is_bot
+```
+
+Set `im.connections.bot.bot_id` to `id` and use `username` in `/aicr@YourBotUsername`.
+Neither is the group ID. An authorized actor is a person's numeric ID, not their username.
+See [getMe](https://core.telegram.org/bots/api#getme).
+
+### Get the group ID
 
 For a private destination the user must start the Bot first. For a group, add the Bot and allow it to send messages; administrative rights are not required for an ordinary group. Keep privacy mode enabled and use directed `/aicr@BotUsername` commands in groups. Obtain the numeric chat ID and any explicit actor IDs from your authorized Bot administration workflow before enabling bindings.
 
@@ -25,6 +58,69 @@ Production webhook registration still uses `["message"]` and preserves pending u
 
 IDs are quoted decimal strings; group IDs can be negative. Only established private/group/supergroup chats are supported. Forum/topic, channel, business, anonymous `sender_chat`, bot-authored and edited updates do not trigger reviews. [Bot API](https://core.telegram.org/bots/api), [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
 
+For a new Bot with no webhook, load the helper above and run:
+
+```powershell
+$webhook = Get-AicrTelegramInfo -Method getWebhookInfo
+if ($webhook.url) { throw 'Webhook exists. Use its current receiver; do not poll or delete it.' }
+$targetGroupName = 'Your group name' # Change this to filter candidate events
+$updates = Get-AicrTelegramInfo -Method getUpdates -Body @{
+  allowed_updates = @('message', 'my_chat_member'); timeout = 0
+}
+foreach ($update in $updates) {
+  $event = if ($update.message) { $update.message } else { $update.my_chat_member }
+  if ($event.chat.title -eq $targetGroupName) {
+    [pscustomobject]@{
+      chat_id = [string]$event.chat.id; type = $event.chat.type; title = $event.chat.title
+      actor_id = [string]$event.from.id
+    }
+  }
+}
+```
+
+Run the query once to select the event types, send `/aicr@YourBotUsername chat-id` in the group, then query again.
+If it remains empty, remove and re-add the verified Bot and query again. AICR is not receiving these messages yet,
+so no command reply is expected. The display name only filters candidates: correlate the result with your command
+or membership change if names collide. A membership event's `actor_id` belongs to the person who changed membership,
+who may not be the reviewer you intend to authorize. Verify the resulting numeric ID and Bot membership:
+
+```powershell
+$chatId = '-1001234567890' # Replace with the verified value; do not derive it from an invitation link
+$chat = Get-AicrTelegramInfo -Method getChat -Body @{ chat_id = $chatId }
+$chat | Select-Object id, type, title, is_forum
+$member = Get-AicrTelegramInfo -Method getChatMember -Body @{ chat_id = $chatId; user_id = $me.id }
+$member | Select-Object status, is_member, can_send_messages
+```
+
+The type should be `group` or a non-forum `supergroup`; also confirm the Bot can send messages there.
+For an existing webhook, obtain IDs through the current receiver's authorized administration workflow;
+do not delete the webhook for this procedure. Once bindings exist, `chat-id` can reply with the current actor and conversation.
+
+## Configure AICR
+
+Set a separate `AICR_TELEGRAM_WEBHOOK_SECRET` containing 1–256 letters, digits, underscores or hyphens.
+It is different from the Bot token. For example, generate it in a deployment session and pass it to the service
+environment through your deployment tool, without printing its value:
+
+```powershell
+$env:AICR_TELEGRAM_WEBHOOK_SECRET = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+```
+
+Merge the YAML below, or sign in to the Dashboard and open **Config → IM connections → New im connection**.
+Choose `telegram_bot`. In **Callback credentials**, enable the callback and set the secret env reference.
+This screenshot shows the real local identity form with a synthetic ID.
+
+[![AICR Telegram connection form with numeric Bot ID and Token env](/images/integrations/telegram-connection.png)](/images/integrations/telegram-connection.png)
+
+Open the image for full resolution.
+
+The connection name must match the output/binding's `connection` and the last callback URL segment;
+the screenshot uses `telegram-demo`, while the YAML below uses `bot`.
+For database configuration, allow environment references by purpose and destination in the file's
+`config_sources.secret_refs`, then save, publish and verify the active revision and snapshot.
+See [dynamic configuration](/en/configuration/overview/#dynamic-configuration-api).
+Configure the group ID, command authorization and report channels, then deploy before registering the webhook.
+
 ## Send reports
 
 Start from [example/telegram-bot.yaml](https://github.com/atframework/AICodeReviewer/blob/main/example/telegram-bot.yaml).
@@ -35,6 +131,13 @@ See [output policy](/en/configuration/outputs/) for overrides.
 
 Named, workspace and built-in templates retain the normal priority. The final message budget is 3900 UTF-16 units including
 the truncation notice and optional safe report link. Telegram sends explicit UTF-16 entities without parse_mode.
+
+Reports have Review target, Summary and Problems sections. Headings and severity labels use bold entities,
+with each problem label on one line. Code uses separate code/pre entities; fence language labels become
+the pre entity's language instead of visible content. Bold labels containing inline code are split to avoid
+overlapping style and code entities. CRLF and excess prose spacing are normalized; internal review markers
+are hidden outside code examples, whose content is preserved.
+See [Telegram's formatting and entity rules](https://core.telegram.org/bots/api#formatting-options).
 
 ## Enable commands
 

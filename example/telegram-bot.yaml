@@ -1,6 +1,7 @@
 # Valid output configuration. Replace synthetic IDs and set the token environment variable.
 # Merge your LLM/provider and VCS credentials before enabling review commands.
 # Command setup: docs/site/src/content/docs/en/integrations/telegram.md
+# getMe.id is the Bot ID; getUpdates can discover a group ID only before a webhook is configured.
 im:
   connections:
     bot:

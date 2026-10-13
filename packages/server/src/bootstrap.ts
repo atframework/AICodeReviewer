@@ -73,6 +73,7 @@ import {
   toBoundedSlackMarkdown,
   toDiscordMarkdown,
   toTelegramMessage,
+  normalizeSocialImMarkdown,
   resolveAuthorAssignment,
   type AuthorResolutionOptions,
   type MentionChannelKind,
@@ -1421,6 +1422,9 @@ function createChannelRendering(
     targetUrlTemplates,
   );
 
+  const normalize = channel.kind === "slack_app" || channel.kind === "discord_bot" || channel.kind === "telegram_bot"
+    ? normalizeSocialImMarkdown : fixAndValidateMarkdown;
+
   return {
     mentionText: resolvedMention ?? baseTemplateContext.atMentions ?? "",
     renderProblem(problem: ReviewProblem): ReviewProblem {
@@ -1428,7 +1432,7 @@ function createChannelRendering(
         return problem;
       }
 
-      const renderedMarkdown = fixAndValidateMarkdown(resolver.render("problem", {
+      const renderedMarkdown = normalize(resolver.render("problem", {
         ...baseTemplateContext,
         ...(resolvedMention !== undefined ? { atMentions: resolvedMention } : {}),
         problem: toTemplateProblem(problem),
@@ -1437,7 +1441,7 @@ function createChannelRendering(
       return { ...problem, renderedMarkdown };
     },
     renderSummary(summary: string, problems: readonly ReviewProblem[], title?: string): string {
-      return fixAndValidateMarkdown(resolver.render("summary", {
+      return normalize(resolver.render("summary", {
         ...baseTemplateContext,
         ...(resolvedMention !== undefined ? { atMentions: resolvedMention } : {}),
         summary,
@@ -1950,7 +1954,7 @@ export function createOutputPublisherFromConfig(
         flushed = true;
         if (!client.isReady(destination) && !await client.refreshReadiness(destination)) return { channel: channel.name, status: "failed", raw: { kind: "rejected", code: "destination_not_ready" } };
         const rendered = (summaryProblems ?? problems).map(problem => rendering.renderProblem(problem));
-        const content = [rendering.renderSummary(summary, rendered, options?.title), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
+        const content = [rendering.renderSummary(summary, rendered, options?.title), ...(rendered.length ? [`## Problems (${rendered.length})`] : []), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
         const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl)
           : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl) : toDiscordMarkdown(content, options?.summaryIssueUrl) };
         const result = await client.sendMessage(destination, message);

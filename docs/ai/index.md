@@ -32,6 +32,8 @@ Slack 的 HTTP 命令验收需确认 Socket Mode 已关闭、命令 Request URL 
 SDC-13-live：Slack Socket Mode 需补跨刷新周期 help/chat-id ACK 与控制台/HTTP 回切；
 回切时核验应用级开关与接收器配置一致，并验证保留的 HTTP URL。实际命令回复与连接状态分列验收。
 真实命令可用性需跨越 readiness 缓存刷新周期验证；一次成功的签名探针不能替代连续接收证据。
+平台验收还需在并发命令和刷新重叠时观察 ACK 时限与实际回复；本地配置读取超时、刷新合并和代码块保真用例不能替代客户端证据。
+报告显示待复验单行问题标题、分节与空行、内部标记隐藏、Slack 围栏和 Telegram 嵌套实体；检查含代码的长报告在实际客户端的截断呈现。
 稳定配置与恢复约定见[接入规范](../design/slack-discord-telegram.md)，外部接口见
 [官方来源](sources/slack-discord-telegram.md)，使用文档见[目录](../README.md)。
 指定群/频道的 `conversation_users` 批量授权还需补真实成员变化与 status 归属证据；

@@ -1,0 +1,2 @@
+# These Handlebars assets emit Markdown; Glimmer formatting changes visible whitespace.
+templates/**/*.hbs

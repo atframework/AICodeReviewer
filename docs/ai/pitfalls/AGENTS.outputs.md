@@ -48,6 +48,16 @@ Sources: `packages/outputs/src/index.ts`, `template-engine.ts`, `im-markdown.ts`
 - `renderMarkdownCodeFence(content, language?)` takes source first. Markdown list
   repair must preserve bold/bold-italic markers and thematic breaks; use horizontal
   whitespace rather than `\s` across lines. MD022 heading repair skips fenced code.
+  Telegram heading removal must also tokenize fenced/inline code first; a global
+  heading regex strips source comments and changes entity offsets. Assert exact
+  code text and UTF-16 entities in outputs `social-im.test.ts`.
+  For social IM reports, normalize CRLF before collapsing prose blank lines and
+  remove `aicr:` comments only outside code. Keep Git bookkeeping intact. Use
+  actual shipped `.hbs` assets in `social-im-publishing.test.ts` and compare them
+  with inline fallbacks in `template-engine.test.ts`; hand-written strings miss
+  deployed-template line breaks. Keep Markdown-producing `templates/**/*.hbs`
+  in `.prettierignore`: the Glimmer formatter splits inline problem labels and
+  indents conditional content. Telegram bold must exclude code/pre spans.
 - Reused table regexes with `.test()` must not have the stateful `g` flag. IM
   dispatchers apply their platform transformer. Feishu JSON 2.0 preserves headings,
   tables, blockquotes and code: use `card.body.elements`, including appended mentions.
