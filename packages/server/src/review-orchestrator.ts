@@ -120,7 +120,7 @@ export interface ReviewSummaryPublishOptions {
 	readonly reviewedFiles?: readonly string[];
 	/**
 	 * URL of the full report already published to an issue-recording platform in
-	 * the same run. IM channels (feishu) use it to send a brief card + link
+	 * the same run. Feishu, Slack, Discord and Telegram use it to send brief notifications
 	 * instead of duplicating the full analysis.
 	 */
 	readonly summaryIssueUrl?: string;

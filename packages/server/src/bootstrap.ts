@@ -76,6 +76,7 @@ import {
   toBoundedSlackMarkdown,
   toDiscordMarkdown,
   toTelegramMessage,
+  buildImIssueLinkSections,
   normalizeSocialImMarkdown,
   resolveAuthorAssignment,
   type AuthorResolutionOptions,
@@ -1548,8 +1549,8 @@ function uniqueOutputPublisherEntries(entries: readonly OutputPublisherEntry[]):
 
 /**
  * Pull the canonical issue/PR URL out of an issue-channel dispatch result. GitHub
- * issue/PR creations expose `raw.html_url`; managed problem-issue reconciliations
- * nest it under `raw.issue.html_url`. Returns undefined when no URL was produced.
+ * issue/PR creations expose `raw.html_url` (GitLab: `web_url`); managed problem-issue
+ * reconciliations nest that record under `raw.issue`.
  */
 function extractIssueUrlFromResults(results: readonly DispatchResult[]): string | undefined {
   for (const result of results) {
@@ -1557,12 +1558,11 @@ function extractIssueUrlFromResults(results: readonly DispatchResult[]): string 
       continue;
     }
     const raw = result.raw as Record<string, unknown>;
-    if (typeof raw.html_url === "string" && raw.html_url) {
-      return raw.html_url;
-    }
-    const issue = raw.issue;
-    if (isPlainObject(issue) && typeof (issue as Record<string, unknown>).html_url === "string") {
-      return (issue as Record<string, unknown>).html_url as string;
+    for (const record of [raw, raw.issue]) {
+      if (!isPlainObject(record)) continue;
+      for (const key of ["html_url", "web_url"]) {
+        if (typeof record[key] === "string" && record[key]) return record[key];
+      }
     }
   }
   return undefined;
@@ -1582,14 +1582,15 @@ export function createCompositeOutputPublisher(
   const lineFlushCapable = uniqueOutputPublisherEntries(linePublishers.filter((entry) => entry.publisher.publishSummary));
   const summaryFlushCapable = uniqueOutputPublisherEntries([...lineFlushCapable, ...summaryCapable]);
   const summaryChannelNames = new Set(summaryCapable.map((entry) => entry.name));
-  // Issue-recording platforms host the full report; a feishu channel paired with one in the
-  // same run links that report instead of duplicating the analysis.
+  // Confirm the full report before sending a linked IM notification.
   const ISSUE_CHANNEL_KINDS: Record<string, true> = {
     github_issue: true, github_problem_issue: true, github_pr_review: true,
     gitea_issue: true, gitea_problem_issue: true, gitea_pr_review: true,
     gitlab_mr_review: true, gitlab_problem_issue: true,
   };
-  const FEISHU_CHANNEL_KINDS: Record<string, true> = { feishu_bot: true, feishu_app: true };
+  const LINKED_IM_CHANNEL_KINDS: Record<string, true> = {
+    feishu_bot: true, feishu_app: true, slack_app: true, discord_bot: true, telegram_bot: true,
+  };
   const calls = new Map<string, number>();
   let summarySequence = 0;
   const invoke = <T>(channel: string, phase: string, work: () => Promise<T>, ordinal?: number): Promise<T> => {
@@ -1641,7 +1642,8 @@ export function createCompositeOutputPublisher(
             const summaryOrdinal = summarySequence++;
             const noProblems = (problems?.length ?? 0) === 0;
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
-            const entries = noProblems ? summaryCapable : summaryFlushCapable;
+            const entries = [...(noProblems ? summaryCapable : summaryFlushCapable)].sort((a, b) =>
+              Number(b.kind !== undefined && ISSUE_CHANNEL_KINDS[b.kind] === true) - Number(a.kind !== undefined && ISSUE_CHANNEL_KINDS[a.kind] === true));
             let issueLinkUrl = options?.summaryIssueUrl;
             if (!issueLinkUrl && recovery?.remote) {
               for (const entry of entries) {
@@ -1673,8 +1675,8 @@ export function createCompositeOutputPublisher(
                 const firstResult = results.length;
                 const kind = entry.kind;
                 const isIssueChannel = kind !== undefined && ISSUE_CHANNEL_KINDS[kind] === true;
-                const isFeishuChannel = kind !== undefined && FEISHU_CHANNEL_KINDS[kind] === true;
-                const effectiveOptions = isFeishuChannel && issueLinkUrl
+                const isLinkedImChannel = kind !== undefined && LINKED_IM_CHANNEL_KINDS[kind] === true;
+                const effectiveOptions = isLinkedImChannel && issueLinkUrl
                   ? { ...options, summaryIssueUrl: issueLinkUrl }
                   : options;
                 try {
@@ -1986,33 +1988,37 @@ export function createOutputPublisherFromConfig(
     const client = registry.social(connection);
     const destination = channel.kind === "telegram_bot" ? channel.chat_id! : channel.channel_id!;
     const problems: ReviewProblem[] = [];
-    let flushed = false;
+    let flush: Promise<DispatchResult> | undefined;
     return {
       handlesRendering: true, noProblemsAction, publishEmptySummary,
       async publishProblem(problem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "buffered" };
+        return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary, summaryProblems, options): Promise<DispatchResult> {
-        if (flushed) return { channel: channel.name, status: "buffered", raw: { action: "already_flushed" } };
-        flushed = true;
-        if (!client.isReady(destination) && !await client.refreshReadiness(destination)) return { channel: channel.name, status: "failed", raw: { kind: "rejected", code: "destination_not_ready" } };
-        let authorUserId: string | undefined;
-        if (reviewEvent && channel.mention_author !== false && (channel.mention_author === true || channel.member_directory || channel.author_mappings)) {
-          try {
-            authorUserId = await resolveSocialImAuthorId({ config, channel, client, destination, event: reviewEvent, baseDir, workspaceId, guesser: authorGuesser });
-          } catch {
-            console.warn("[outputs] Social IM member directory unavailable; sending report without mentions.");
+        flush ??= (async (): Promise<DispatchResult> => {
+          if (!client.isReady(destination) && !await client.refreshReadiness(destination)) return { channel: channel.name, status: "failed", raw: { kind: "rejected", code: "destination_not_ready" } };
+          let authorUserId: string | undefined;
+          if (reviewEvent && channel.mention_author !== false && (channel.mention_author === true || channel.member_directory || channel.author_mappings)) {
+            try {
+              authorUserId = await resolveSocialImAuthorId({ config, channel, client, destination, event: reviewEvent, baseDir, workspaceId, guesser: authorGuesser });
+            } catch {
+              console.warn("[outputs] Social IM member directory unavailable; sending report without mentions.");
+            }
           }
-        }
-        const rendered = (summaryProblems ?? problems).map(problem => rendering.renderProblem(problem));
-        const content = [rendering.renderSummary(summary, rendered, options?.title), ...(rendered.length ? [`## Problems (${rendered.length})`] : []), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
-        const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl, authorUserId)
-          : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl, authorUserId) : toDiscordMarkdown(content, options?.summaryIssueUrl, authorUserId),
-            ...(channel.kind === "discord_bot" && authorUserId ? { allowedUserMentions: [authorUserId] } : {}) };
-        const result = await client.sendMessage(destination, message);
-        return result.kind === "delivered" ? { channel: channel.name, status: "published", externalId: result.receipt.messageId }
-          : { channel: channel.name, status: "failed", raw: { kind: result.kind, code: result.code, ...(result.kind === "rejected" && result.retryAt ? { retryAt: result.retryAt } : {}) } };
+          const rendered = (summaryProblems ?? problems).map(problem => rendering.renderProblem(problem));
+          const renderedSummary = rendering.renderSummary(summary, rendered, options?.title);
+          const content = options?.summaryIssueUrl
+            ? buildImIssueLinkSections(rendered, renderedSummary, { url: options.summaryIssueUrl, label: "View full report" }).join("\n")
+            : [renderedSummary, ...(rendered.length ? [`## Problems (${rendered.length})`] : []), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
+          const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl, authorUserId)
+            : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl, authorUserId) : toDiscordMarkdown(content, options?.summaryIssueUrl, authorUserId),
+              ...(channel.kind === "discord_bot" && authorUserId ? { allowedUserMentions: [authorUserId] } : {}) };
+          const result = await client.sendMessage(destination, message);
+          return result.kind === "delivered" ? { channel: channel.name, status: "published", externalId: result.receipt.messageId }
+            : { channel: channel.name, status: "failed", raw: { kind: result.kind, code: result.code, ...(result.kind === "rejected" && result.retryAt ? { retryAt: result.retryAt } : {}) } };
+        })();
+        return flush;
       },
     };
   }
@@ -2493,7 +2499,7 @@ export function createOutputPublisherFromConfig(
       handlesRendering: true, noProblemsAction, publishEmptySummary,
       async publishProblem(problem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "buffered" };
+        return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary, summaryProblems, options): Promise<DispatchResult> {
         let mention = "";

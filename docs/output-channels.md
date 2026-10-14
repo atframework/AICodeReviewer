@@ -9,6 +9,15 @@ referencing `im.connections`. See the [protocol contract](design/slack-discord-t
 and bilingual [user guide index](README.md#用户文档). Credentials and exact platform
 identity belong to the connection; destinations belong to output channels.
 Problems buffer into one bounded summary flush, including a line-only route.
+When the same review records its report in an issue, issue channels run before
+IM notifications. A confirmed issue URL selects a brief Slack/Discord/Telegram
+notification: headline, problem count, severity/category/location titles and a
+full-report link, with the author mention preserved. Analysis, suggestions and
+code stay in the issue. Without a usable confirmed URL, the full IM report is
+retained. Recovery reuses the confirmed journal URL without reposting the issue.
+Locally collected problems are pending publication; only the actual channel
+flush or its durable receipt settles the IM review outcome. Repeated social
+summary calls reuse the first flush result without another message.
 Slack/Telegram use a 3900 UTF-16-unit budget, Discord 1900; metadata counts toward it.
 Author mentions use channel-local `author_mappings` or a configured member directory.
 `slack_api` reads destination members and workspace profiles; `discord_api` reads
@@ -37,7 +46,10 @@ failed; missing/ambiguous receipts remain unknown. PublicationJournal persists
 write-ahead identities and replays confirmed receipts without POST. Unknown
 unqueryable writes do not authorize resend. Versioned reply outbox payloads are
 separate from remote receipts; `sending` is persisted before POST and an expired
-lease becomes unknown. Only explicit 429 due times authorize later reply retries.
+lease becomes unknown. Before POST, local config/credential/store errors back
+off with a persisted due time and exhaust into `failed` after five attempts.
+After POST starts, only explicit 429 due times authorize later reply retries;
+unknown sends are never automatically repeated.
 
 HTTP callbacks authenticate bounded raw bytes before admission. Telegram short
 replies commit with the inbox/request; Slack/Discord ACK replies are ephemeral.

@@ -3,6 +3,7 @@ import { resolve, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appConfigSchema, type ReviewEvent } from "@aicr/core";
 import { createOutputPublisherFromConfig, createCompositeOutputPublisher } from "../src/bootstrap.js";
+import { classifyImReviewResult } from "../src/im/manual-review-service.js";
 
 const event: ReviewEvent = { triggerName: "p4", provider: "p4", workspaceId: "team", targetKind: "commit",
   repoRef: "//depot/main", headSha: "42", reason: "p4:commit", submitterWorkspace: "build_alice_PC", author: { username: "buildbot" } };
@@ -31,6 +32,14 @@ function card(calls: ReturnType<typeof stubApi>) {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Feishu app configured publisher", () => {
+  it("settles locally collected findings using the delivered card outcome", async () => {
+    stubApi();
+    const publisher=createOutputPublisherFromConfig(config({mention_author:false}),"app",undefined,"team",event)!;
+    const problem={file:"a.ts",line:1,severity:"high" as const,category:"correctness",message:"finding"};
+    const collected=await publisher.publishProblem!(problem);
+    const sent=await publisher.publishSummary!("summary",[problem]);
+    expect(classifyImReviewResult({status:"published",dispatchResults:[collected,sent].flat()}).state).toBe("succeeded");
+  });
   it("mentions the P4 workspace owner when admin matches another member's email prefix", async () => {
     const calls = stubApi();
     const baseFetch = globalThis.fetch;

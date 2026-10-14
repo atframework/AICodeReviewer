@@ -162,15 +162,25 @@ export class ImReplyService {
   }
 
   private async deliverSocial(row: ImReplyNotificationRow): Promise<void> {
-    const payload = parseSocialReplyPayload(row.payloadJson ?? "");
-    const config = await this.options.getConfig();
-    if (!payload || row.destinationIdentity !== payload.connectionIdentity || !await socialReplyAuthorized(config, row.namespace, payload, this.options.store)) {
-      await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "rejected", now: this.now() });
-      return;
-    }
-    const connection = config.im?.connections?.[payload.connectionName];
-    if (!connection || (connection.kind !== "slack_app" && connection.kind !== "discord_bot" && connection.kind !== "telegram_bot")) return;
+    let postStarted = false;
+    let connectionName: string | undefined;
     try {
+      if (row.attempts > MAX_ATTEMPTS) {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "failed", now: this.now() });
+        return;
+      }
+      const payload = parseSocialReplyPayload(row.payloadJson ?? "");
+      connectionName = payload?.connectionName;
+      const config = await this.options.getConfig();
+      if (!payload || row.destinationIdentity !== payload.connectionIdentity || !await socialReplyAuthorized(config, row.namespace, payload, this.options.store)) {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "rejected", now: this.now() });
+        return;
+      }
+      const connection = config.im?.connections?.[payload.connectionName];
+      if (!connection || (connection.kind !== "slack_app" && connection.kind !== "discord_bot" && connection.kind !== "telegram_bot")) {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence, state: "rejected", now: this.now() });
+        return;
+      }
       const client = imConnectionRegistryFor(config, { env: this.options.env, ...(this.options.fetch ? { fetch: this.options.fetch } : {}), now: () => this.now().getTime() }).social(connection);
       const destination = "id" in payload.conversation ? payload.conversation.id : payload.actor.id;
       if (!client.isReady(destination) && !await client.refreshReadiness(destination)) {
@@ -188,17 +198,31 @@ export class ImReplyService {
         return;
       }
       const message = connection.kind === "telegram_bot" ? toTelegramMessage(payload.text) : { text: connection.kind === "slack_app" ? toBoundedSlackMarkdown(payload.text) : toDiscordMarkdown(payload.text) };
+      postStarted = true;
       const result = await client.sendMessage(destination, message, this.abort.signal);
       const retryAt = result.kind === "rejected" ? result.retryAt : undefined;
       const canRetry = retryAt !== undefined && row.attempts < MAX_ATTEMPTS && (row.expiry === null || retryAt < row.expiry.getTime());
       await finishImReplyNotification(this.options.store, {
         operationId: row.operationId, fence: row.fence, owner: this.owner,
-        state: result.kind === "delivered" ? "delivered" : result.kind === "unknown" ? "unknown" : canRetry ? "pending" : "rejected",
+        state: result.kind === "delivered" ? "delivered" : result.kind === "unknown" ? "unknown" : canRetry ? "pending"
+          : retryAt !== undefined && row.attempts >= MAX_ATTEMPTS ? "failed" : "rejected",
         ...(canRetry ? { retryAt: new Date(retryAt) } : {}),
         compactReceipt: JSON.stringify(result.kind === "delivered" ? result.receipt : { code: result.code }), now: this.now(),
       });
     } catch {
-      // A post may have completed. Keep sending fenced until expiry turns it into unknown.
+      // Raw transport/config errors can contain credentials or Telegram token URLs.
+      console.warn(JSON.stringify({ msg: "im_reply_send_failed", operationId: row.operationId, connection: connectionName,
+        code: postStarted ? "post_send_unknown" : "pre_send_failed" }));
+      if (postStarted) return; // Keep sending fenced; a completed POST cannot be safely repeated.
+      const now = this.now();
+      const retryAt = new Date(now.getTime() + BACKOFF_BASE_MS * 2 ** Math.min(row.attempts, MAX_ATTEMPTS));
+      const canRetry = row.attempts < MAX_ATTEMPTS && (row.expiry === null || retryAt < row.expiry);
+      try {
+        await finishImReplyNotification(this.options.store, { operationId: row.operationId, fence: row.fence,
+          state: canRetry ? "pending" : "failed", ...(canRetry ? { retryAt } : {}), now });
+      } catch {
+        console.warn(JSON.stringify({ msg: "im_reply_state_update_failed", operationId: row.operationId, code: "store_unavailable" }));
+      }
     }
   }
 

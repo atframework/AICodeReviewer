@@ -217,18 +217,18 @@ function assertSummaryPublisher(publisher: OutputPublisher | undefined): asserts
 }
 
 describe("createCompositeOutputPublisher publication recovery", () => {
-  it("retains the full report link when its confirmed issue channel is skipped", async () => {
+  it.each(["feishu_app", "slack_app", "discord_bot", "telegram_bot"].flatMap(kind => ["html_url", "web_url"].map(field => ({kind,field}))))("retains the $kind report link ($field) when its confirmed issue channel is skipped", async ({kind,field}) => {
     const issue = vi.fn();
     const im = vi.fn(async () => ({ channel: "im", status: "published" as const }));
     const remote = new PublicationJournal({ batchId: "batch", save: async () => {}, operations: [{
       id: "a".repeat(64), channel: "issue", call: "summary:0", strategy: "marker", status: "confirmed",
       target: "https://git.test/repos/o/r/issues", scope: "https://git.test/repos/o/r", collection: true,
       attempts: 1, reconciliations: 0, firstAttemptAt: 1, updatedAt: 1,
-      response: { status: 201, data: { id: 1, html_url: "https://git.test/o/r/issues/1" } },
+      response: { status: 201, data: { id: 1, [field]: "https://git.test/o/r/issues/1" } },
     }] });
     const composite = createCompositeOutputPublisher([], [
-      { name: "issue", kind: "gitea_problem_issue", publisher: { publishSummary: issue } },
-      { name: "im", kind: "feishu_app", publisher: { publishSummary: im } },
+      { name: "issue", kind: field === "web_url" ? "gitlab_problem_issue" : "gitea_problem_issue", publisher: { publishSummary: issue } },
+      { name: "im", kind, publisher: { publishSummary: im } },
     ], { remote, skipChannels: new Set(["issue"]) })!;
     await composite.publishSummary!("summary", []);
     expect(issue).not.toHaveBeenCalled();

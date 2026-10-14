@@ -57,6 +57,8 @@ See [output policy](/en/configuration/outputs/) for overrides.
 Named, workspace and built-in templates retain the normal priority. The final message budget is 1900 UTF-16 units including
 the truncation notice and optional safe report link. Discord permits only host-resolved author mentions and URL previews are controlled by the platform.
 
+When the same review also publishes its full report through an issue channel, AICR sends the issue first and uses its confirmed URL for a brief notification: a headline, problem count, severity/category/location titles and a full-report link. Native author reminders are preserved. Analysis, suggestions and code remain in the issue. Without a usable confirmed URL, including an issue write failure, the channel keeps the full report. Route order does not change this behavior; no new channel option is required.
+
 Reports have Review target, Summary and Problems sections, with each problem label on one line.
 CRLF and excess prose spacing are normalized. Internal review markers are hidden outside code,
 while code fences, language labels and content are preserved. Custom templates retain the priority above;
@@ -172,8 +174,10 @@ Disable the binding/connection/callback to stop new work. Rotate secrets through
 A changed app/guild/Bot identity prevents delivery of old notifications through the replacement connection.
 
 Complete matching receipts become `delivered`; explicit failures become `rejected`.
-Only an explicit 429 authorizes a timed reply retry. Lost responses, server failures and expired `sending` leases become `unknown`;
+After POST starts, only an explicit 429 authorizes a timed reply retry. Lost responses, server failures and expired `sending` leases become `unknown`;
 they are never automatically resent. Inspect remote messages and journal/outbox state before arranging a new request.
+
+Local configuration, credential or storage errors before POST back off with a persisted due time. These safe retries and explicit rate-limit retries share a five-attempt budget; exhaustion becomes `failed`. A possible POST or missing receipt persistence stays fenced as `sending`, then becomes `unknown` when its lease expires. Logs contain fixed error codes, never raw upstream errors.
 
 Before rollback, stop ingress and drain workers, then change binaries or restore a compatible backup.
 Migration 013 adds the versioned reply payload column. Do not delete request/journal/outbox data to clear unknown results.

@@ -32,20 +32,24 @@ export function classifyImReviewResult(result: Pick<ReviewOrchestrationResult, "
   readonly state: ImTerminalState;
   readonly errorCode?: string;
 } {
-  if (result.dispatchResults.some(entry => entry.status === "buffered")) {
+  // Local collection is not a delivery receipt. A later flush must settle that channel.
+  const dispatchResults = result.dispatchResults.filter(entry => (entry.raw as { collected?: unknown } | undefined)?.collected !== true);
+  const settledChannels = new Set([...dispatchResults.map(entry => entry.channel),
+    ...receipts.filter(receipt => receipt.status === "published" || receipt.status === "failed").map(receipt => receipt.channel)]);
+  if (result.dispatchResults.some(entry => !settledChannels.has(entry.channel)) || dispatchResults.some(entry => entry.status === "buffered")) {
     return { state: "publication_unknown", errorCode: "im.publication_buffered" };
   }
   if (receipts.some(receipt => receipt.status === "unknown" || receipt.status === "pending")
-    || result.dispatchResults.some(entry => entry.status === "failed" && receiptStatusForDispatch(entry, "summary")?.status === "unknown")) {
+    || dispatchResults.some(entry => entry.status === "failed" && receiptStatusForDispatch(entry, "summary")?.status === "unknown")) {
     return { state: "publication_unknown", errorCode: "im.publication_unknown" };
   }
-  if (receipts.some(receipt => receipt.status === "failed") || result.dispatchResults.some(entry => entry.status === "failed")) {
-    return receipts.some(receipt => receipt.status === "published") || result.dispatchResults.some(entry => entry.status === "published" || Number((entry.raw as { deliveredParts?: unknown } | undefined)?.deliveredParts) > 0)
+  if (receipts.some(receipt => receipt.status === "failed") || dispatchResults.some(entry => entry.status === "failed")) {
+    return receipts.some(receipt => receipt.status === "published") || dispatchResults.some(entry => entry.status === "published" || Number((entry.raw as { deliveredParts?: unknown } | undefined)?.deliveredParts) > 0)
       ? { state: "partial", errorCode: "im.publication_partial" }
       : { state: "failed", errorCode: "im.publication_failed" };
   }
   if (receipts.some(receipt => receipt.lastError === "recipient_partial")
-    || result.dispatchResults.some(entry => receiptStatusForDispatch(entry, "summary")?.lastError === "recipient_partial")) {
+    || dispatchResults.some(entry => receiptStatusForDispatch(entry, "summary")?.lastError === "recipient_partial")) {
     return { state: "partial", errorCode: "im.publication_partial" };
   }
   if (result.status === "dry_run" || result.skipReason === "no_output_publisher" || result.skipReason === "output_dispatch_failed") {

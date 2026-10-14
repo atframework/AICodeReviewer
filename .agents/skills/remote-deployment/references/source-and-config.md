@@ -65,10 +65,17 @@ host snapshot or secrets into a committed helper.
   See `ensure_writable_tree` and `deploy-private-permissions.test.ts`.
 - Name pre-migration DB/config backups with a unique second-resolution path and
   confirm the target differs from any cleanup path before removing superseded
-  partials; a same-minute collision has silently deleted a fresh backup. Once a
-  deployment enables database configuration, a changed file digest fails
-  admission closed (`file_config_mismatch`); restore the matching file or adopt
-  the new digest through a published changeset before restarting.
+  partials; a same-minute collision has silently deleted a fresh backup.
+- With database configuration enabled, inspect the durable head before preparing
+  a file update. A healthy revision 0 `legacy_import` baseline can have no head;
+  prepare its first publication with `baseRevision: null` and `current: {}` through
+  `prepareConfigPublication`/`publishConfig`. Preserve the legacy snapshot used
+  by older tasks. For an existing head, retain its revision and database document;
+  a changed file digest fails admission closed (`file_config_mismatch`) until a
+  matching changeset is published. See the
+  [runtime manager](../../../../packages/server/src/runtime-config.ts),
+  [admin publication path](../../../../packages/server/src/config-api.ts), and
+  [H12 baseline test](../../../../packages/server/test/runtime-config.test.ts).
 
 ## Retention after a successful deployment
 

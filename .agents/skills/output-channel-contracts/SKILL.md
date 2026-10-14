@@ -91,6 +91,12 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   with global/workspace overrides and platform label resolution. Gitea managed
   issues include creation labels in `body.labels`.
 - Test mixed-channel suppression/publication and relevant PR/non-PR templates.
+  Local `raw.collected` results are pending, not delivery receipts; classify the
+  actual flush or durable receipt for the same channel. Unflushed collection
+  remains unknown, and repeated social summaries reuse the first flush outcome.
+  For reply outbox exceptions, distinguish failure before POST from ambiguous
+  sends: persist bounded pre-send retry/backoff, retain post-send fencing, and
+  log fixed codes only. Cover both sides in `social-im-replies.test.ts`.
   Sync affected config/examples, output docs, public locales and roadmap entries;
   run applicable final gates from the repository baseline.
 - For routing changes, compare preview with actual publisher calls in old/new

@@ -26,6 +26,7 @@ workspaces:
     ws:
       source_repo: { trigger: git, repo: org/demo }
       outputs:
+        # Add an existing issue channel here for brief notifications with the confirmed report link.
         summary: [report]
 outputs:
   channels:

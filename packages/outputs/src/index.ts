@@ -5800,7 +5800,7 @@ function buildFeishuReportBody(
 ): Record<string, unknown> {
 	const detailLink = aggregatedOptions?.detailLink;
 	const sections = detailLink
-		? buildFeishuIssueLinkSections(problems, summary, detailLink, aggregatedOptions?.issueLinkCard ?? "titles")
+		? buildImIssueLinkSections(problems, summary, detailLink, aggregatedOptions?.issueLinkCard ?? "titles")
 		: [...(summary ? [summary.trim()] : []), ...buildImProblemSections(problems)];
 	const extraElements: Record<string, unknown>[] = mentionText ? [{ tag: "markdown", content: mentionText }] : [];
 	// IM-15 card action button: the value carries only the opaque action id —
@@ -5821,16 +5821,15 @@ function buildFeishuReportBody(
 }
 
 /**
- * Card for deployments whose summary route also publishes the full report to an
- * issue-recording platform: keep the headline and link the detailed issue, with
- * the per-problem content controlled by `mode` (`titles` by default). The
- * @mention rides the separate element appended by the caller, so it is preserved.
+ * Sections shared by issue-linked IM notifications. Keep the headline and issue
+ * link, with per-problem content selected by mode (titles by default). Callers
+ * append platform-native author mentions separately.
  */
-function buildFeishuIssueLinkSections(
+export function buildImIssueLinkSections(
 	problems: readonly ReviewProblem[],
 	summary: string | undefined,
 	detailLink: { readonly url: string; readonly label: string },
-	mode: FeishuIssueLinkCardMode,
+	mode: FeishuIssueLinkCardMode = "titles",
 ): string[] {
 	const headline = summary?.trim().split("\n").find((line) => line.trim().length > 0)?.trim();
 	const sections: string[] = [];

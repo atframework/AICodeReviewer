@@ -131,6 +131,8 @@ file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，�
 模板仍按 named、workspace、内置的正常优先级选择。总预算为 3900 个 UTF-16 单位，
 包含截断提示及可用的安全报告链接。Telegram 使用显式 UTF-16 entities，不开启 parse_mode。
 
+同次审查还通过 issue 渠道发布完整报告时，AICR 先发送 issue，再使用其已确认链接发送简要通知：标题、问题数、严重级别/分类/位置和详情链接，并保留作者提醒。分析、建议和代码留在 issue。没有可用的已确认链接（包括 issue 写入失败）时，渠道仍发送完整报告。此行为不依赖渠道配置顺序，也不需要新增渠道选项。
+
 报告按 Review target、Summary、Problems 分节，标题和严重级别使用加粗实体，问题标题保持单行。
 代码使用独立的 code/pre 实体，围栏语言提示写入 pre 的 language，不作为正文显示。
 含行内代码的加粗标签会分段，避免样式与代码实体重叠。
@@ -224,8 +226,10 @@ ACK 只代表接收，不代表完成分析。后台 readiness 核对平台身�
 改变 app/guild/Bot 身份后，旧通知不会转发给同名新连接。
 
 完整且目的地匹配的回执才是 `delivered`；明确失败是 `rejected`。
-仅明确的 429 允许到期重试回复。丢失响应、服务端失败和过期 `sending` lease 保留为 `unknown`，不会自动重发。
+进入 POST 后，仅明确的 429 允许到期重试回复。丢失响应、服务端失败和过期 `sending` lease 保留为 `unknown`，不会自动重发。
 先查远端消息与 journal/outbox，再决定是否创建新请求。
+
+进入 POST 前的本地配置、凭据或存储异常按持久 due time 退避。这些安全重试与明确限流重试共用最多五次的预算，耗尽时为 `failed`。可能已经发送或回执落库失败时保留 `sending` 围栏，租约到期后为 `unknown`。日志只保留固定错误码，不记录上游原始错误。
 
 回滚前停用 ingress 并排空 worker，再更换程序或恢复兼容备份。迁移 013 新增版本化 reply payload 列；
 不要删除请求、journal/outbox 来清除 unknown。注销平台资源前核对当前归属，只处理本部署拥有的资源。

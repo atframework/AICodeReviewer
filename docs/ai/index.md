@@ -34,9 +34,11 @@ SDC-13-live：Slack Socket Mode 需补跨刷新周期 help/chat-id ACK 与控制
 真实命令可用性需跨越 readiness 缓存刷新周期验证；一次成功的签名探针不能替代连续接收证据。
 平台验收还需在并发命令和刷新重叠时观察 ACK 时限与实际回复；本地配置读取超时、刷新合并和代码块保真用例不能替代客户端证据。
 报告显示待复验单行问题标题、分节与空行、内部标记隐藏、Slack 围栏和 Telegram 嵌套实体；检查含代码的长报告在实际客户端的截断呈现。
+真实平台还需核验 issue 成功后的简要通知、issue 失败时的全文回退、恢复链接及截断后作者提醒；
+确认终态采用实际 flush 回执，并验收发送前五次退避耗尽与未知发送不重发。
 作者提醒待补真实平台验收：核对映射/目录中的人类用户 ID、Slack 实际 Bot scopes 与频道成员资格、
 Discord Server Members Intent 和目标可见性、Telegram 用户 ID 与隐私条件；验证精确 @、歧义省略、
-权限撤销和长报告截断后的通知。HTTP 替身中的提及 payload 不能替代客户端通知证据。
+权限撤销和长报告截断后的通知。真实目录读取、宿主本地构造的提及 payload 和健康检查不能替代客户端通知证据。
 稳定配置与恢复约定见[接入规范](../design/slack-discord-telegram.md)，外部接口见
 [官方来源](sources/slack-discord-telegram.md)，使用文档见[目录](../README.md)。
 指定群/频道的 `conversation_users` 批量授权还需补真实成员变化与 status 归属证据；

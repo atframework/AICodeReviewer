@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as storeApi from "@aicr/store";
 import {
   createStoreDb,
   closeStoreDb,
@@ -21,8 +22,225 @@ beforeEach(() => {
   store = createStoreDb(join(dir, "store.db"));
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeStoreDb(store);
   rmSync(dir, { recursive: true, force: true });
+});
+it.each(platforms)(
+  "bounds %s pre-send credential failures across worker restarts without leaking errors",
+  async (platform) => {
+    const f = await seed(platform);
+    const connection = f.config.im!.connections!.bot!;
+    delete connection.token;
+    connection.token_env = "SOCIAL_REPLY_TEST_TOKEN";
+    let now = NOW;
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const service = new ImReplyService({
+        store,
+        getConfig: () => f.config,
+        env: () => {
+          throw new Error("do-not-log-secret-token");
+        },
+        fetch: apiFixture(platform, calls),
+        now: () => new Date(now),
+      });
+      await service.scan();
+      await service.stop();
+      const row = store.db.select().from(imReplyOutbox).get()!;
+      expect(row.attempts).toBe(attempt);
+      expect(row.state).toBe(attempt === 5 ? "failed" : "pending");
+      if (attempt < 5) {
+        expect(row.nextAttemptAt!.getTime()).toBeGreaterThan(now);
+        now = row.nextAttemptAt!.getTime();
+      }
+    }
+    now += 86_400_000;
+    const fresh = new ImReplyService({
+      store,
+      getConfig: () => f.config,
+      env: () => undefined,
+      fetch: apiFixture(platform, calls),
+      now: () => new Date(now),
+    });
+    await fresh.scan();
+    await fresh.stop();
+    expect(store.db.select().from(imReplyOutbox).get()!).toMatchObject({
+      state: "failed",
+      attempts: 5,
+    });
+    expect(calls).toHaveLength(0);
+    expect(log).toHaveBeenCalled();
+    expect(JSON.stringify(log.mock.calls)).not.toContain(
+      "do-not-log-secret-token",
+    );
+  },
+);
+
+it.each([1, 2, 3])(
+  "backs off a config read failure at pre-send stage %i and recovers without a duplicate",
+  async (failAt) => {
+    const f = await seed("telegram");
+    let now = NOW;
+    let reads = 0;
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const service = new ImReplyService({
+      store,
+      getConfig: () => {
+        if (++reads === failAt) throw new Error("do-not-log-config-secret");
+        return f.config;
+      },
+      env: () => undefined,
+      fetch: apiFixture("telegram", calls),
+      now: () => new Date(now),
+    });
+    await service.scan();
+    await service.stop();
+    const row = store.db.select().from(imReplyOutbox).get()!;
+    expect(row.state).toBe("pending");
+    expect(calls.filter((c) => c.url.endsWith("sendMessage"))).toHaveLength(0);
+    now = row.nextAttemptAt!.getTime();
+    const fresh = new ImReplyService({
+      store,
+      getConfig: () => f.config,
+      env: () => undefined,
+      fetch: apiFixture("telegram", calls),
+      now: () => new Date(now),
+    });
+    await fresh.scan();
+    await fresh.stop();
+    expect(store.db.select().from(imReplyOutbox).get()!.state).toBe(
+      "delivered",
+    );
+    expect(calls.filter((c) => c.url.endsWith("sendMessage"))).toHaveLength(1);
+  },
+);
+
+it("fences a delivered Telegram reply when receipt persistence throws", async () => {
+  const f = await seed("telegram");
+  let now = NOW;
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const finish = storeApi.finishImReplyNotification;
+  vi.spyOn(storeApi, "finishImReplyNotification").mockImplementation(
+    async (db, input) => {
+      if (input.state === "delivered")
+        throw new Error("do-not-log-storage-secret");
+      return finish(db, input);
+    },
+  );
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const opts = {
+    store,
+    getConfig: () => f.config,
+    env: () => undefined,
+    fetch: apiFixture("telegram", calls),
+    now: () => new Date(now),
+  };
+  const service = new ImReplyService(opts);
+  await service.scan();
+  await service.stop();
+  expect(store.db.select().from(imReplyOutbox).get()!.state).toBe("sending");
+  now += 61_000;
+  const fresh = new ImReplyService(opts);
+  await fresh.scan();
+  await fresh.stop();
+  expect(store.db.select().from(imReplyOutbox).get()!.state).toBe("unknown");
+  expect(calls.filter((c) => c.url.endsWith("sendMessage"))).toHaveLength(1);
+  expect(log).toHaveBeenCalled();
+  expect(JSON.stringify(log.mock.calls)).not.toContain(
+    "do-not-log-storage-secret",
+  );
+});
+it("retries a local failure before the sending CAS without sending a message", async () => {
+  const f = await seed("telegram");
+  let now = NOW;
+  let fail = true;
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const finish = storeApi.finishImReplyNotification;
+  vi.spyOn(storeApi, "finishImReplyNotification").mockImplementation(
+    async (db, input) => {
+      if (input.state === "sending" && fail) {
+        fail = false;
+        throw new Error("private storage error");
+      }
+      return finish(db, input);
+    },
+  );
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const opts = {
+    store,
+    getConfig: () => f.config,
+    env: () => undefined,
+    fetch: apiFixture("telegram", calls),
+    now: () => new Date(now),
+  };
+  const service = new ImReplyService(opts);
+  await service.scan();
+  await service.stop();
+  const row = store.db.select().from(imReplyOutbox).get()!;
+  expect(row.state).toBe("pending");
+  expect(calls.filter((c) => c.url.endsWith("sendMessage"))).toHaveLength(0);
+  now = row.nextAttemptAt!.getTime();
+  const fresh = new ImReplyService(opts);
+  await fresh.scan();
+  await fresh.stop();
+  expect(store.db.select().from(imReplyOutbox).get()!.state).toBe("delivered");
+  expect(calls.filter((c) => c.url.endsWith("sendMessage"))).toHaveLength(1);
+});
+it.each(platforms)(
+  "exhausts explicit %s rate-limit retries into failed after five attempts",
+  async (platform) => {
+    const f = await seed(platform);
+    let now = NOW;
+    let writes = 0;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const service = new ImReplyService({
+        store,
+        getConfig: () => f.config,
+        env: () => undefined,
+        now: () => new Date(now),
+        fetch: apiFixture(platform, [], () => {
+          writes++;
+          return Response.json(
+            {
+              ok: false,
+              error_code: 429,
+              parameters: { retry_after: 1 },
+              retry_after: 1,
+            },
+            { status: 429, headers: { "Retry-After": "1" } },
+          );
+        }),
+      });
+      await service.scan();
+      await service.stop();
+      const row = store.db.select().from(imReplyOutbox).get()!;
+      expect(row.state).toBe(attempt === 5 ? "failed" : "pending");
+      if (attempt < 5) now = row.nextAttemptAt!.getTime();
+    }
+    expect(writes).toBe(5);
+  },
+);
+it("does not send an older outbox row whose attempt budget is already exhausted", async () => {
+  const f = await seed("telegram");
+  store.db.update(imReplyOutbox).set({ attempts: 5 }).run();
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const service = new ImReplyService({
+    store,
+    getConfig: () => f.config,
+    env: () => undefined,
+    fetch: apiFixture("telegram", calls),
+    now: () => new Date(NOW),
+  });
+  await service.scan();
+  await service.stop();
+  expect(store.db.select().from(imReplyOutbox).get()!).toMatchObject({
+    state: "failed",
+    attempts: 6,
+  });
+  expect(calls).toHaveLength(0);
 });
 async function seed(platform: (typeof platforms)[number]) {
   const f = fixture(platform);

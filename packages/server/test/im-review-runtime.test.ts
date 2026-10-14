@@ -59,6 +59,13 @@ describe("IM review publication outcome", () => {
     expect(classifyImReviewResult({ status: "skipped", skipReason: "no_problems_suppressed", dispatchResults: [] }))
       .toEqual({ state: "succeeded" });
   });
+  it("does not count local collection as delivery or settle it using another channel", () => {
+    const collected={channel:"chat",status:"published" as const,raw:{collected:true}};
+    expect(classifyImReviewResult({status:"published",dispatchResults:[collected,{channel:"issue",status:"published"}]}).state).toBe("publication_unknown");
+    expect(classifyImReviewResult({status:"published",dispatchResults:[collected,{channel:"chat",status:"failed",raw:{kind:"rejected"}}]}).state).toBe("failed");
+    expect(classifyImReviewResult({status:"published",dispatchResults:[collected,{channel:"chat",status:"buffered"}]}).state).toBe("publication_unknown");
+    expect(classifyImReviewResult({status:"published",dispatchResults:[collected]},[{channel:"chat",status:"published",attempts:1,updatedAt:1}]).state).toBe("succeeded");
+  });
 });
 
 let dir: string;

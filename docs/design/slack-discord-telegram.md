@@ -182,7 +182,12 @@ Telegram transformer 将通用 Markdown 转成普通 text 与加粗/代码/安�
 Slack 去掉通用 Markdown 围栏的语言提示，转换加粗时保护行内代码；Telegram 标题转 bold，围栏语言写入 pre.language，bold 不与 code/pre 重叠。
 Git 发布仍保留 fingerprint 注释；命名/工作区模板的优先级不变，三平台转换在最终发布前执行。
 
-输出层可使用已有 summaryIssueUrl，但本期不扩展飞书专属 issue_link_card 模式和隐式跨渠道摘要链接策略。
+同次报告先执行 issue 渠道，再把成功回执中的 html_url/web_url 作为 summaryIssueUrl 传给 IM。
+三平台复用飞书默认的简要格式：标题、问题数、严重级别/分类/位置和详情链接，保留作者提醒；分析、建议和代码留在 issue。
+没有可用的已确认链接时仍发送完整报告；恢复时复用 journal 的已确认链接，不重建 issue。
+issue_link_card 的可配置模式仍仅适用于飞书，三平台无需新增配置。
+publishProblem 的本地收集标记不是送达证据；IM 终态排除这些中间结果，等待同渠道 flush 或持久回执。
+未 flush 的收集与真正 buffered 的发布保持未知，其他渠道成功不能覆盖；重复 social summary 复用第一次 flush 的实际结果。
 模板 named reference、workspace templates、built-in 的查找顺序不改变；新增内建模板必须进入资源打包和测试。
 
 ## 6. 发布恢复、限流与通知 outbox
@@ -228,8 +233,10 @@ help/chat-id/status 的 reply 同样与 inbox 原子登记。终态通知仍与 
 
 遵守 S4/D5/T4；worker 顺序发送，client 按连接/目的地及 Discord global 提示保持限流缓存；
 outbox 退避持久化 due time。缓存不提供跨进程吞吐承诺，其他 worker 仍需遵守各自收到的 429。
-初始通知最多 5 次明确可重试尝试，生命周期 24 小时（本地设计值）；due 超过期限时 rejected，
+outbox 通知最多 5 次明确可重试尝试，生命周期 24 小时（本地设计值）；due 超过期限时 rejected，
 仍 pending 而过期时 expired，不能缩短平台等待时间。
+进入 POST 前的配置、凭据和存储异常按持久 due time 退避，耗尽时 failed；已超预算的旧行也不再发送。
+调用发送后抛出异常或回执落库失败时保留 sending，租约到期转 unknown；仅记录操作标识、连接名和固定错误码。
 本地队列限流不替代远端 429；多进程测试验证不会忙循环，不能承诺平台固定吞吐。
 Authorization、Slack response_url、Discord interaction token、Telegram `/bot<token>/` 路径均须脱敏，
 包括 fetch 错误、redirect、trace、管理 API 预览和平台业务 error 文本。只记录有界错误码，不记录上游原文。

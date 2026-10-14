@@ -106,6 +106,8 @@ File configuration alone can send reports. Merge your existing VCS/LLM configura
 
 Reports use named, workspace or built-in templates in the normal priority order. Slack/Telegram are bounded to 3900 UTF-16 units including the truncation notice and optional safe report link. Telegram sends text plus explicit entities; Discord permits only host-resolved author mentions; Slack escapes native controls.
 
+When the same review also publishes its full report through an issue channel, AICR sends the issue first and uses its confirmed URL for a brief notification: a headline, problem count, severity/category/location titles and a full-report link. Native author reminders are preserved. Analysis, suggestions and code remain in the issue. Without a usable confirmed URL, including an issue write failure, the channel keeps the full report. Route order does not change this behavior; no new channel option is required.
+
 Reports have Review target, Summary and Problems sections, with each problem label on one line.
 Slack uses its own `mrkdwn`: headings and severity labels become single-asterisk bold text,
 and fence language labels are removed while code content is preserved.
@@ -260,7 +262,9 @@ A 401 callback response usually means the signing secret, raw body or timestamp 
 
 Before each new VCS/analysis/publication operation, current authorization is rechecked while execution content retains the admitted configuration snapshot. Disable the binding, connection or active receiver to stop new authorized work. Rotate the Bot token or callback secret through the normal configuration publish process; keep app/team/guild/Bot identities stable. Changing an identity prevents old notifications from being sent through the replacement connection.
 
-`delivered` requires a complete matching platform receipt. An explicit rejection is recorded as `rejected`; only a documented 429 authorizes a timed reply retry. Lost responses, server errors and expired `sending` leases become `unknown` and are never automatically resent. Inspect remote messages and the journal/outbox before arranging a new request.
+`delivered` requires a complete matching platform receipt. An explicit rejection is recorded as `rejected`; after POST starts, only a documented 429 authorizes a timed reply retry. Lost responses, server errors and expired `sending` leases become `unknown` and are never automatically resent. Inspect remote messages and the journal/outbox before arranging a new request.
+
+Local configuration, credential or storage errors before POST back off with a persisted due time. These safe retries and explicit rate-limit retries share a five-attempt budget; exhaustion becomes `failed`. A possible POST or missing receipt persistence stays fenced as `sending`, then becomes `unknown` when its lease expires. Logs contain fixed error codes, never raw upstream errors.
 
 For rollback, disable ingress and drain workers before changing binaries or restoring a compatible backup. Migration 013 adds a versioned reply payload column; do not delete request/journal/outbox data to clear an unknown result. Deregister only resources owned by this deployment after checking current remote ownership.
 

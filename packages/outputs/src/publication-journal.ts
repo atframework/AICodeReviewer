@@ -140,8 +140,14 @@ export class PublicationJournal {
   }
 
   publishedUrl(channel: string, call: string): string | undefined {
-    const value = [...this.operations.values()].find(op => op.channel === channel && op.call === call && op.status === "confirmed" && typeof op.response?.data.html_url === "string")?.response?.data.html_url;
-    return typeof value === "string" ? value : undefined;
+    for (const op of this.operations.values()) {
+      if (op.channel !== channel || op.call !== call || op.status !== "confirmed") continue;
+      for (const key of ["html_url", "web_url"]) {
+        const value = op.response?.data[key];
+        if (typeof value === "string" && value) return value;
+      }
+    }
+    return undefined;
   }
   private guard(): void {
     this.options.signal?.throwIfAborted();

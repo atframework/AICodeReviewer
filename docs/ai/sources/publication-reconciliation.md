@@ -6,6 +6,10 @@
 
 Primary sources:
 
+2026-10-14 复核 [GitLab Issues API](https://docs.gitlab.com/api/issues/#new-issue)：
+issue 的浏览器链接字段为 `web_url`。AICR 从已确认回执中读取该字段，
+与 GitHub/Gitea 的 `html_url` 一同用于简要 IM 通知及跳过已发布渠道后的链接恢复。
+
 - [GitHub issue comments](https://docs.github.com/en/rest/issues/comments): raw
   Markdown body, comment IDs, repository/issue list endpoints and pagination.
 - [GitHub reviews](https://docs.github.com/en/rest/pulls/reviews): create/list
