@@ -59,7 +59,7 @@ export function resolveChannelDirectoryCacheTtlSeconds(options: {
  */
 export function channelIdentityCapability(kind: string, options?: { readonly directoryConfigured?: boolean | undefined }): "native" | "directory" | "unavailable" {
 	if (kind === "feishu_app") return "directory";
-	if (options?.directoryConfigured === true && ["wecom_bot", "wecom_app", "feishu_bot"].includes(kind)) return "directory";
+	if (options?.directoryConfigured === true && ["wecom_bot", "wecom_app", "feishu_bot", "slack_app", "discord_bot", "telegram_bot"].includes(kind)) return "directory";
 	if (["github_issue", "github_problem_issue", "github_pr_review", "gitlab_mr_review", "gitlab_problem_issue", "gitea_issue", "gitea_problem_issue", "gitea_pr_review"].includes(kind)) return "native";
 	return "unavailable";
 }
@@ -72,7 +72,7 @@ const normalized = (value: string): string => value.normalize("NFKC").trim().toL
  * scoped vcs accounts ride along for rendering and exact matching (D11/D14).
  */
 export interface MemberDirectoryChannelUser extends ChannelUser {
-	readonly mentionType: "wecom_userid" | "wecom_mobile" | "feishu_open_id" | "feishu_user_id";
+	readonly mentionType: "wecom_userid" | "wecom_mobile" | "feishu_open_id" | "feishu_user_id" | "slack_user_id" | "discord_user_id" | "telegram_user_id";
 	readonly mentionId: string;
 	readonly vcsAccounts: readonly { sourceTrigger: string; username: string }[];
 }

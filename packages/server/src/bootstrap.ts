@@ -59,8 +59,11 @@ import {
   feishuDirectoryUsers,
   renderFeishuAuthorMention,
   resolveChannelAuthor,
+  matchChannelAuthor,
   resolveChannelDirectoryCacheTtlSeconds,
   type ChannelAuthorGuesser,
+  type ChannelUser,
+  type SocialImClient,
   createWeComBotDispatcher,
   createWeComAppDispatcher,
   memberDirectoryChannelUsers,
@@ -1815,6 +1818,47 @@ async function resolveFileDirectoryMention(options: {
   return NO_DIRECTORY_MENTION;
 }
 
+/** Resolve identities outside report rendering; native controls are added only after escaping. */
+async function resolveSocialImAuthorId(options: {
+  config: AppConfig; channel: OutputChannelConfig; client: SocialImClient;
+  destination: string; event: ReviewEvent; baseDir: string;
+  workspaceId: string | undefined; guesser?: ChannelAuthorGuesser | undefined;
+}): Promise<string | undefined> {
+  const { channel, config, event, client } = options;
+  const directory = channel.member_directory;
+  const policy = { mappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
+    emailBlacklist: config.outputs.author_resolution?.email_blacklist };
+  const input = { author: event.author, provider: event.provider, sourceTrigger: event.triggerName,
+    submitterWorkspace: event.provider === "p4" ? event.submitterWorkspace : undefined };
+  if (directory === undefined) {
+    const match = matchChannelAuthor(input, undefined, policy);
+    return match.status === "matched" ? match.userId : undefined;
+  }
+  const ids = new Map<string, string>();
+  const listUsers = async (): Promise<readonly ChannelUser[]> => {
+    if ("source" in directory && directory.source === "file") {
+      const c = client.connection;
+      const expectedScope = c.kind === "slack_app" ? c.team_id : c.kind === "discord_bot" ? c.guild_id : c.bot_id;
+      if (directory.identity_scope.id !== expectedScope) return [];
+      const view = await acquireFileDirectoryView(config, channel.name, directory, options.baseDir);
+      const snapshot = view.getSnapshot();
+      if (snapshot.status !== "ready" || !snapshot.members) return [];
+      const users = memberDirectoryChannelUsers(snapshot.members);
+      for (const user of users) ids.set(user.id, user.mentionId);
+      return users;
+    }
+    const users = await client.members(options.destination, resolveChannelDirectoryCacheTtlSeconds({
+      channel: "cache_ttl_seconds" in directory ? directory.cache_ttl_seconds : undefined,
+      global: config.outputs.author_resolution?.directory_cache_ttl_seconds,
+    }));
+    for (const user of users) ids.set(user.id, user.id);
+    return users;
+  };
+  const match = await resolveChannelAuthor({ channelKind: channel.kind, input, directory: { listUsers }, policy,
+    guesser: channel.guess_author === true ? options.guesser ?? ((input, users) => createConfiguredAuthorGuesser(config, options.workspaceId)(input, users)) : undefined });
+  return match.status === "matched" ? ids.get(match.userId) : undefined;
+}
+
 export function createOutputPublisherFromConfig(
   config: AppConfig,
   channelName?: string,
@@ -1953,10 +1997,19 @@ export function createOutputPublisherFromConfig(
         if (flushed) return { channel: channel.name, status: "buffered", raw: { action: "already_flushed" } };
         flushed = true;
         if (!client.isReady(destination) && !await client.refreshReadiness(destination)) return { channel: channel.name, status: "failed", raw: { kind: "rejected", code: "destination_not_ready" } };
+        let authorUserId: string | undefined;
+        if (reviewEvent && channel.mention_author !== false && (channel.mention_author === true || channel.member_directory || channel.author_mappings)) {
+          try {
+            authorUserId = await resolveSocialImAuthorId({ config, channel, client, destination, event: reviewEvent, baseDir, workspaceId, guesser: authorGuesser });
+          } catch {
+            console.warn("[outputs] Social IM member directory unavailable; sending report without mentions.");
+          }
+        }
         const rendered = (summaryProblems ?? problems).map(problem => rendering.renderProblem(problem));
         const content = [rendering.renderSummary(summary, rendered, options?.title), ...(rendered.length ? [`## Problems (${rendered.length})`] : []), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
-        const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl)
-          : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl) : toDiscordMarkdown(content, options?.summaryIssueUrl) };
+        const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl, authorUserId)
+          : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl, authorUserId) : toDiscordMarkdown(content, options?.summaryIssueUrl, authorUserId),
+            ...(channel.kind === "discord_bot" && authorUserId ? { allowedUserMentions: [authorUserId] } : {}) };
         const result = await client.sendMessage(destination, message);
         return result.kind === "delivered" ? { channel: channel.name, status: "published", externalId: result.receipt.messageId }
           : { channel: channel.name, status: "failed", raw: { kind: result.kind, code: result.code, ...(result.kind === "rejected" && result.retryAt ? { retryAt: result.retryAt } : {}) } };

@@ -4,7 +4,7 @@ description: 通过 Discord 发送审查报告和执行授权的审查命令。
 ---
 
 AICR 支持 `discord_bot`，每次发布一条聚合报告，通过 HTTP 接收 `help`、`chat-id`、`review`、`status` 四种命令。
-原生作者提醒、目录、按钮和自然语言请求未纳入此实现。
+按钮和自然语言请求未纳入此实现。
 
 ## 创建和安装
 
@@ -28,7 +28,7 @@ AICR 支持 `discord_bot`，每次发布一条聚合报告，通过 HTTP 接收 
 ID 一律保留为带引号的字符串；下方合成 public key 必须替换为 Portal 中的实际值。
 
 用 `bot` 和 `applications.commands` scopes 安装到指定 guild。在命令/报告频道授予 **View Channel** 和 **Send Messages**。
-此接入使用 HTTP interactions 和 Bot 消息 API，不需要 Administrator 或 Message Content 等 Gateway 特权 intents。
+此接入使用 HTTP interactions 和 Bot 消息 API；发送和命令不需要 Administrator 或 Message Content，API 成员目录另需 Server Members Intent。
 仅支持配置 guild 的普通文字频道（type 0）；DM、论坛帖子、线程、公告频道和 Gateway 接收未实现。
 依据：[应用命令](https://docs.discord.com/developers/interactions/application-commands)、[频道类型](https://docs.discord.com/developers/resources/channel)。
 
@@ -55,7 +55,7 @@ ID 一律保留为带引号的字符串；下方合成 public key 必须替换�
 file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，覆盖方式见[输出策略](/zh-cn/configuration/outputs/)。
 
 模板仍按 named、workspace、内置的正常优先级选择。总预算为 1900 个 UTF-16 单位，
-包含截断提示及可用的安全报告链接。Discord 禁用 allowed mentions。
+包含截断提示及可用的安全报告链接。Discord 只允许宿主解析出的作者提醒。
 
 报告按 Review target、Summary、Problems 分节，问题标题保持单行。
 CRLF 与正文多余空行会归一化；内部审查标记不显示，代码围栏、语言提示和正文保留。
@@ -171,3 +171,45 @@ PING/命令 401 时核对 public key 和时间戳头；AICR 本地要求五分�
 
 仓库测试使用 HTTP 替身和真实本地存储；真实平台需单独凭据并独立验收。
 本地通过不代表客户端呈现或公网回调已验证。
+
+## 提醒审查作者
+
+在输出渠道配置显式映射或 API 目录：
+
+```yaml
+mention_author: true
+author_mappings: { "alice@example.org": "234567891" }
+# 可选：在 guild 成员中自动匹配
+# member_directory: { source: discord_api, cache_ttl_seconds: 43200 }
+# guess_author: true
+```
+
+API 目录分页读取 guild 成员，匹配 username、global name 和 guild nickname，无法读取用户邮箱。在 Developer Portal 的 **Bot → Privileged Gateway Intents → Server Members Intent** 开启成员权限；达到 Discord 要求时还须获批。该 REST 接口要求 `GUILD_MEMBERS`，与命令是否使用 HTTP 无关。仅使用显式映射无需成员列表 intent。出站 `allowed_mentions.users` 只允许解析出的作者，角色、everyone 和回复提醒保持关闭。匹配 guild 成员不代表该用户能查看私有目标频道。依据：[List Guild Members](https://docs.discord.com/developers/resources/guild#list-guild-members)、[allowed mentions](https://docs.discord.com/developers/resources/message#allowed-mentions-object)。
+
+配置目录或映射后默认启用作者提醒；`mention_author: false` 关闭全部身份解析。映射键可匹配审查作者的邮箱、username、display name 或 P4 提交 workspace；先应用全局邮箱黑名单。使用 API 目录时，映射值必须是候选成员 ID；没有目录时是显式平台 ID；文件目录使用本地成员 key。`guess_author` 默认 false，保留精确匹配；设为 true 才启用 workspace 关联和专用身份模型。歧义、目录不可用或未匹配时照常发报告并省略 @。拒绝 `mention_fallback: all`；主评审提示词不接收目录。
+
+文件目录支持 aliases、emails 和带来源范围的 VCS 账号。将下面片段合并到输出渠道，scope ID 必须与连接一致：
+
+```yaml
+member_directory:
+  source: file
+  path: ./members.yaml
+  directory_id: team
+  identity_scope: { kind: discord_guild, id: "123456789012345679" }
+author_mappings: { "alice@example.org": alice }
+```
+
+```yaml
+# members.yaml
+version: 1
+directories:
+  team:
+    platform: discord
+    identity_scope: { kind: discord_guild, id: "123456789012345679" }
+    members:
+      - key: alice
+        emails: [alice@example.org]
+        mention: { type: discord_user_id, id: "234567891" }
+```
+
+先转义不可信正文，再插入原生提醒；长报告截断时预留提醒空间。文件路径相对配置目录解析，复用文件目录热加载。API 快照 TTL 按渠道、`outputs.author_resolution.directory_cache_ttl_seconds`、默认 43200 秒取值；0 禁用复用。每次快照最多 10000 成员、100 页、15 秒读取期限；刷新失败或分页不完整时不用过期成员。实际通知需在目标客户端验证。

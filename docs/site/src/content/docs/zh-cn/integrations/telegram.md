@@ -4,7 +4,7 @@ description: 通过 Telegram 发送审查报告和执行授权的审查命令。
 ---
 
 AICR 支持 `telegram_bot`，每次发布一条聚合报告，通过 HTTP 接收 `help`、`chat-id`、`review`、`status` 四种命令。
-原生作者提醒、目录、按钮和自然语言请求未纳入此实现。
+按钮和自然语言请求未纳入此实现。
 
 ## 创建和安装
 
@@ -232,3 +232,42 @@ ACK 只代表接收，不代表完成分析。后台 readiness 核对平台身�
 
 仓库测试使用 HTTP 替身和真实本地存储；真实平台需单独凭据并独立验收。
 本地通过不代表客户端呈现或公网回调已验证。
+
+## 提醒审查作者
+
+在输出渠道将审查身份映射到人的数字 Telegram user ID；不能填 username、Bot ID 或 chat ID：
+
+```yaml
+mention_author: true
+author_mappings: { "alice@example.org": "234567891" }
+```
+
+Telegram Bot API 没有完整成员目录接口；使用显式映射或下方文件目录。授予管理员权限也不能列出所有成员。AICR 追加 `tg://user?id=…` 的 `text_link` 实体，offset/length 使用 UTF-16 单位；实际提及仍受 Telegram 的群成员、此前联系和隐私条件约束。依据：[格式与 ID 提及](https://core.telegram.org/bots/api#formatting-options)。
+
+配置目录或映射后默认启用作者提醒；`mention_author: false` 关闭全部身份解析。映射键可匹配审查作者的邮箱、username、display name 或 P4 提交 workspace；先应用全局邮箱黑名单。使用 API 目录时，映射值必须是候选成员 ID；没有目录时是显式平台 ID；文件目录使用本地成员 key。`guess_author` 默认 false，保留精确匹配；设为 true 才启用 workspace 关联和专用身份模型。歧义、目录不可用或未匹配时照常发报告并省略 @。拒绝 `mention_fallback: all`；主评审提示词不接收目录。
+
+文件目录支持 aliases、emails 和带来源范围的 VCS 账号。将下面片段合并到输出渠道，scope ID 必须与连接一致：
+
+```yaml
+member_directory:
+  source: file
+  path: ./members.yaml
+  directory_id: team
+  identity_scope: { kind: telegram_bot, id: "123456789" }
+author_mappings: { "alice@example.org": alice }
+```
+
+```yaml
+# members.yaml
+version: 1
+directories:
+  team:
+    platform: telegram
+    identity_scope: { kind: telegram_bot, id: "123456789" }
+    members:
+      - key: alice
+        emails: [alice@example.org]
+        mention: { type: telegram_user_id, id: "234567891" }
+```
+
+先转义不可信正文，再插入原生提醒；长报告截断时预留提醒空间。文件路径相对配置目录解析，复用文件目录热加载。API 快照 TTL 按渠道、`outputs.author_resolution.directory_cache_ttl_seconds`、默认 43200 秒取值；0 禁用复用。每次快照最多 10000 成员、100 页、15 秒读取期限；刷新失败或分页不完整时不用过期成员。实际通知需在目标客户端验证。

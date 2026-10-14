@@ -10,6 +10,13 @@
 
 ## Slack
 
+2026-10-14 复核作者提醒：[Slack 用户提及](https://docs.slack.dev/messaging/formatting-message-text/#mentioning-users)
+要求 `<@用户ID>`，只有目标频道成员能收到通知；`parse:none` 不阻止显式原生 markup。
+[conversations.members](https://docs.slack.dev/reference/methods/conversations.members/) 和
+[users.list](https://docs.slack.dev/reference/methods/users.list/) 均须完整 cursor 翻页，短页不代表结束。
+读取 profile 需 `users:read`，email 另需 `users:read.email`；修改 Bot scopes 后重新安装。
+目录读取仅用于提醒，不扩大命令授权。本地大小、页数、期限和 TTL 见接入规范。
+
 2026-10-13 复核安装指南相关条目：S3、S7、S9、S12、D2、T1–T3、T5–T6；
 另外核验 [Slack OAuth 安装](https://docs.slack.dev/authentication/installing-with-oauth/)、
 [Discord 应用安装教程](https://docs.discord.com/developers/quick-start/getting-started)及
@@ -46,9 +53,15 @@ client/journal 保留 unknown。三平台均采用主动 API，不持久化临�
 文档中的参数或错误名不能单独证明 exactly-once；本地日志保留未知发送，不自动重发。
 本期使用单 workspace 自建应用，发送要求 `chat:write`，命令要求 `commands`，
 频道 readiness 要求 `channels:read`，使用私有频道时另需 `groups:read`；机器人显式加入报告频道。
-不引入用户目录/history 读取权限、公开 Marketplace OAuth 安装服务或 GovSlack。
+仅启用 API 作者目录时增加用户读取权限；不引入 history、公开 Marketplace OAuth 安装服务或 GovSlack。
 
 ## Discord
+
+2026-10-14 复核：[List Guild Members](https://docs.discord.com/developers/resources/guild#list-guild-members)
+要求 `GUILD_MEMBERS` privileged intent，limit 为 1–1000，after 为上页最高用户 snowflake；
+HTTP interactions 不免除该 REST 接口的 intent 条件。成员接口没有用户邮箱。
+[Allowed Mentions](https://docs.discord.com/developers/resources/message#allowed-mentions-object)
+允许 parse=[] 同时指定 users，消息内容须包含相应原生 mention；角色/everyone 仍关闭。
 
 | 编号 | 官方资料 | 本次确认及设计影响 |
 | --- | --- | --- |
@@ -64,6 +77,11 @@ client/journal 保留 unknown。三平台均采用主动 API，不持久化临�
 Discord 的精确抗重放时间窗在上述文档中没有统一数值；规范采用本地 5 分钟策略并要求真实回调验证。
 
 ## Telegram
+
+2026-10-14 复核：[格式与 ID 提及](https://core.telegram.org/bots/api#formatting-options)允许
+在 inline link 中使用 `tg://user?id=<user_id>`，普通 URL 文本不会生成提及；群成员、此前私聊或 callback
+联系及转发隐私条件影响可用性。[Bot API](https://core.telegram.org/bots/api)没有完整群成员列表方法；
+getChatAdministrators/getChatMember 不提供全员目录。管理员权限不能替代缺少的目录 API。
 
 | 编号 | 官方资料 | 本次确认及设计影响 |
 | --- | --- | --- |

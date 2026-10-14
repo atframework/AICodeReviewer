@@ -4,7 +4,7 @@ description: Send review reports and run authorized review commands through Disc
 ---
 
 AICR supports `discord_bot` for an aggregated report and four HTTP commands: `help`, `chat-id`, `review`, `status`.
-Native author mentions, directories, buttons and natural-language requests are outside this implementation.
+Buttons and natural-language requests are outside this implementation.
 
 ## Create and install
 
@@ -27,7 +27,7 @@ See [Discord's application setup guide](https://docs.discord.com/developers/quic
 
 Keep all IDs as quoted strings. Replace the synthetic public key below with the Portal's actual public key.
 
-Install into the selected guild with `bot` and `applications.commands` scopes. Grant **View Channel** and **Send Messages** in the command/report channels. This implementation does not request Administrator, Message Content or other privileged Gateway intents; it uses HTTP interactions and the Bot message API. Only ordinary guild text channels (type 0) in the configured guild are supported. DMs, forum posts, threads, announcements and Gateway receive are not implemented. [Application commands](https://docs.discord.com/developers/interactions/application-commands), [channel types](https://docs.discord.com/developers/resources/channel).
+Install into the selected guild with `bot` and `applications.commands` scopes. Grant **View Channel** and **Send Messages** in the command/report channels. Sending reports and receiving commands require neither Administrator nor Message Content; an optional API member directory requires Server Members Intent; it uses HTTP interactions and the Bot message API. Only ordinary guild text channels (type 0) in the configured guild are supported. DMs, forum posts, threads, announcements and Gateway receive are not implemented. [Application commands](https://docs.discord.com/developers/interactions/application-commands), [channel types](https://docs.discord.com/developers/resources/channel).
 
 ## Configure AICR
 
@@ -55,7 +55,7 @@ File-only configuration can send reports; a clean review defaults to `publish_if
 See [output policy](/en/configuration/outputs/) for overrides.
 
 Named, workspace and built-in templates retain the normal priority. The final message budget is 1900 UTF-16 units including
-the truncation notice and optional safe report link. Discord disables allowed mentions and URL previews are controlled by the platform.
+the truncation notice and optional safe report link. Discord permits only host-resolved author mentions and URL previews are controlled by the platform.
 
 Reports have Review target, Summary and Problems sections, with each problem label on one line.
 CRLF and excess prose spacing are normalized. Internal review markers are hidden outside code,
@@ -181,3 +181,45 @@ Deregister only resources owned by this deployment after checking current remote
 
 Local tests use HTTP fixtures and real local stores. Live guild/Bot acceptance requires separate credentials and is tracked independently.
 Local passing tests do not establish public callback delivery or client rendering.
+
+## Mention the review author
+
+Configure the output channel with either an explicit mapping or an API directory:
+
+```yaml
+mention_author: true
+author_mappings: { "alice@example.org": "234567891" }
+# Optional automatic matching among guild members:
+# member_directory: { source: discord_api, cache_ttl_seconds: 43200 }
+# guess_author: true
+```
+
+The API directory paginates guild members and matches usernames, global names and guild nicknames. It cannot read users' email addresses. Enable **Bot → Privileged Gateway Intents → Server Members Intent** in the Developer Portal, with approval where Discord requires it. This REST endpoint requires `GUILD_MEMBERS` even when commands use HTTP. Explicit mappings alone need no member-list intent. The outgoing `allowed_mentions.users` contains only the resolved author; roles, everyone and reply pings remain disabled. A guild match does not prove the person can view a private destination channel. See [List Guild Members](https://docs.discord.com/developers/resources/guild#list-guild-members) and [allowed mentions](https://docs.discord.com/developers/resources/message#allowed-mentions-object).
+
+A configured directory or mapping enables author reminders by default; `mention_author: false` disables all resolution. Mapping keys match the review author's email, username, display name or P4 submitter workspace, with the global email blacklist applied first. With an API directory, mapping values must be candidate user IDs; without a directory, they are explicit platform IDs. With a file, values are local member keys. Exact matches work with `guess_author: false` (the default); true additionally enables workspace matching and the dedicated identity model. Ambiguous, unavailable or unmatched identities send the report without a mention. `mention_fallback: all` is rejected. Main review prompts receive no directory.
+
+File directories support aliases, emails and scoped VCS accounts. Merge this fragment into the output channel; the scope ID must match its connection:
+
+```yaml
+member_directory:
+  source: file
+  path: ./members.yaml
+  directory_id: team
+  identity_scope: { kind: discord_guild, id: "123456789012345679" }
+author_mappings: { "alice@example.org": alice }
+```
+
+```yaml
+# members.yaml
+version: 1
+directories:
+  team:
+    platform: discord
+    identity_scope: { kind: discord_guild, id: "123456789012345679" }
+    members:
+      - key: alice
+        emails: [alice@example.org]
+        mention: { type: discord_user_id, id: "234567891" }
+```
+
+Mentions are inserted after untrusted report text is escaped and retain reserved space when a report is truncated. File paths resolve against the configuration directory; hot reload uses the shared file-directory service. API snapshots use the channel TTL, then `outputs.author_resolution.directory_cache_ttl_seconds`, then 43200 seconds; zero disables reuse. A snapshot is limited to 10000 members, 100 pages and a 15-second read deadline. Failed or incomplete refreshes do not reuse expired members. Validate notification delivery with the actual client and destination.

@@ -35,4 +35,9 @@ outputs:
       connection: bot
       channel_id: "123456789012345680"
       no_problems: { action: publish_if_summary }
+      # Map a VCS author identity to a platform USER ID, never the Bot/chat ID.
+      mention_author: true
+      author_mappings: { "alice@example.org": "234567891" }
+      # Optional: enable Server Members Intent before selecting the API directory.
+      # member_directory: { source: discord_api, cache_ttl_seconds: 43200 }
 

@@ -73,8 +73,8 @@ directories:
 | --- | --- |
 | `version` | 必填整数 1；未知版本拒绝整次 reload，不能猜测兼容 |
 | `directories` | 必填非空映射；稳定目录名供配置引用 |
-| `platform` | `wecom` 或 `feishu`，必须匹配频道能力 |
-| `identity_scope.kind/id` | `wecom_corp`、`feishu_app` 或 `feishu_tenant` 的明确命名空间；不包含 secret |
+| `platform` | `wecom`、`feishu`、`slack`、`discord` 或 `telegram`，必须匹配频道能力 |
+| `identity_scope.kind/id` | `wecom_corp`、`feishu_app`、`feishu_tenant`、`slack_team`、`discord_guild` 或 `telegram_bot` 的明确命名空间；不包含 secret |
 | `members` | 数组，允许显式空数组作为清空；不是“空数组就沿用旧目录” |
 | `members[].key` | 目录内稳定唯一的本地键；不等同平台用户 ID |
 | `display_name` | 可选显示名，只做匹配证据/展示，不可成为授权身份 |
@@ -88,6 +88,9 @@ directories:
 | `wecom_mobile` | `wecom_corp` | 仅传统 webhook text 的 `mentioned_mobile_list`；不能写进 Markdown 对象或用于回调授权 |
 | `feishu_open_id` | `feishu_app` | 记录 open_id 来源 app_id；应用频道必须同应用，webhook 需管理员确认该来源的 ID 在目标群可用 |
 | `feishu_user_id` | `feishu_tenant` | 只用于已验证支持 user_id 的发送表面；飞书外部群不使用 user_id @ |
+| `slack_user_id` | `slack_team` | U/W 开头的成员 ID；scope id 等于 connection.team_id；宿主转义正文后追加 `<@ID>` |
+| `discord_user_id` | `discord_guild` | 十进制用户 snowflake；scope id 等于 connection.guild_id；原生标记配合精确 allowed_mentions.users |
+| `telegram_user_id` | `telegram_bot` | 正安全整数用户 ID 字符串；scope id 等于 connection.bot_id；宿主追加 tg 用户链接实体 |
 
 首期飞书应用保持现有 open_id 渲染能力；选择不支持的身份类型时明确拒绝绑定，不能静默伪装成功。
 飞书 webhook 的卡片按其卡片协议渲染 `at`，不把 text 的 `user_id` 属性直接套到 JSON 2.0 卡片标签。

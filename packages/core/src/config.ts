@@ -471,7 +471,8 @@ export const outputChannelSchema = z
     }
     if (isSocialImKind(channel.kind)) {
       const allowed = new Set(["name", "kind", "connection", "channel_id", "chat_id", "trigger", "templates", "no_problems",
-        "mention_author", "mention_fallback", "commit_url_template", "revision_url_template", "change_url_template"]);
+        "mention_author", "mention_fallback", "member_directory", "author_mappings", "guess_author",
+        "commit_url_template", "revision_url_template", "change_url_template"]);
       for (const key of Object.keys(channel)) {
         if (!allowed.has(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `${channel.kind} does not support ${key}.` });
       }
@@ -481,7 +482,27 @@ export const outputChannelSchema = z
       if (!targetSchema.safeParse(channel[targetKey]).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [targetKey], message: "an exact platform destination ID is required." });
       const wrongKey = targetKey === "chat_id" ? "channel_id" : "chat_id";
       if (channel[wrongKey] !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [wrongKey], message: "destination field does not match platform." });
-      if (channel.mention_author === true || channel.mention_fallback === "all") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["mention_author"], message: "social IM native mentions are unsupported." });
+      if (channel.mention_fallback === "all") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["mention_fallback"], message: "social IM only supports mention_fallback: skip." });
+      const directory = channel.member_directory;
+      if (directory !== undefined) {
+        const source = "source" in directory ? directory.source : "feishu_api";
+        const apiSource = channel.kind === "slack_app" ? "slack_api" : channel.kind === "discord_bot" ? "discord_api" : undefined;
+        if (source !== "file" && source !== apiSource) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["member_directory"], message: "member directory source does not match platform." });
+        if ("identity_scope" in directory) {
+          const scope = channel.kind === "slack_app" ? "slack_team" : channel.kind === "discord_bot" ? "discord_guild" : "telegram_bot";
+          if (directory.identity_scope.kind !== scope) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["member_directory", "identity_scope", "kind"], message: "member directory identity scope does not match platform." });
+        }
+      }
+      if (directory === undefined || !("source" in directory && directory.source === "file")) {
+        const idSchema = channel.kind === "slack_app" ? z.string().regex(/^[UW][A-Z0-9]{1,63}$/u)
+          : channel.kind === "telegram_bot" ? decimalPlatformIdSchema.refine(id => Number.isSafeInteger(Number(id))) : decimalPlatformIdSchema;
+        for (const [key, id] of Object.entries(channel.author_mappings ?? {})) {
+          if (!idSchema.safeParse(id).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["author_mappings", key], message: "author mappings require platform user IDs, not usernames or markup." });
+        }
+      }
+    } else if (channel.member_directory !== undefined && "source" in channel.member_directory &&
+      ["slack_api", "discord_api"].includes(channel.member_directory.source)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["member_directory"], message: "social API directories require a matching social IM channel." });
     }
     if (channel.kind === "wecom_app" && channel.connection === undefined) {
       ctx.addIssue({
@@ -544,7 +565,7 @@ export const outputAuthorResolutionSchema = z
     email_blacklist: z.array(z.string().email()).optional(),
     /**
      * Global default TTL for directory-backed channel member snapshots
-     * (currently feishu_app member_directory). Channel-level
+     * (Feishu, Slack and Discord API directories). Channel-level
      * member_directory.cache_ttl_seconds wins when both are set; the runtime
      * default is 12h; 0 disables reuse. Capped at 7 days.
      */

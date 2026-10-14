@@ -26,6 +26,23 @@ export const socialConnections = {
 } as const;
 
 describe("social IM configuration", () => {
+  it.each([
+    ["slack_app", { channel_id: "C123" }, "slack_api", "U234"],
+    ["discord_bot", { channel_id: "123" }, "discord_api", "234"],
+    ["telegram_bot", { chat_id: "-123" }, undefined, "234"],
+  ])("supports %s mappings and matching directories while rejecting platform identity confusion", (kind, target, source, id) => {
+    const channel = { name: "report", kind, connection: "bot", ...target, mention_author: true, author_mappings: { "alice@example.org": id } };
+    expect(outputChannelSchema.safeParse(channel).success).toBe(true);
+    expect(() => validateEntityCapabilities("channel", channel)).not.toThrow();
+    expect(outputChannelSchema.safeParse({ ...channel, author_mappings: { alice: "@alice" } }).success).toBe(false);
+    if (source) {
+      const api = { ...channel, member_directory: { source } };
+      expect(outputChannelSchema.safeParse(api).success).toBe(true);
+      expect(() => validateEntityCapabilities("channel", api)).not.toThrow();
+    }
+    expect(outputChannelSchema.safeParse({ ...channel, member_directory: { source: "feishu_api", chat_id: "oc_other" } }).success).toBe(false);
+    if (kind === "telegram_bot") expect(outputChannelSchema.safeParse({ ...channel, member_directory: { source: "slack_api" } }).success).toBe(false);
+  });
   it("validates Socket Mode credentials, transport exclusivity and receiver ownership", () => {
     const socket = {...socialConnections.slack, socket_mode: {enabled: true, app_token_env: "SLACK_APP_TOKEN"}};
     expect(imConnectionSchema.safeParse(socket).success).toBe(true);
@@ -68,7 +85,7 @@ describe("social IM configuration", () => {
       ).toBe(false);
     },
   );
-  it("rejects inline secrets, native mentions and unknown destination features", () => {
+  it("rejects inline secrets, broad mentions and unknown destination features", () => {
     const channel = {
       name: "slack",
       kind: "slack_app",
@@ -77,7 +94,6 @@ describe("social IM configuration", () => {
     };
     for (const extra of [
       { token: "secret" },
-      { mention_author: true },
       { mention_fallback: "all" },
       { thread_ts: "1.2" },
       { base_url: "https://example.com" },

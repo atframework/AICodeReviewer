@@ -35,7 +35,7 @@ it.each(platforms)(
       targetKind: "commit",
       repoRef: "org/demo",
       headSha: SHA,
-      author: {},
+      author: { email: "alice@example.org" },
       reason: "example",
     });
     expect(
@@ -53,5 +53,8 @@ it.each(platforms)(
         /chat\.postMessage$|\/messages$|sendMessage$/u.test(c.url),
       ),
     ).toHaveLength(1);
+    const body = calls.at(-1)!.body;
+    if (platform === "telegram") expect(JSON.stringify(body.entities)).toContain("tg://user?id=234567891");
+    else expect(String(body.text ?? body.content)).toContain(platform === "slack" ? "<@U234>" : "<@234567891>");
   },
 );

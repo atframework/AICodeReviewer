@@ -4,7 +4,7 @@ description: 通过 Slack 发送审查报告和执行授权的审查命令。
 ---
 
 AICR 支持 `slack_app`，每次发布一条聚合报告，通过 HTTP 或 Socket Mode 接收 `help`、`chat-id`、`review`、`status` 四种命令。
-原生作者提醒、目录、按钮和自然语言请求未纳入此实现。
+按钮和自然语言请求未纳入此实现。
 
 ## 创建和安装
 
@@ -269,3 +269,45 @@ Socket Mode 下隐藏 URL 是正常行为；核验 App-Level Token、连接状�
 
 仓库测试使用 HTTP 替身和真实本地存储；真实平台需单独凭据并独立验收。
 本地通过不代表客户端呈现或公网回调已验证。
+
+## 提醒审查作者
+
+在输出渠道配置显式映射或 API 目录：
+
+```yaml
+mention_author: true
+author_mappings: { "alice@example.org": U234 }
+# 可选：在目标频道成员中自动匹配
+# member_directory: { source: slack_api, cache_ttl_seconds: 43200 }
+# guess_author: true
+```
+
+API 目录读取 `conversations.members` 和 `users.list` 的全部分页，只匹配目标频道内仍有效的人类成员。Bot Token Scopes 增加 `users:read`，按邮箱匹配另需 `users:read.email`；修改后重新安装并核对实际 token。仅使用显式映射无需目录权限。Slack 只会通知已加入该频道的被提及用户。依据：[用户提及](https://docs.slack.dev/messaging/formatting-message-text/#mentioning-users)、[users.list](https://docs.slack.dev/reference/methods/users.list/)。
+
+配置目录或映射后默认启用作者提醒；`mention_author: false` 关闭全部身份解析。映射键可匹配审查作者的邮箱、username、display name 或 P4 提交 workspace；先应用全局邮箱黑名单。使用 API 目录时，映射值必须是候选成员 ID；没有目录时是显式平台 ID；文件目录使用本地成员 key。`guess_author` 默认 false，保留精确匹配；设为 true 才启用 workspace 关联和专用身份模型。歧义、目录不可用或未匹配时照常发报告并省略 @。拒绝 `mention_fallback: all`；主评审提示词不接收目录。
+
+文件目录支持 aliases、emails 和带来源范围的 VCS 账号。将下面片段合并到输出渠道，scope ID 必须与连接一致：
+
+```yaml
+member_directory:
+  source: file
+  path: ./members.yaml
+  directory_id: team
+  identity_scope: { kind: slack_team, id: "T123" }
+author_mappings: { "alice@example.org": alice }
+```
+
+```yaml
+# members.yaml
+version: 1
+directories:
+  team:
+    platform: slack
+    identity_scope: { kind: slack_team, id: "T123" }
+    members:
+      - key: alice
+        emails: [alice@example.org]
+        mention: { type: slack_user_id, id: "U234" }
+```
+
+先转义不可信正文，再插入原生提醒；长报告截断时预留提醒空间。文件路径相对配置目录解析，复用文件目录热加载。API 快照 TTL 按渠道、`outputs.author_resolution.directory_cache_ttl_seconds`、默认 43200 秒取值；0 禁用复用。每次快照最多 10000 成员、100 页、15 秒读取期限；刷新失败或分页不完整时不用过期成员。实际通知需在目标客户端验证。

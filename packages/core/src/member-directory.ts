@@ -30,12 +30,12 @@ export const MEMBER_DIRECTORY_LIMITS = Object.freeze({
 	maxIdLength: 128,
 });
 
-export type MemberDirectoryPlatform = "wecom" | "feishu";
+export type MemberDirectoryPlatform = "wecom" | "feishu" | "slack" | "discord" | "telegram";
 
-export const MEMBER_DIRECTORY_IDENTITY_SCOPES = ["wecom_corp", "feishu_app", "feishu_tenant"] as const;
+export const MEMBER_DIRECTORY_IDENTITY_SCOPES = ["wecom_corp", "feishu_app", "feishu_tenant", "slack_team", "discord_guild", "telegram_bot"] as const;
 export type MemberDirectoryIdentityScopeKind = (typeof MEMBER_DIRECTORY_IDENTITY_SCOPES)[number];
 
-export const MEMBER_MENTION_TYPES = ["wecom_userid", "wecom_mobile", "feishu_open_id", "feishu_user_id"] as const;
+export const MEMBER_MENTION_TYPES = ["wecom_userid", "wecom_mobile", "feishu_open_id", "feishu_user_id", "slack_user_id", "discord_user_id", "telegram_user_id"] as const;
 export type MemberMentionType = (typeof MEMBER_MENTION_TYPES)[number];
 
 /** Mention types each identity scope may carry (member-directory design §2). */
@@ -43,11 +43,17 @@ const MENTION_TYPES_BY_SCOPE: Readonly<Record<MemberDirectoryIdentityScopeKind, 
 	wecom_corp: ["wecom_userid", "wecom_mobile"],
 	feishu_app: ["feishu_open_id"],
 	feishu_tenant: ["feishu_user_id"],
+	slack_team: ["slack_user_id"],
+	discord_guild: ["discord_user_id"],
+	telegram_bot: ["telegram_user_id"],
 };
 
 const PLATFORM_SCOPES: Readonly<Record<MemberDirectoryPlatform, readonly MemberDirectoryIdentityScopeKind[]>> = {
 	wecom: ["wecom_corp"],
 	feishu: ["feishu_app", "feishu_tenant"],
+	slack: ["slack_team"],
+	discord: ["discord_guild"],
+	telegram: ["telegram_bot"],
 };
 
 // ---------------------------------------------------------------------------
@@ -312,7 +318,7 @@ const identityScopeSchema = z
 
 const directorySchema = z
 	.object({
-		platform: z.enum(["wecom", "feishu"]),
+		platform: z.enum(["wecom", "feishu", "slack", "discord", "telegram"]),
 		identity_scope: identityScopeSchema,
 		members: z.array(memberSchema),
 	})
@@ -453,6 +459,11 @@ function buildEntry(name: string, raw: z.infer<typeof directorySchema>): EntryBu
 		}
 		if (member.mention.id === "all" || member.mention.id === "@all") {
 			return { ok: false, issue: { code: "invalid_mention", message: "all/@all pseudo identities are not valid mention ids", path: ["directories", name, "members", String(index), "mention", "id"] } };
+		}
+		if ((member.mention.type === "slack_user_id" && !/^[UW][A-Z0-9]{1,63}$/u.test(member.mention.id)) ||
+			(member.mention.type === "discord_user_id" && !/^[1-9][0-9]{0,31}$/u.test(member.mention.id)) ||
+			(member.mention.type === "telegram_user_id" && (!/^[1-9][0-9]{0,15}$/u.test(member.mention.id) || !Number.isSafeInteger(Number(member.mention.id))))) {
+			return { ok: false, issue: { code: "invalid_mention", message: "invalid platform user ID", path: ["directories", name, "members", String(index), "mention", "id"] } };
 		}
 		const mentionKey = `${member.mention.type}:${member.mention.id}`;
 		if (mentionIds.has(mentionKey)) {

@@ -88,8 +88,11 @@ problem issue 通道仍会在每次真正的零问题评审后对账已有指纹
 | `name` | string | 唯一的通道 id。 |
 | `kind` | string | 通道类型（见下表）。`gitea_finding_issue` 已移除，请用 `gitea_problem_issue`。 |
 | `trigger` | string | 该通道绑定的 trigger 名（用于依赖 VCS 的类型）。 |
-| `mention_author` | bool | 在消息中 @ 提交作者。VCS PR/issue 类通道默认 `true`，IM 机器人默认 `false`。 |
-| `mention_fallback` | enum | `all`（@ 所有人）或 `skip`（找不到作者时不 @）。 |
+| `mention_author` | bool | 在消息中 @ 审查作者。VCS PR/issue 默认 `true`。Slack/Discord/Telegram 配有目录或映射时默认 `true`，未配置时 `false`；其他 IM 见平台接入说明。 |
+| `mention_fallback` | enum | `all`（@ 所有人）或 `skip`（找不到作者时不 @）。Slack/Discord/Telegram 仅接受 `skip`。 |
+| `author_mappings` | map | Slack/Discord/Telegram 将审查身份映射到原生用户 ID；文件目录使用本地成员 key，API 目录中的值须属于快照成员。 |
+| `member_directory` | object | Slack/Discord API 目录或指定身份范围的文件目录；Telegram 使用文件。配置和权限见各平台指南。 |
+| `guess_author` | bool | Slack/Discord/Telegram 默认 `false`；启用后，在精确目录匹配失败时使用 workspace 关联和专用身份模型。 |
 | `no_problems` | object | 按通道的零问题策略（见上）。 |
 | `commit_url_template` | string | 覆盖 push/commit 目标的提交链接。 |
 | `revision_url_template` | string | 覆盖 revision 链接（P4/SVN）。 |

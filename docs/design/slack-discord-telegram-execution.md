@@ -71,7 +71,8 @@ SDC-00 完成基线记录后即可开展 SDC-01–05；其中共享 IM 缺口的
 
 1. 增加三种 connection/output、三种 typed actor 和 channel conversation；保持旧 identity 序列化完全相同。
 2. 按规范 §3 校验跨 kind 引用、ID、必填凭据、callback、输出目的地及四个命令。
-   新平台允许精确 actor 或仅限已列群/频道的 conversation_users；拒绝目录 scope/any/wildcard 仓库授权、线程、目录、提醒及旧 webhook 专属字段。
+   新平台允许精确 actor 或仅限已列群/频道的 conversation_users；拒绝目录 scope/any/wildcard 仓库授权、线程及旧 webhook 专属字段。
+   作者提醒独立支持平台用户 ID 映射、匹配平台的 API 或文件目录，拒绝 all 兜底和跨平台身份范围。
 3. 新 literal secret 进入 seal/mask/purpose policy；destination 绑定平台身份和目标。
    bot URL 路径和 interaction token 进入错误脱敏测试；public_key 不要误密封。
 4. 扩展现有 config entity 双向映射和 rename/delete 引用检查；复用已有 collection，不新增 parallel config store。
@@ -139,7 +140,7 @@ server `im-replies.test.ts`、`im-review-execution.test.ts`。新增平台响应
 
 1. 读取 T1–T5；getMe readiness 取得并核对 bot_id，username 只用于定向命令；token 不从 URL 输出到日志。
 2. 新 toTelegramMessage，text+白名单 entities；按最终 text 计算 UTF-16 范围，含截断后重算。
-   text 总预算 3900，不开 parse_mode，不产生原生 mention。
+   text 总预算 3900，不开 parse_mode；正文不生成原生 mention，宿主可为解析出的作者追加 tg 用户链接实体并预留预算。
 3. 验证 sendMessage 的业务响应、chat.id、message_id；迁移群、Bot blocked、无权限返回明确失败，不自动改目标。
 4. 支持显式配置的 private/group/supergroup，拒绝 topic/channel/business 消息目标；更新 generation 缓存。
 5. 接入 output resolver，覆盖负 chat ID、Unicode 和无安全 target link 的 P4/SVN 报告。

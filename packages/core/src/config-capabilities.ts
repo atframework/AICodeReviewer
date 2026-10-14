@@ -310,9 +310,9 @@ export const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly stri
   receive_id_type: ["feishu_app"],
   // The directory node accepts API or file forms on every IM channel; the
   // chat_id leaf is the feishu API form only (the file form has its own fields).
-  member_directory: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app"],
+  member_directory: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app", "slack_app", "discord_bot", "telegram_bot"],
   "member_directory.chat_id": ["feishu_app"],
-  guess_author: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app"],
+  guess_author: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app", "slack_app", "discord_bot", "telegram_bot"],
   user_mappings: ["feishu_app"],
   severity_label_prefix: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitlab_problem_issue", "gitea_problem_issue"],
   severity_label_colors: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitlab_problem_issue", "gitea_problem_issue"],

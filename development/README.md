@@ -357,6 +357,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   ```
 
   `deploy.sh` 检测到 loopback 代理会自动加 `--network=host`，使构建容器能访问宿主 loopback 上的代理。镜像内的运行时容器不需要该代理，故 `NO_PROXY` 必须包含 `127.0.0.1,localhost`，否则 `deploy.sh` 末尾的 `curl /healthz` 健康检查会误走代理。若想完全不走代理（仅当本机直连所有源都稳定时），需用一份把代理自动探测块（`if [ -z "$BUILD_HTTP_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then`）改为 `if false; then` 的 `deploy.sh` 副本构建。
+- **公网机直连镜像源构建（2026-10-13 验证）**：`3128` 代理（`vbox-proxy` 容器）不稳定时会在大文件传输中途重置连接，apt 下载 `cpp-14` 等大包时整轮构建被杀且无错误输出。替代方案：按上文把 `deploy.sh` 代理自动探测块改为 `if false; then` 生成无代理副本，显式导出国内镜像源构建：`APT_MIRROR=http://mirrors.ustc.edu.cn/debian`、`NPM_REGISTRY=http://mirrors.tencent.com/npm/`、`PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple`、`KUBERNETES_APT_REPO_BASE=https://mirrors.tencent.com/kubernetes_new/core:/stable:`、`KUBERNETES_APT_REPO_VERSION=v1.36`。GitHub release 直连会超时或报 `SSL unexpected eof`（yq 与 dust 等静态 CLI 均踩过），需同时设置 `GH_RELEASE_PREFIX=https://gh-proxy.com/`（现代 CLI 工具层）和 `YQ_DOWNLOAD_BASE=https://gh-proxy.com/https://github.com/mikefarah/yq/releases/download`（运行时 apt 层内的 yq 下载，`GH_RELEASE_PREFIX` 不覆盖它）。`package.perforce.com` 与 `packages.buildkite.com` 从构建容器 bridge 网络直连可达。新增 build-arg 会使运行时 apt 层缓存失效并整层重建，属预期行为。
 
 ## 8. 测试验收环境（与生产隔离）
 

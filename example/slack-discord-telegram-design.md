@@ -59,7 +59,8 @@ workspaces:
 ```
 
 Slack Bot 需要加入频道；Discord Bot 需要所属 guild 和目标频道权限；Telegram 私聊先由用户开始，群里先加入 Bot。
-本期三种 output 不接受线程、topic、任意 API origin 或原生作者提醒字段。
+三种 output 不接受线程、topic 或任意 API origin。作者提醒可配置 author_mappings 或成员目录，
+权限和身份范围见[接入规范](../docs/design/slack-discord-telegram.md)。
 file-only 配置可以只发送；命令需要下面的持久配置前提。
 
 ## 增加命令入口

@@ -533,7 +533,7 @@ export type ImConfig = z.infer<typeof imConfigSchema>;
 
 export const memberDirectoryIdentityScopeSchema = z
   .object({
-    kind: z.enum(["wecom_corp", "feishu_app", "feishu_tenant"]),
+    kind: z.enum(["wecom_corp", "feishu_app", "feishu_tenant", "slack_team", "discord_guild", "telegram_bot"]),
     id: z.string().min(1),
   })
   .strict();
@@ -574,6 +574,14 @@ export const channelMemberDirectorySchema = z.union([
   legacyFeishuApiMemberDirectorySchema,
   explicitFeishuApiMemberDirectorySchema,
   fileMemberDirectorySchema,
+  z.object({
+    source: z.literal("slack_api"),
+    cache_ttl_seconds: z.number().int().min(0).max(604800).optional(),
+  }).strict(),
+  z.object({
+    source: z.literal("discord_api"),
+    cache_ttl_seconds: z.number().int().min(0).max(604800).optional(),
+  }).strict(),
 ]);
 export type ChannelMemberDirectoryConfig = z.infer<typeof channelMemberDirectorySchema>;
 

@@ -5,6 +5,9 @@ import {
   PublicationReconciliationError,
 } from "./publication-journal.js";
 
+import type { ChannelUser } from "./channel-identity.js";
+import { loadSocialImDirectory } from "./social-im-directory.js";
+
 export type SocialImConnection = Extract<
   ImConnectionConfig,
   { kind: "slack_app" | "discord_bot" | "telegram_bot" }
@@ -31,6 +34,8 @@ export interface TelegramMessageEntity {
 export interface SocialImMessage {
   readonly text: string;
   readonly entities?: readonly TelegramMessageEntity[];
+  /** Host-resolved Discord user IDs; report text never populates this allowlist. */
+  readonly allowedUserMentions?: readonly string[];
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -52,6 +57,8 @@ export class SocialImClient {
   private readonly ready = new Map<string, number>();
   private readonly readinessReads = new Map<string, Promise<boolean>>();
   private readonly rateLimits = new Map<string, number>();
+  private readonly directories = new Map<string, { readonly loadedAt: number; readonly users: readonly ChannelUser[] }>();
+  private readonly directoryReads = new Map<string, Promise<readonly ChannelUser[]>>();
   private botUsername: string | undefined;
   private readonly origin: string;
   constructor(
@@ -114,6 +121,31 @@ export class SocialImClient {
     if (this.connection.kind !== "discord_bot" && raw.ok !== true)
       throw new Error("Social IM readiness failed.");
     return raw;
+  }
+  /** Generation-scoped complete snapshots; failures never reuse expired identities. */
+  members(destination: string, ttlSeconds: number): Promise<readonly ChannelUser[]> {
+    const key = `${destination}:${ttlSeconds}`;
+    if (ttlSeconds === 0) this.directories.delete(key);
+    const cached = this.directories.get(key);
+    if (cached && this.now() - cached.loadedAt < ttlSeconds * 1000) return Promise.resolve(cached.users);
+    const active = this.directoryReads.get(key);
+    if (active) return active;
+    const deadline = AbortSignal.timeout(15_000);
+    const pending = loadSocialImDirectory(this.connection, destination, async path => {
+      const response = await this.fetch(this.url(path), {
+        method: "GET", headers: this.headers(), redirect: "error", signal: deadline,
+      });
+      if (!response.ok) throw new Error("Social IM directory unavailable.");
+      return response.json();
+    }).then(users => {
+      if (ttlSeconds > 0) this.directories.set(key, { loadedAt: this.now(), users });
+      return users;
+    }).catch(() => {
+      this.directories.delete(key);
+      throw new Error("Social IM directory unavailable.");
+    }).finally(() => { this.directoryReads.delete(key); });
+    this.directoryReads.set(key, pending);
+    return pending;
   }
   /** Called by background prewarming or an output worker, never by the callback handler. */
   refreshReadiness(destination: string): Promise<boolean> {
@@ -211,6 +243,9 @@ export class SocialImClient {
     if (
       !message.text ||
       message.text.length > limit ||
+      (message.allowedUserMentions !== undefined &&
+        (this.connection.kind !== "discord_bot" || message.allowedUserMentions.length > 1 ||
+          message.allowedUserMentions.some(id => !snowflake(id) || !message.text.includes(`<@${id}>`)))) ||
       message.entities?.some(
         (entity) =>
           !["bold", "italic", "code", "pre", "text_link"].includes(
@@ -222,7 +257,7 @@ export class SocialImClient {
           entity.length <= 0 ||
           entity.offset + entity.length > message.text.length ||
           (entity.type === "text_link" &&
-            !/^https?:\/\//u.test(entity.url ?? "")),
+            !/^(?:https?:\/\/|tg:\/\/user\?id=[1-9][0-9]{0,15}$)/u.test(entity.url ?? "")),
       )
     )
       return { kind: "rejected", code: "invalid_message" };
@@ -253,7 +288,8 @@ export class SocialImClient {
         : kind === "discord_bot"
           ? {
               content: message.text,
-              allowed_mentions: { parse: [], replied_user: false },
+              allowed_mentions: { parse: [], replied_user: false,
+                ...(message.allowedUserMentions?.length ? { users: message.allowedUserMentions } : {}) },
             }
           : {
               chat_id: destination,

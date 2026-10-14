@@ -3,7 +3,7 @@ title: Slack
 description: Send review reports and run authorized review commands through Slack.
 ---
 
-AICR supports `slack_app` for one aggregated report per publication and four commands over HTTP or Socket Mode: `help`, `chat-id`, `review` and `status`. Report destinations and command conversations can be different. Native author mentions, member directories, buttons and natural-language review requests are outside this implementation.
+AICR supports `slack_app` for one aggregated report per publication and four commands over HTTP or Socket Mode: `help`, `chat-id`, `review` and `status`. Report destinations and command conversations can be different. Buttons and natural-language requests are outside this implementation.
 
 ## Create and install
 
@@ -104,7 +104,7 @@ Start from [example/slack-app.yaml](https://github.com/atframework/AICodeReviewe
 
 File configuration alone can send reports. Merge your existing VCS/LLM configuration before running an actual review. A clean review sends only when the summary has content by default (`publish_if_summary`). Override `no_problems` per [output policy](/en/configuration/outputs/).
 
-Reports use named, workspace or built-in templates in the normal priority order. Slack/Telegram are bounded to 3900 UTF-16 units including the truncation notice and optional safe report link. Telegram sends text plus explicit entities; Discord disables allowed mentions; Slack escapes native controls.
+Reports use named, workspace or built-in templates in the normal priority order. Slack/Telegram are bounded to 3900 UTF-16 units including the truncation notice and optional safe report link. Telegram sends text plus explicit entities; Discord permits only host-resolved author mentions; Slack escapes native controls.
 
 Reports have Review target, Summary and Problems sections, with each problem label on one line.
 Slack uses its own `mrkdwn`: headings and severity labels become single-asterisk bold text,
@@ -265,3 +265,45 @@ Before each new VCS/analysis/publication operation, current authorization is rec
 For rollback, disable ingress and drain workers before changing binaries or restoring a compatible backup. Migration 013 adds a versioned reply payload column; do not delete request/journal/outbox data to clear an unknown result. Deregister only resources owned by this deployment after checking current remote ownership.
 
 The repository tests use HTTP fixtures and real local stores. Live workspace/guild/Bot acceptance requires separate credentials and remains tracked independently; passing local tests does not establish client rendering or public callback delivery.
+
+## Mention the review author
+
+Configure the output channel with either an explicit mapping or an API directory:
+
+```yaml
+mention_author: true
+author_mappings: { "alice@example.org": U234 }
+# Optional automatic matching among destination-channel members:
+# member_directory: { source: slack_api, cache_ttl_seconds: 43200 }
+# guess_author: true
+```
+
+The API directory reads every page of `conversations.members` and `users.list`, then matches active human members of the destination channel. Add `users:read` to Bot Token Scopes; add `users:read.email` for email matching, reinstall the app and verify the active token. Explicit mappings alone need no directory scopes. Slack notifies mentioned users only when they belong to that channel. See [user mentions](https://docs.slack.dev/messaging/formatting-message-text/#mentioning-users) and [users.list](https://docs.slack.dev/reference/methods/users.list/).
+
+A configured directory or mapping enables author reminders by default; `mention_author: false` disables all resolution. Mapping keys match the review author's email, username, display name or P4 submitter workspace, with the global email blacklist applied first. With an API directory, mapping values must be candidate user IDs; without a directory, they are explicit platform IDs. With a file, values are local member keys. Exact matches work with `guess_author: false` (the default); true additionally enables workspace matching and the dedicated identity model. Ambiguous, unavailable or unmatched identities send the report without a mention. `mention_fallback: all` is rejected. Main review prompts receive no directory.
+
+File directories support aliases, emails and scoped VCS accounts. Merge this fragment into the output channel; the scope ID must match its connection:
+
+```yaml
+member_directory:
+  source: file
+  path: ./members.yaml
+  directory_id: team
+  identity_scope: { kind: slack_team, id: "T123" }
+author_mappings: { "alice@example.org": alice }
+```
+
+```yaml
+# members.yaml
+version: 1
+directories:
+  team:
+    platform: slack
+    identity_scope: { kind: slack_team, id: "T123" }
+    members:
+      - key: alice
+        emails: [alice@example.org]
+        mention: { type: slack_user_id, id: "U234" }
+```
+
+Mentions are inserted after untrusted report text is escaped and retain reserved space when a report is truncated. File paths resolve against the configuration directory; hot reload uses the shared file-directory service. API snapshots use the channel TTL, then `outputs.author_resolution.directory_cache_ttl_seconds`, then 43200 seconds; zero disables reuse. A snapshot is limited to 10000 members, 100 pages and a 15-second read deadline. Failed or incomplete refreshes do not reuse expired members. Validate notification delivery with the actual client and destination.

@@ -99,10 +99,13 @@ export class ImConnectionRegistry {
 	}
 }
 
-const registries = new WeakMap<AppConfig, ImConnectionRegistry>();
+const registries = new WeakMap<object, ImConnectionRegistry>();
 export function imConnectionRegistryFor(config: AppConfig, options: ImConnectionRuntimeOptions): ImConnectionRegistry {
-  let registry = registries.get(config);
-  if (!registry) { registry = new ImConnectionRegistry(options); registries.set(config, registry); }
+  // Per-run review overlays copy AppConfig but retain the generation's IM node.
+  // Use that stable owner so readiness and member TTLs survive successive runs.
+  const owner = config.im ?? config;
+  let registry = registries.get(owner);
+  if (!registry) { registry = new ImConnectionRegistry(options); registries.set(owner, registry); }
   return registry;
 }
 

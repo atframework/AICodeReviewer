@@ -78,7 +78,7 @@ HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是�
 | --- | --- | --- | --- |
 | C01 | 旧 config 无 im、新 connection、file-only 启用 review | 旧 canonical/hash 不变；新增配置贯通；file-only 输出可用但 review 拒绝且无 request/VCS/LLM | core im-config/config-compiler；server im-callback-routes |
 | C02 | 错 connection kind、混合内联 token、缺凭据、literal/env 同时设、非法 key/ID | 预览/发布明确拒绝；disabled 草案策略一致；无意外网络 | core im-config/config-capabilities；server config API |
-| C03 | 目录 scope/any/allow_all_repositories、未知命令、DM/线程/topic、原生 mention/目录字段 | 不支持的字段/会话结构在配置期拒绝；conversation_users 只允许显式群/频道，禁止私聊/旧平台和重叠 binding；真实目标类型仍由 readiness 核验；旧平台能力保持 | core social-im-config/config-capabilities；server connection readiness |
+| C03 | 目录 scope/any/allow_all_repositories、未知命令、DM/线程/topic、跨平台目录/无效 mention ID | 不支持的字段/会话结构在配置期拒绝；作者提醒独立支持映射及匹配平台的目录；conversation_users 只允许显式群/频道，禁止私聊/旧平台和重叠 binding；真实目标类型仍由 readiness 核验；旧平台能力保持 | core social-im-config/config-capabilities；server connection readiness |
 | C04 | connection rename/delete、secret 轮换、app/team/guild/Bot 改变 | 引用完整或拒绝；同身份轮换 dedup 稳定，不同身份分域；旧通知不转到同名新连接 | core config-source/config-publish；server runtime-generation |
 | C05 | 管理 UI/API export/preview/audit、异常错误含 token/response_url/bot URL | 所有 secret 遮罩；public_key 保留；用途授权不能将 secret 发往不同身份/目标 | core secret policy/sealing/scrubber；server API/UI/browser |
 
@@ -150,6 +150,11 @@ HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是�
 | D04 | 全套 baseline、browser、docs:check/build、Markdown/reference/diff 门禁通过且记录发现数 | 最终验收日志 |
 
 ## 真实平台 L01–L03
+
+作者提醒本地回归见 `social-im-mentions.test.ts`、`social-im-author-mentions.test.ts` 和
+`runtime-generation.test.ts`：目录完整性、TTL/失效、映射/范围、禁用/歧义/黑名单、原始 payload 与截断。
+L01–L03 另须验证目标用户收到通知；覆盖 Slack Bot scopes/成员资格、Discord intent/目标可见性、
+Telegram 数字用户 ID/隐私及无关用户不被提醒。本地 HTTP 替身不证明这些条件。
 
 | ID | 专用环境及显式变量（拟新增） | 必做流程 |
 | --- | --- | --- |

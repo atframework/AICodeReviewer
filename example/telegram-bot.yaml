@@ -34,4 +34,8 @@ outputs:
       connection: bot
       chat_id: "-1001234567890"
       no_problems: { action: publish_if_summary }
+      # Map a VCS author identity to a platform USER ID, never the Bot/chat ID.
+      mention_author: true
+      author_mappings: { "alice@example.org": "234567891" }
+      # Telegram has no complete member-list API; use mappings or a scoped file directory.
 

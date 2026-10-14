@@ -22,6 +22,7 @@ import { RuntimeConfigManager } from "../src/runtime-config.js";
 import { AutoCommitScheduler } from "../src/auto-commit-scheduler.js";
 import { materializeRuntimeBundle } from "@aicr/agents";
 import * as modelCatalog from "../src/model-catalog-service.js";
+import { apiFixture } from "./social-im-fixtures.js";
 
 const NAMESPACE = "gen-test";
 
@@ -162,6 +163,55 @@ async function publishOperations(operations: Parameters<typeof prepareConfigPubl
 }
 
 describe("runtime config generation integration (bootstrap)", () => {
+  it("pins social author mappings and API directory TTL through database publication", async () => {
+    let memberCalls = 0;
+    const writes: { url: string; body: Record<string, unknown> }[] = [];
+    const normal = apiFixture("slack", writes);
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (String(url).includes("conversations.members")) return Response.json({ ok: true, members: ["U234", "U345"] });
+      if (String(url).includes("users.list")) {
+        memberCalls++;
+        return Response.json({ ok: true, members: ["U234", "U345"].map(id => ({ id, name: id })) });
+      }
+      return normal(url, init);
+    });
+    const connection = { kind: "slack_app" as const, app_id: "A123", team_id: "T123", bot_user_id: "U123", token_env: "GITEA_TOKEN" };
+    const file = { ...FILE_DOCUMENT, im: { connections: { bot: connection } } };
+    const { options } = await bootstrap(makeConfig({ im: file.im }), file);
+    const channel = { name: "social", kind: "slack_app", connection: "bot", channel_id: "C123",
+      member_directory: { source: "slack_api" }, author_mappings: { alice: "U234" } };
+    await publishOperations([
+      { op: "create", collection: "channels", record: { id: "social", name: "social", enabled: true, value: channel } },
+      { op: "create", collection: "workspaces", record: { id: "ws", name: "ws", enabled: true,
+        value: { source_repo: { trigger: "gitea-internal", repo: "acme/repo" } } } },
+      { op: "set", path: ["outputs", "routes", "default", "summary"], value: ["social"] },
+    ], file);
+    const old = await options.runtimeConfig!.admission();
+    const event = createReviewEvent({ triggerName: "gitea-internal", provider: "gitea", workspaceId: "ws", targetKind: "push",
+      repoRef: "acme/repo", author: { username: "alice" }, reason: "test" });
+    let publishPinnedOld: (() => Promise<void>) | undefined;
+    const publish = async (snapshotId: string) => {
+      const context = { reviewEvent: event, payload: {}, provider: "gitea" as const, eventName: "push", configSnapshotId: snapshotId };
+      const run = await options.reviewOrchestration!.optionsResolver!(context);
+      const send = async () => { await (await run.outputPublisherResolver!(context))!.publishSummary!("report"); };
+      if (snapshotId === old.snapshotId && !publishPinnedOld) publishPinnedOld = send;
+      await send();
+      return writes.filter(c => c.url.endsWith("chat.postMessage")).at(-1)!.body.text;
+    };
+    expect(await publish(old.snapshotId)).toContain("<@U234>");
+    expect(await publish(old.snapshotId)).toContain("<@U234>");
+    expect(memberCalls).toBe(1);
+    await publishOperations([
+      { op: "update", collection: "channels", recordId: "social", value: { ...channel, author_mappings: { alice: "U345" } } },
+      { op: "set", path: ["outputs", "author_resolution", "directory_cache_ttl_seconds"], value: 0 },
+    ], file);
+    const current = await options.runtimeConfig!.admission();
+    expect(await publish(current.snapshotId)).toContain("<@U345>");
+    expect(await publish(current.snapshotId)).toContain("<@U345>");
+    await publishPinnedOld!();
+    expect(writes.filter(c => c.url.endsWith("chat.postMessage")).at(-1)!.body.text).toContain("<@U234>");
+    expect(memberCalls).toBe(3);
+  });
   it("pins database directory TTLs and isolates cached members across configuration generations", async () => {
     let memberCalls = 0;
     vi.stubGlobal("fetch", async (url: string) => {

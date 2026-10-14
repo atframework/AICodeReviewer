@@ -56,6 +56,18 @@ const wecomJson = JSON.stringify({
 const model = (data: MemberDirectoryData) => data.directories.get("engineering-wecom")?.members[0];
 
 describe("D01: YAML/JSON parity and clear semantics", () => {
+  it.each([
+    ["slack", "slack_team", "slack_user_id", "U234"],
+    ["discord", "discord_guild", "discord_user_id", "234"],
+    ["telegram", "telegram_bot", "telegram_user_id", "234"],
+  ])("accepts typed %s identities and rejects malformed IDs or cross-platform scopes", (platform, kind, type, id) => {
+    const input = (id: string, scopeKind = kind) => JSON.stringify({ version: 1, directories: { team: {
+      platform, identity_scope: { kind: scopeKind, id: "example" }, members: [{ key: "alice", mention: { type, id } }],
+    } } });
+    expect(parseMemberDirectorySource(input(id), { format: "json" }).ok).toBe(true);
+    for (const invalid of ["all", "@alice", "-123", "<@123>"]) expect(parseMemberDirectorySource(input(invalid), { format: "json" }).ok).toBe(false);
+    expect(parseMemberDirectorySource(input(id, "wecom_corp"), { format: "json" }).ok).toBe(false);
+  });
   it("validates the published WeCom member directory example", () => {
     const source = readFileSync(new URL("../../../example/wecom-members.yaml", import.meta.url), "utf8");
     const result = parseMemberDirectorySource(source, { fileName: "wecom-members.yaml" });

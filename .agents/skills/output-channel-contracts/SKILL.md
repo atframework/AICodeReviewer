@@ -15,6 +15,18 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 
 - For Slack/Discord/Telegram, read [the protocol contract](../../../docs/design/slack-discord-telegram.md)
   and [official sources](../../../docs/ai/sources/slack-discord-telegram.md).
+  For author reminders, trace channel mappings/API or file directory through
+  `resolveSocialImAuthorId`, formatters and raw HTTP. Bot send permissions alone
+  cannot resolve authors. Slack API profiles need users:read (email also needs
+  users:read.email); Discord member lists need Server Members Intent; Telegram
+  has no complete member-list API. Keep mapped IDs, file member keys and command
+  actors separate. Insert native controls after escaping, reserve truncation
+  space and allow only the resolved Discord user. API snapshots must be complete;
+  failed refreshes suppress mentions. Cover actual payloads and old/new config
+  publication in social mention tests and `runtime-generation.test.ts`.
+  Review overlays copy AppConfig; use the generation's stable IM node as the
+  registry owner (`imConnectionRegistryFor`) so per-client directory TTLs and
+  readiness survive successive runs without leaking into a new generation.
   For batch authorization, `conversation_users` uses authenticated command context
   in explicit shared conversations; never substitute `any`, display names or
   inferred membership. Keep direct chats excluded and status ownership intact.

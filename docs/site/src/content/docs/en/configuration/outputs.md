@@ -95,8 +95,11 @@ fields are listed under each kind.
 | `name` | string | Unique channel id. |
 | `kind` | string | Channel kind (see list below). `gitea_finding_issue` is removed — use `gitea_problem_issue`. |
 | `trigger` | string | Trigger name this channel binds to (for VCS-backed kinds). |
-| `mention_author` | bool | @-mention the commit author in the message. Defaults to `true` for VCS PR/issue kinds and `false` for IM bots. |
-| `mention_fallback` | enum | `all` (mention everyone) or `skip` (no mention if author not found). |
+| `mention_author` | bool | @-mention the review author. VCS PR/issue kinds default to `true`. Slack/Discord/Telegram default to `true` when a directory or mapping is configured, otherwise `false`; see the platform guides for other IM kinds. |
+| `mention_fallback` | enum | `all` (mention everyone) or `skip` (no mention if author not found). Slack/Discord/Telegram accept only `skip`. |
+| `author_mappings` | map | For Slack/Discord/Telegram, map review identities to native user IDs, or local member keys with a file directory. API-directory values must be snapshot members. |
+| `member_directory` | object | Slack/Discord API directories or a scoped file directory; Telegram uses files. See each platform's setup and permissions. |
+| `guess_author` | bool | Slack/Discord/Telegram default to `false`. Enable workspace heuristics and the dedicated identity model after exact directory matching fails. |
 | `no_problems` | object | Per-channel zero-problem policy (see above). |
 | `commit_url_template` | string | Override commit link for push/commit targets. |
 | `revision_url_template` | string | Override revision link (P4/SVN). |

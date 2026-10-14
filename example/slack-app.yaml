@@ -36,4 +36,9 @@ outputs:
       connection: bot
       channel_id: C123
       no_problems: { action: publish_if_summary }
+      # Map a VCS author identity to a platform USER ID, never the Bot/chat ID.
+      mention_author: true
+      author_mappings: { "alice@example.org": "U234" }
+      # Optional: users:read; users:read.email for email matching. Reinstall after scope changes.
+      # member_directory: { source: slack_api, cache_ttl_seconds: 43200 }
 

@@ -10,7 +10,24 @@ and bilingual [user guide index](README.md#用户文档). Credentials and exact 
 identity belong to the connection; destinations belong to output channels.
 Problems buffer into one bounded summary flush, including a line-only route.
 Slack/Telegram use a 3900 UTF-16-unit budget, Discord 1900; metadata counts toward it.
-Native author mentions, directory scopes, threads/topics and buttons are rejected.
+Author mentions use channel-local `author_mappings` or a configured member directory.
+`slack_api` reads destination members and workspace profiles; `discord_api` reads
+guild members. Telegram uses mappings or a file directory. API scopes are opt-in:
+Slack needs `users:read` and optionally `users:read.email`; Discord needs Server
+Members Intent. Threads/topics, buttons and command directory scopes are rejected.
+Mappings/directories enable reminders by default; `mention_author: false` disables
+resolution. Without a directory, mapping values are native user IDs; API values
+must belong to the snapshot; file values are local member keys. `guess_author`
+defaults false for these channels; true enables workspace rules and the dedicated
+identity model. Blacklisted, ambiguous and unavailable identities emit no mention.
+Only `mention_fallback: skip` is accepted. Global Git email mappings are not IM IDs.
+The host appends mentions after escaping report content and reserves their space
+during truncation. Discord allows only the resolved user ID, Slack inserts `<@ID>`,
+and Telegram appends a `tg://user?id=…` text-link entity with UTF-16 offsets.
+API snapshots are complete and bounded to 10000 members, 100 pages and 15 seconds;
+channel/global TTL resolution defaults to 12h, with zero disabling reuse. Failed
+or incomplete refreshes discard the snapshot. Live membership/privacy still
+controls actual notifications. File scopes bind team/guild/bot IDs to the connection.
 
 `SocialImClient` checks cached platform identity/destination metadata before sends.
 Background checks refresh within 60 seconds of the 300-second expiry. Pending reads
@@ -63,9 +80,10 @@ lists invalidate the snapshot. Zero TTL keeps no snapshot for fallback. Without
 a usable snapshot the report sends without mentions; profile failures preserve
 only available fields.
 The channel identity abstraction separates native Git identities, directory
-channels, and channels without directory capability. Only `feishu_app` can use
-the dedicated model fallback for otherwise unmatched submitters. `guess_author`
-defaults to true; false disables workspace heuristics and LLM association.
+channels, and channels without directory capability. Configured file/social
+directories also support the dedicated model fallback for unmatched submitters.
+For `feishu_app`, `guess_author` defaults to true; false disables workspace
+heuristics and LLM association.
 `mention_author` separately enables notifications. The identity model group is
 selected by instance/defaults `author_resolution_model_chain`, then
 `llm.author_resolution_model_chain`, then `llm.default_model_chain`.

@@ -55,7 +55,9 @@ describe("Feishu app configuration contract", () => {
     expect(fields.find(field => field.path.join(".") === "kind")?.options?.map(option => option.value)).toContain("feishu_app");
     expect(fields.find(field => field.path.join(".") === "app_secret")).toMatchObject({ control: "secret-value", kinds: ["feishu_app"] });
     expect(fields.find(field => field.path.join(".") === "member_directory.chat_id")?.kinds).toEqual(["feishu_app"]); // API-form chat_id stays feishu-only
-    expect(fields.find(field => field.path.join(".") === "guess_author")).toMatchObject({ control: "toggle", kinds: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app"] });
+    expect(fields.find(field => field.path.join(".") === "guess_author")).toMatchObject({ control: "toggle", kinds: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app", "slack_app", "discord_bot", "telegram_bot"] });
+    expect(fields.find(field => field.path.join(".") === "member_directory.source")?.options?.map(option => option.value))
+      .toEqual(["feishu_api", "file", "slack_api", "discord_api"]);
     for (const pageId of ["model-groups", "workspaces"]) {
       const refs = spec.pages.find(page => page.id === pageId)!.sections.flatMap(section => section.fields)
         .filter(field => field.path.at(-1) === "author_resolution_model_chain");

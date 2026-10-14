@@ -4,7 +4,7 @@ description: Send review reports and run authorized review commands through Tele
 ---
 
 AICR supports `telegram_bot` for an aggregated report and four HTTP commands: `help`, `chat-id`, `review`, `status`.
-Native author mentions, directories, buttons and natural-language requests are outside this implementation.
+Buttons and natural-language requests are outside this implementation.
 
 ## Create and install
 
@@ -235,3 +235,42 @@ Deregister only resources owned by this deployment after checking current remote
 
 Local tests use HTTP fixtures and real local stores. Live guild/Bot acceptance requires separate credentials and is tracked independently.
 Local passing tests do not establish public callback delivery or client rendering.
+
+## Mention the review author
+
+Map a review identity to the person's numeric Telegram user ID in the output channel. A username, Bot ID or chat ID cannot replace it:
+
+```yaml
+mention_author: true
+author_mappings: { "alice@example.org": "234567891" }
+```
+
+Telegram Bot API has no complete member-directory endpoint. Use explicit mappings or the file directory below; administrator permissions do not create an API for listing all members. AICR appends a `text_link` entity with `tg://user?id=…` and UTF-16 offsets. Telegram's membership, prior-contact and privacy conditions still apply. See [formatting options and ID mentions](https://core.telegram.org/bots/api#formatting-options).
+
+A configured directory or mapping enables author reminders by default; `mention_author: false` disables all resolution. Mapping keys match the review author's email, username, display name or P4 submitter workspace, with the global email blacklist applied first. With an API directory, mapping values must be candidate user IDs; without a directory, they are explicit platform IDs. With a file, values are local member keys. Exact matches work with `guess_author: false` (the default); true additionally enables workspace matching and the dedicated identity model. Ambiguous, unavailable or unmatched identities send the report without a mention. `mention_fallback: all` is rejected. Main review prompts receive no directory.
+
+File directories support aliases, emails and scoped VCS accounts. Merge this fragment into the output channel; the scope ID must match its connection:
+
+```yaml
+member_directory:
+  source: file
+  path: ./members.yaml
+  directory_id: team
+  identity_scope: { kind: telegram_bot, id: "123456789" }
+author_mappings: { "alice@example.org": alice }
+```
+
+```yaml
+# members.yaml
+version: 1
+directories:
+  team:
+    platform: telegram
+    identity_scope: { kind: telegram_bot, id: "123456789" }
+    members:
+      - key: alice
+        emails: [alice@example.org]
+        mention: { type: telegram_user_id, id: "234567891" }
+```
+
+Mentions are inserted after untrusted report text is escaped and retain reserved space when a report is truncated. File paths resolve against the configuration directory; hot reload uses the shared file-directory service. API snapshots use the channel TTL, then `outputs.author_resolution.directory_cache_ttl_seconds`, then 43200 seconds; zero disables reuse. A snapshot is limited to 10000 members, 100 pages and a 15-second read deadline. Failed or incomplete refreshes do not reuse expired members. Validate notification delivery with the actual client and destination.

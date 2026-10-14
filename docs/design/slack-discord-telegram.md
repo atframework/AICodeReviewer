@@ -19,7 +19,7 @@
 | 单应用范围 | Slack 一个应用/一个 workspace；Discord 一个应用/一个 guild；Telegram 一个 Bot/一个 webhook。相同应用不能启用多个相互覆盖的 callback connection |
 | 会话范围 | Slack workspace 频道；Discord guild 普通文本频道；Telegram 已建立的私聊及 group/supergroup。线程、forum topic、频道广播、Slack/Discord DM 不在首期 |
 | 报告长度 | 每次汇总每渠道一条受限消息；超长明确截断并保留可用详情链接，沿用已有 IM 截断思路；不新增附件/多片自动发送 |
-| 作者提醒 | 首期只显示作者文本；新渠道拒绝 `mention_author: true`、`mention_fallback: all`、member_directory/author_mappings/guess_author，避免配置接受却无消费者 |
+| 作者提醒 | 渠道 `author_mappings` 或 member_directory 解析原生用户 ID；支持 slack_api、discord_api 和三平台文件目录，Telegram 无完整成员 API；拒绝 `mention_fallback: all` |
 | 按钮等扩展 | 不实施重新评审按钮、模态框、普通聊天监听、用户目录同步、公开 OAuth 分发、跨频道动态报告路由 |
 
 会话范围和作者提醒是本计划的收敛选择，非平台能力限制。扩大任一项时先补对应规范和验收，
@@ -94,7 +94,7 @@ id/username 及 getChat 的目标类型。不能按 ID 前缀猜测会话类型�
 刷新期间保留原有效期限；成功才续期，失败立即失效。不能等过期才刷新，也不能在请求开始时清空仍有效的缓存。
 同一 client/目的地的并发刷新共享一次正在进行的探测，避免重复 API 请求和结果乱序覆盖；成功和失败都释放该入口，后续刷新可重新探测。
 预热范围只含已配置的输出和 binding 会话；不自动发现其他频道。Slack 增加 channels:read，
-使用私有频道时增加 groups:read；不申请历史或成员目录权限。
+使用私有频道时增加 groups:read；不申请历史权限。API 作者目录额外权限见第 5 节。
 readiness 不在 callback 内请求网络，失败则新接收/发送返回明确不可用，不能改用其他连接。
 单纯配置保存和预览不调用平台 API；绑定上线前必须通过 readiness。
 
@@ -157,7 +157,7 @@ summary-only、line-comments-only、重复 summary 的发送次数沿用已有 p
 | 平台 | 发送 API 与 receipt | 渲染方案及本地预算 |
 | --- | --- | --- |
 | Slack | chat.postMessage，Bearer token；`ok:true` 且 channel/ts 合法才确认 | 复用并修复 toSlackMarkdown；text 预算 3900 UTF-16 单元；parse=none、link_names 不启用，unfurl_links/media=false；主动转义不可信控制 markup |
-| Discord | POST /channels/{id}/messages，Bot token；2xx+合法 message.id/channel_id 才确认 | 新 toDiscordMarkdown；content 预算 1900 UTF-16 单元；allowed_mentions={parse:[],replied_user:false}，不加 embed/components |
+| Discord | POST /channels/{id}/messages，Bot token；2xx+合法 message.id/channel_id 才确认 | toDiscordMarkdown；content 预算 1900 UTF-16 单元；allowed_mentions 的 parse=[]、replied_user=false，users 只含宿主解析出的作者，不加 embed/components |
 | Telegram | POST /bot{token}/sendMessage；`ok:true`+result.message_id/chat.id 才确认 | 新 toTelegramMessage 返回 text+受控 entities，省略 parse_mode；预算 3900 UTF-16 单元；entity offset/length 从最终 text 计算，禁用 link preview |
 
 这些数字是含标题、链接、截断提示的本地保守总预算，非三个平台共同的官方计数规则。
@@ -165,6 +165,16 @@ summary-only、line-comments-only、重复 summary 的发送次数沿用已有 p
 超限按“目标、摘要、问题”结构保留可容纳内容，附“内容已截断”及已知安全链接；无链接时只说明截断，禁止编造详情地址。
 作者、路径、提交正文、模型文本及自定义模板全部是不可信消息内容；禁止把 `<@...>`、`<!channel>`、
 `@everyone` 或 Telegram mention entity 从正文自动升级为通知。
+提醒由宿主在格式转换后追加，截断前预留空间。Slack 插入 `<@ID>`，Discord 同时提供精确 users 白名单，
+Telegram 使用 `tg://user?id=…` 的 text_link 实体；正文链接不能生成 tg 提及。
+目录或显式映射默认启用提醒，mention_author=false 完全关闭解析；guess_author 默认 false，
+仅 true 启用 workspace 关联和专用身份模型。黑名单、歧义、未知身份或目录失败均不提醒，不阻断报告。
+无目录时 author_mappings 的值为平台用户 ID，API 目录为快照内用户 ID，文件目录为本地成员 key。
+slack_api 读取完整 conversations.members 与 users.list 并取目标频道成员；需 users:read，邮箱另需 users:read.email。
+discord_api 按最高 snowflake 翻页读取 guild 成员，需 Server Members Intent；不提供邮箱。
+API 快照最多 10000 成员、100 页、15 秒；channel/global TTL 复用现有规则（默认 12h，0 不缓存），
+失败或不完整时不复用过期数据。目录和缓存属于配置代际，不参与 callback 授权。
+文件目录分别使用 slack_team、discord_guild、telegram_bot scope，id 与连接 team/guild/bot 身份一致。
 Telegram transformer 将通用 Markdown 转成普通 text 与加粗/代码/安全 URL 等白名单实体；不直接把 Markdown 当 HTML/MarkdownV2。
 去除标题标记时须先识别代码块和行内代码，保留其中的 `#` 注释及换行；仅匹配同行空白，实体 offset/length 基于转换后实际文本。
 三平台先规范化 CRLF；只清理正文空白及 `aicr:` HTML 注释，不改代码中的空行、格式字符或同名注释。

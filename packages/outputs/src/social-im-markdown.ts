@@ -22,6 +22,15 @@ const safeUrl = (url: string): boolean => {
 };
 const notice = "\n\n… Report truncated at the platform message size limit.";
 
+/** Keep a host-added mention outside an unfinished template/code fence. */
+function closeMentionFence(content: string): string {
+  const tail = splitMarkdownFences(content).at(-1);
+  if (tail?.kind !== "code_block") return content;
+  const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(tail.raw)![1]!;
+  const closed = new RegExp(`\\n {0,3}${marker[0]}{${marker.length},}[ \\t]*$`, "u").test(tail.raw);
+  return closed ? content : `${content}\n${marker}\n`;
+}
+
 /** Links, code spans/fences and escaped Slack controls remain indivisible during truncation. */
 export function boundSocialMarkdown(
   text: string,
@@ -33,7 +42,7 @@ export function boundSocialMarkdown(
   if (suffix.length >= limit)
     throw new Error("Social IM metadata exceeds message budget.");
   const atomic =
-    /(`{3,})[^\n]*\n[\s\S]*?\1|`[^`\n]*`|<[^<>\n]+>|\[[^\]\n]*\]\([^\n)]*\)|&(?:amp|lt|gt);/gu;
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\1|`[^`\n]*`|<[^<>\n]+>|\[[^\]\n]*\]\([^\n)]*\)|&(?:amp|lt|gt);/gu;
   let output = "";
   let offset = 0;
   const append = (value: string): boolean => {
@@ -55,10 +64,11 @@ export function boundSocialMarkdown(
   return output.trimEnd() + suffix;
 }
 
-export function toDiscordMarkdown(content: string, detailUrl?: string): string {
-  // allowed_mentions also disables notifications; escaping avoids misleading mention markup.
+export function toDiscordMarkdown(content: string, detailUrl?: string, authorUserId?: string): string {
+  const mention = authorUserId && /^[1-9][0-9]{0,31}$/u.test(authorUserId) ? `\n\n<@${authorUserId}>` : "";
+  // Escape untrusted controls before adding the separately resolved author.
   return boundSocialMarkdown(
-    splitMarkdownCode(normalizeSocialImMarkdown(content))
+    splitMarkdownCode(normalizeSocialImMarkdown(mention ? closeMentionFence(content) : content))
       .map((segment) =>
         segment.kind === "text"
           ? segment.raw
@@ -67,23 +77,28 @@ export function toDiscordMarkdown(content: string, detailUrl?: string): string {
           : segment.raw,
       )
       .join(""),
-    1900,
+    1900 - mention.length,
     detailUrl,
-  );
+  ) + mention;
 }
 
 export function toBoundedSlackMarkdown(
   content: string,
   detailUrl?: string,
+  authorUserId?: string,
 ): string {
-  return boundSocialMarkdown(toSlackMarkdown(content), 3900, detailUrl);
+  const mention = authorUserId && /^[UW][A-Z0-9]{1,63}$/u.test(authorUserId) ? `\n\n<@${authorUserId}>` : "";
+  return boundSocialMarkdown(toSlackMarkdown(mention ? closeMentionFence(content) : content), 3900 - mention.length, detailUrl) + mention;
 }
 
 /** A controlled Markdown subset; unsupported constructs remain readable plain text. */
 export function toTelegramMessage(
   content: string,
   detailUrl?: string,
+  authorUserId?: string,
 ): SocialImMessage {
+  const mention = authorUserId && /^[1-9][0-9]{0,15}$/u.test(authorUserId) && Number.isSafeInteger(Number(authorUserId))
+    ? { text: "\n\nReview author", url: `tg://user?id=${authorUserId}` } : undefined;
   let text = "";
   const entities: TelegramMessageEntity[] = [];
   const append = (
@@ -133,16 +148,17 @@ export function toTelegramMessage(
       });
     else inline(segment.raw);
   }
-  const bounded = boundSocialMarkdown(text, 3900, detailUrl);
+  const bounded = boundSocialMarkdown(text, 3900 - (mention?.text.length ?? 0), detailUrl);
   const cut = bounded === text ? text.length : bounded.lastIndexOf(notice);
   return {
-    text: bounded,
-    entities: entities
+    text: bounded + (mention?.text ?? ""),
+    entities: [...entities
       .filter((entity) => entity.offset < cut)
       .map((entity) => ({
         ...entity,
         length: Math.min(entity.length, cut - entity.offset),
       }))
       .filter((entity) => entity.length > 0),
+      ...(mention ? [{ type: "text_link" as const, offset: bounded.length + 2, length: mention.text.length - 2, url: mention.url }] : [])],
   };
 }
