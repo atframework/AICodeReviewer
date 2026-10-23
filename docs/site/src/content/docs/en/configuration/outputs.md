@@ -82,6 +82,14 @@ only gates visible summaries: managed problem-issue channels still reconcile
 stored findings on every genuine zero-problem review so confirmed fixes can
 close (`resolved_action: none` opts out).
 
+Managed consolidated issues update as individual findings are confirmed fixed.
+The Resolved section retains cumulative progress, original locations and diagnostic
+excerpts across subsequent updates. Closing also updates the body to show no open
+findings. Lifecycle analysis verifies the original failure mechanism rather than
+requiring every suggested improvement. Negative or missing verdicts get one further
+check; uncertain results remain open. Logs correlate each fingerprint and outcome
+code with its run and commit without recording source text or model prose.
+
 ## `outputs.channels[]` — output targets
 
 Every channel has a `name` (referenced by routes and workspace output lists)

@@ -3940,6 +3940,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           ...getModelRouteFor(generation, resolveAnalysisSelection(generationConfig, analyzerContext.reviewEvent.workspaceId,
             executionRoute(generationConfig, analyzerContext.reviewEvent)).triageModelChain, reviewMemoryScope(analyzerContext.reviewEvent)),
           sourceRoot,
+          logContext: { runId: analyzerContext.runId, workspaceId: analyzerContext.reviewEvent.workspaceId, headSha: analyzerContext.reviewEvent.headSha },
         }),
       }),
       // H03/H04: workspace-layer agent and sandbox selection via the merged
@@ -4028,6 +4029,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       resolutionAnalyzerFactory: (sourceRoot, context) => createProblemResolutionAnalyzer({
         ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
         sourceRoot,
+        logContext: { runId: context.runId, workspaceId: context.reviewEvent.workspaceId, headSha: context.reviewEvent.headSha },
       }),
     }),
     sandboxFactory: agentAdapter ? () => createSandboxBackendFromConfig(config) : undefined,

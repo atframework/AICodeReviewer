@@ -44,6 +44,12 @@ Use the normal output path when possible. Before an authorized one-time repair:
    commit markers and actual webhook ranges. One push can contain multiple
    commits. Replay only a delivery whose range is still appropriate; stale
    head replay can publish problems already fixed by later code.
+   A successful run or a newly created issue does not prove old findings were
+   reconciled. Check per-fingerprint resolution outcome codes and body progress;
+   partial fixes must update the issue before all findings can close. If the old
+   release has no decision trace, distinguish a reproduced failure from an
+   unproven historical cause. Verify business requirements before treating every
+   suggested fix as a closure condition.
 2. Re-fetch every target's state, markers, fingerprints and body hash immediately
    before writing. Abort on drift. Resolve credentials from that output channel's
    exact trigger binding, not an arbitrary App configuration.

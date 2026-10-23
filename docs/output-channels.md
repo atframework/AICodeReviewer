@@ -369,6 +369,13 @@ explicitly confirm it is fixed in the current source before AICR lists it in
 Resolved. Triage inherits the workspace main group when no layer selects one.
 Missing legacy diagnostics, missing source, incomplete model output, or an LLM
 failure retains the item as open.
+The analyzer checks the original failure mechanism independently for each
+fingerprint; suggested improvements are not additional acceptance requirements.
+Negative or missing verdicts receive one further semantic check. Explicit approvals
+from the first pass survive a failed second pass; uncertainty still keeps the item
+open. Duplicate verdicts and approvals without evidence are rejected. Resolution
+logs identify the run, commit, fingerprint and outcome code without source text,
+model prose or credentials.
 Each confirmed item shows its original title (`[SEVERITY] category — file:line`)
 when metadata is available. Legacy comments without metadata use readable
 placeholders instead of raw fingerprint hashes. The fingerprint parser tolerates
@@ -432,6 +439,14 @@ The `gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue` ch
 By default, one review is combined into a single issue (`issue_mode: consolidated`). `per_problem` creates one issue per finding. Consolidated scopes are target-aware: pushes key by `headSha`, PR/MR reviews key by pull number (falling back to `headSha`), and other targets use the repository scope.
 
 After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue. Reviewed-and-missing fingerprints go through model verification — on a genuine empty review with lifecycle analysis active, every stored fingerprint does — while unreviewed or unconfirmed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope race duplicates are still cleaned up deterministically because that is identity reconciliation, not a claim that a code finding was fixed. `per_commit` scopes are independent and never enter this cross-scope pass.
+
+Partial updates retain cumulative resolved fingerprints and bounded diagnostic
+metadata in `aicr:resolved_problems` and `aicr:problem-meta` markers. The Resolved
+section includes each original location and a diagnostic excerpt. Later updates
+preserve that progress; a fingerprint reported again moves back to the open set.
+The final close publishes the completed body and empty open-fingerprint marker
+with the closed state. Existing unmarked resolved lists cannot be reconstructed
+as fingerprint history.
 
 When updating a consolidated issue:
 

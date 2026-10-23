@@ -2386,6 +2386,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
+				previousBody: existing.body,
 				...(summary ? { summary } : {}),
 				...(headSha ? { headSha } : {}),
 				...(categorization ? { categorization } : {}),
@@ -2425,9 +2426,19 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		return [...assigneeSet];
 	}
 
-	async function resolveIssue(issue: ManagedGithubIssue): Promise<DispatchResult | undefined> {
+	async function resolveIssue(issue: ManagedGithubIssue, categorization?: ConsolidatedIssueCategorization): Promise<DispatchResult | undefined> {
 		if (resolvedAction === "none") {
 			return undefined;
+		}
+
+		if (categorization && issue.scopeFingerprint) {
+			issue = { ...issue, body: buildConsolidatedIssueBody([], {
+				channel, markerLabel, scopeFingerprint: issue.scopeFingerprint,
+				previousBody: issue.body,
+				summary: extractConsolidatedIssueSummary(issue.body) ?? "",
+				...(options.headSha ? { headSha: options.headSha } : {}),
+				categorization,
+			}) };
 		}
 
 		const lifecycleMsg = [
@@ -2452,7 +2463,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 				state: "closed",
 			});
 		} else {
-			await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+			await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed", ...(categorization ? { body: issue.body } : {}) });
 		}
 
 		const raw = await request("GET", `${repoPath}/issues/${issue.number}`);
@@ -2518,7 +2529,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 						}
 						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
 						if (prepared.openProblems.length === 0) {
-							const result = await resolveIssue(issue);
+							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
 							continue;
 						}
@@ -2620,7 +2631,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 						);
 						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
 						if (prepared.openProblems.length === 0) {
-							const result = await resolveIssue(issue);
+							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
 							continue;
 						}
@@ -3488,6 +3499,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 			),
 			description: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
+				previousBody: existing.body,
 				...(summary ? { summary } : {}),
 				...(headSha ? { headSha } : {}),
 				...(categorization ? { categorization } : {}),
@@ -3517,7 +3529,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 		};
 	}
 
-	async function resolveIssue(issue: ManagedGitlabIssue): Promise<DispatchResult | undefined> {
+	async function resolveIssue(issue: ManagedGitlabIssue, categorization?: ConsolidatedIssueCategorization): Promise<DispatchResult | undefined> {
 		if (resolvedAction === "none") {
 			return undefined;
 		}
@@ -3530,6 +3542,16 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 				externalId: String(issue.iid),
 				raw: { action: "deleted", issueIid: issue.iid, response: raw },
 			};
+		}
+
+		if (categorization && issue.scopeFingerprint) {
+			issue = { ...issue, body: buildConsolidatedIssueBody([], {
+				channel, markerLabel, scopeFingerprint: issue.scopeFingerprint,
+				previousBody: issue.body,
+				summary: extractConsolidatedIssueSummary(issue.body) ?? "",
+				...(options.headSha ? { headSha: options.headSha } : {}),
+				categorization,
+			}) };
 		}
 
 		const lifecycleMsg = [
@@ -3554,7 +3576,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 				state_event: "close",
 			});
 		} else {
-			await request("PUT", `${projectPath}/issues/${issue.iid}`, { state_event: "close" });
+			await request("PUT", `${projectPath}/issues/${issue.iid}`, { state_event: "close", ...(categorization ? { description: issue.body } : {}) });
 		}
 
 		const raw = await request("GET", `${projectPath}/issues/${issue.iid}`);
@@ -3620,7 +3642,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 						}
 						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
 						if (prepared.openProblems.length === 0) {
-							const result = await resolveIssue(issue);
+							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
 							continue;
 						}
@@ -3722,7 +3744,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 						);
 						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
 						if (prepared.openProblems.length === 0) {
-							const result = await resolveIssue(issue);
+							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
 							continue;
 						}
@@ -4568,6 +4590,7 @@ function buildConsolidatedIssueBody(
 		readonly summary?: string;
 		readonly headSha?: string;
 		readonly categorization?: ConsolidatedIssueCategorization;
+		readonly previousBody?: string;
 	},
 ): string {
 	const cat = options.categorization;
@@ -4576,6 +4599,23 @@ function buildConsolidatedIssueBody(
 	for (const p of openProblems) {
 		allFingerprints.add(p.fingerprint ?? computeProblemFingerprint(p));
 	}
+	// Persist resolved diagnostics separately from the open candidate set so a
+	// later partial update cannot erase earlier progress or re-analyze fixed items.
+	const resolvedFingerprints = new Set(
+		/<!--\s*aicr:resolved_problems=([^>]*)-->/u.exec(options.previousBody ?? "")?.[1]
+			?.trim().split(",").map(fp => fp.trim()).filter(Boolean) ?? [],
+	);
+	const resolvedDetails = extractReviewSummaryProblemMeta(options.previousBody ?? "");
+	for (const fp of cat?.resolvedFingerprints ?? []) {
+		resolvedFingerprints.add(fp);
+		const info = cat?.resolvedDetails.get(fp);
+		if (info) resolvedDetails.set(fp, info);
+	}
+	for (const fp of allFingerprints) resolvedFingerprints.delete(fp);
+	const resolvedMeta = [...resolvedFingerprints].flatMap(fp => {
+		const info = resolvedDetails.get(fp);
+		return info ? [{ ...info, ...(info.message ? { message: info.message.slice(0, REVIEW_PROBLEM_META_MESSAGE_MAX_CHARS) } : {}) }] : [];
+	});
 
 	const sections: string[] = [
 		AICR_MANAGED_PROBLEM_ISSUE_MARKER,
@@ -4585,6 +4625,10 @@ function buildConsolidatedIssueBody(
 		`<!-- aicr:scope_fingerprint=${options.scopeFingerprint} -->`,
 		...(options.headSha ? [`<!-- aicr:commit=${options.headSha} -->`] : []),
 		`<!-- aicr:open_problems=${[...allFingerprints].join(",")} -->`,
+		...(resolvedFingerprints.size > 0 ? [
+			`<!-- aicr:resolved_problems=${[...resolvedFingerprints].join(",")} -->`,
+			buildReviewSummaryProblemMetaMarkerFromEntries(resolvedMeta),
+		] : []),
 		"",
 	];
 
@@ -4622,17 +4666,21 @@ function buildConsolidatedIssueBody(
 		}
 	}
 
-	if (cat && cat.resolvedFingerprints.size > 0) {
+	if (resolvedFingerprints.size > 0) {
 		sections.push("<details>");
-		sections.push(`<summary>\u2705 Resolved (${cat.resolvedFingerprints.size})</summary>`);
+		sections.push(`<summary>\u2705 Resolved (${resolvedFingerprints.size})</summary>`);
 		sections.push("");
 		sections.push("The following issues are no longer present in the latest analysis:");
 		sections.push("");
-		for (const fp of cat.resolvedFingerprints) {
-			const info = cat.resolvedDetails.get(fp);
+		for (const fp of resolvedFingerprints) {
+			const info = resolvedDetails.get(fp);
 			if (info) {
 				const location = info.endLine ? `${info.file}:${info.line}-${info.endLine}` : `${info.file}:${info.line}`;
 				sections.push(`- ~~**${info.severity} \u00b7 ${info.category}** \u2014 \`${location}\`~~ \u2705 Resolved`);
+				if (info.message) {
+					const diagnostic = info.message.split(/\r?\n/u)[0]?.trim() ?? "";
+					sections.push(`  ${diagnostic.slice(0, 400)}${diagnostic.length > 400 ? "…" : ""}`);
+				}
 			} else {
 				sections.push(`- ~~\`${fp}\`~~ \u2705 Resolved`);
 			}
@@ -5357,6 +5405,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
+				previousBody: existing.body,
 				...(summary ? { summary } : {}),
 				...(headSha ? { headSha } : {}),
 				...(categorization ? { categorization } : {}),
@@ -5396,7 +5445,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		return [...assigneeSet];
 	}
 
-	async function resolveIssue(issue: ManagedGiteaIssue): Promise<DispatchResult | undefined> {
+	async function resolveIssue(issue: ManagedGiteaIssue, categorization?: ConsolidatedIssueCategorization): Promise<DispatchResult | undefined> {
 		if (resolvedAction === "none") {
 			return undefined;
 		}
@@ -5409,6 +5458,16 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				externalId: String(issue.number),
 				raw: { action: "deleted", issueNumber: issue.number, response: raw },
 			};
+		}
+
+		if (categorization && issue.scopeFingerprint) {
+			issue = { ...issue, body: buildConsolidatedIssueBody([], {
+				channel, markerLabel, scopeFingerprint: issue.scopeFingerprint,
+				previousBody: issue.body,
+				summary: extractConsolidatedIssueSummary(issue.body) ?? "",
+				...(options.headSha ? { headSha: options.headSha } : {}),
+				categorization,
+			}) };
 		}
 
 		const lifecycleMsg = [
@@ -5433,7 +5492,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				state: "closed",
 			});
 		} else {
-			await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+			await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed", ...(categorization ? { body: issue.body } : {}) });
 		}
 
 		const raw = await request("GET", `${repoPath}/issues/${issue.number}`);
@@ -5499,7 +5558,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 						}
 						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
 						if (prepared.openProblems.length === 0) {
-							const result = await resolveIssue(issue);
+							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
 							continue;
 						}
@@ -5601,7 +5660,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 						);
 						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
 						if (prepared.openProblems.length === 0) {
-							const result = await resolveIssue(issue);
+							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
 							continue;
 						}
