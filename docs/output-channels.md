@@ -443,7 +443,13 @@ After handling the current scope, consolidated mode coordinates older scopes per
 Partial updates retain cumulative resolved fingerprints and bounded diagnostic
 metadata in `aicr:resolved_problems` and `aicr:problem-meta` markers. The Resolved
 section includes each original location and a diagnostic excerpt. Later updates
-preserve that progress; a fingerprint reported again moves back to the open set.
+preserve that progress. During reconciliation of an open consolidated issue,
+current findings can match either its open or resolved fingerprints. A resolved
+fingerprint reported again moves back to the open set, even if no other finding
+is newly resolved. Resolved fingerprints absent from the current findings keep
+their history and do not become verification candidates again. Cross-scope updates
+still require confirmed commit ancestry and exclude unrelated current findings;
+closed issues are outside the open-issue reconciliation window.
 The final close publishes the completed body and empty open-fingerprint marker
 with the closed state. Existing unmarked resolved lists cannot be reconstructed
 as fingerprint history.

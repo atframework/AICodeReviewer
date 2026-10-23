@@ -2527,7 +2527,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 							}
 							continue;
 						}
-						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (!prepared.hasChanges) continue;
 						if (prepared.openProblems.length === 0) {
 							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
@@ -2629,7 +2629,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 							reviewedFiles,
 							options.resolutionAnalyzer,
 						);
-						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (!prepared?.hasChanges) continue;
 						if (prepared.openProblems.length === 0) {
 							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
@@ -3640,7 +3640,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 							}
 							continue;
 						}
-						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (!prepared.hasChanges) continue;
 						if (prepared.openProblems.length === 0) {
 							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
@@ -3742,7 +3742,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 							reviewedFiles,
 							options.resolutionAnalyzer,
 						);
-						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (!prepared?.hasChanges) continue;
 						if (prepared.openProblems.length === 0) {
 							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
@@ -4198,6 +4198,7 @@ export function computeScopeFingerprint(channel: string, owner: string, repo: st
 
 const AICR_COMMIT_RE = /<!--\s*aicr:commit=([^\s>]+)\s*-->/u;
 const AICR_OPEN_PROBLEMS_RE = /<!--\s*aicr:open_problems=([\s\S]*?)\s*-->/u;
+const AICR_RESOLVED_PROBLEMS_RE = /<!--\s*aicr:resolved_problems=([\s\S]*?)\s*-->/u;
 
 function extractCommitFromIssueBody(body: string): string | undefined {
 	return AICR_COMMIT_RE.exec(body)?.[1];
@@ -4205,6 +4206,12 @@ function extractCommitFromIssueBody(body: string): string | undefined {
 
 function extractOpenProblemFingerprintsFromBody(body: string): ReadonlySet<string> {
 	const match = AICR_OPEN_PROBLEMS_RE.exec(body);
+	if (!match?.[1]) return new Set();
+	return new Set(match[1].split(",").map((s) => s.trim()).filter((s) => s.length > 0));
+}
+
+function extractResolvedProblemFingerprintsFromBody(body: string): ReadonlySet<string> {
+	const match = AICR_RESOLVED_PROBLEMS_RE.exec(body);
 	if (!match?.[1]) return new Set();
 	return new Set(match[1].split(",").map((s) => s.trim()).filter((s) => s.length > 0));
 }
@@ -4522,6 +4529,7 @@ interface PreparedStoredConsolidatedReconciliation {
 	readonly relevantCurrentProblems: readonly ReviewProblem[];
 	readonly categorization: ConsolidatedIssueCategorization;
 	readonly openProblems: readonly ReviewProblem[];
+	readonly hasChanges: boolean;
 }
 
 async function prepareStoredConsolidatedReconciliation(
@@ -4531,7 +4539,19 @@ async function prepareStoredConsolidatedReconciliation(
 	resolutionAnalyzer?: ProblemResolutionAnalyzer,
 	verifyAllStoredFingerprints?: boolean,
 ): Promise<PreparedStoredConsolidatedReconciliation | undefined> {
-	const storedFingerprints = extractOpenProblemFingerprintsFromBody(body);
+	const storedFingerprints = new Set(extractOpenProblemFingerprintsFromBody(body));
+	const previouslyResolved = extractResolvedProblemFingerprintsFromBody(body);
+	let hasReopenedProblems = false;
+	const relevantCurrentProblems = currentProblems.filter((problem) => {
+		const fingerprint = problem.fingerprint ?? computeProblemFingerprint(problem);
+		if (storedFingerprints.has(fingerprint)) return true;
+		if (!previouslyResolved.has(fingerprint)) return false;
+		// Only a currently reported recurrence returns to the active set. Other
+		// resolved history must not become missing-finding verification candidates.
+		storedFingerprints.add(fingerprint);
+		hasReopenedProblems = true;
+		return true;
+	});
 	if (storedFingerprints.size === 0) return undefined;
 
 	const resolvedDetails = parseConsolidatedBodyProblemInfo(body);
@@ -4540,10 +4560,6 @@ async function prepareStoredConsolidatedReconciliation(
 		previousFilesByFingerprint.set(fingerprint, info.file);
 	}
 
-	const relevantCurrentProblems = currentProblems.filter((problem) => {
-		const fingerprint = problem.fingerprint ?? computeProblemFingerprint(problem);
-		return storedFingerprints.has(fingerprint);
-	});
 	// A genuine empty review may resolve findings whose files lie outside the
 	// current diff, but only when the analyzer can verify them semantically
 	// against current source; without one the coverage guard keeps unverified
@@ -4578,6 +4594,7 @@ async function prepareStoredConsolidatedReconciliation(
 		relevantCurrentProblems,
 		categorization,
 		openProblems: getConsolidatedOpenProblems(relevantCurrentProblems, categorization),
+		hasChanges: hasReopenedProblems || confirmed.resolvedFingerprints.size > 0,
 	};
 }
 
@@ -4601,10 +4618,7 @@ function buildConsolidatedIssueBody(
 	}
 	// Persist resolved diagnostics separately from the open candidate set so a
 	// later partial update cannot erase earlier progress or re-analyze fixed items.
-	const resolvedFingerprints = new Set(
-		/<!--\s*aicr:resolved_problems=([^>]*)-->/u.exec(options.previousBody ?? "")?.[1]
-			?.trim().split(",").map(fp => fp.trim()).filter(Boolean) ?? [],
-	);
+	const resolvedFingerprints = new Set(extractResolvedProblemFingerprintsFromBody(options.previousBody ?? ""));
 	const resolvedDetails = extractReviewSummaryProblemMeta(options.previousBody ?? "");
 	for (const fp of cat?.resolvedFingerprints ?? []) {
 		resolvedFingerprints.add(fp);
@@ -5556,7 +5570,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 							}
 							continue;
 						}
-						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (!prepared.hasChanges) continue;
 						if (prepared.openProblems.length === 0) {
 							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
@@ -5658,7 +5672,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 							reviewedFiles,
 							options.resolutionAnalyzer,
 						);
-						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (!prepared?.hasChanges) continue;
 						if (prepared.openProblems.length === 0) {
 							const result = await resolveIssue(issue, prepared.categorization);
 							if (result) results.push(result);
