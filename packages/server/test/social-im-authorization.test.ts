@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as storeApi from "@aicr/store";
 import {
   createStoreDb,
   closeStoreDb,
@@ -29,6 +30,7 @@ beforeEach(() => {
   store = createStoreDb(join(dir, "store.db"));
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeStoreDb(store);
   rmSync(dir, { recursive: true, force: true });
 });
@@ -151,3 +153,34 @@ it.each(platforms)(
     registry.dispose();
   },
 );
+
+it("passes the status admission budget to the store query", async () => {
+  const f = fixture("telegram");
+  const input = {
+    ...f,
+    namespace: "social",
+    connectionName: "bot",
+    connectionIdentity: storedConnectionIdentity(f.connection, "social"),
+    payloadDigest: "d",
+    now: new Date(NOW),
+    configSnapshotId: "snapshot",
+    configFileDigest: "d",
+    replyOutbox: false,
+  };
+  const accepted = await processSocialCommand(store, {
+    ...input,
+    deliveryKey: "review-for-status",
+    command: { kind: "review", repoAlias: "demo", revision: SHA },
+  });
+  const query = vi.spyOn(storeApi, "findImReviewRequest");
+  const signal = new AbortController().signal;
+  const deadlineAt = Date.now() + 500;
+  await processSocialCommand(store, {
+    ...input,
+    deliveryKey: "bounded-status",
+    command: { kind: "status", requestId: accepted.requestId! },
+    signal,
+    deadlineAt,
+  });
+  expect(query).toHaveBeenCalledWith(store, "social", accepted.requestId, { signal, deadlineAt });
+});

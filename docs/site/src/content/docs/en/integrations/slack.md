@@ -201,12 +201,12 @@ mentions or buttons; plan receivers for any existing use of those features separ
 Keep the HTTP URL and signing secret for rollback.
 
 The receiver verifies the hello App ID, command workspace and current authorization before durable admission.
-It returns an ephemeral ACK with the envelope ID. Deduplication hashes the trigger ID when present,
-or the envelope ID otherwise. Admission has a one-second budget. Missing readiness or durable runtime
-withholds ACK and creates no task, allowing platform redelivery.
+For slash commands, durable admission precedes the ACK; envelopes without response-payload support receive an empty ACK. Other envelopes are ACK-only.
+Deduplication hashes the trigger ID when present, or the envelope ID otherwise. Admission has a one-second budget. Missing readiness or durable runtime withholds ACK and creates no task, allowing platform redelivery.
+Startup, including the connection API call, WebSocket upgrade and verified hello, times out after 15 seconds; the stale transport stops before the bounded reconnect.
 The SDK handles heartbeats; the service retries after 1, 2, 4 seconds up to 30 seconds.
 Configuration changes rebuild connections within 30 seconds; stale connections immediately reject new commands.
-Drain closes the connection.
+Drain closes the connection, including a pending handshake.
 
 Use one command receiver instance per App. Slack distributes envelopes across multiple connections.
 Standard HTTP(S) proxy/no_proxy variables apply through an explicit dispatcher to both API and WebSocket traffic.

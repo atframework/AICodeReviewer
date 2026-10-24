@@ -137,6 +137,12 @@ it("accepts Telegram directed group commands and ignores anonymous, topics and w
     expect(verify({ ...raw, message: { ...raw.message, ...extra } }).kind).toBe(
       "ignored",
     );
+  for (const suffix of ["\nhelp", " help\n"]) {
+    expect(verify({ ...raw, message: { ...raw.message, text: `/aicr@TestBot${suffix}` } })).toMatchObject({
+      kind: "command",
+      text: `aicr ${suffix}`,
+    });
+  }
   expect(verify({ ...raw, update_id: Number.MAX_SAFE_INTEGER + 1 }).kind).toBe(
     "rejected",
   );

@@ -58,6 +58,18 @@ describe("parseProblemResolutionDecisions", () => {
       { fingerprint: "no-evidence", resolved: true, reason: " " },
     ] }), new Set(["fp", "no-evidence"]))).toEqual([]);
   });
+
+  it("fails closed for valid verdicts duplicated by invalid entries in either order", () => {
+    const valid = { fingerprint: "fp", resolved: true, reason: "Fixed" };
+    for (const invalid of [
+      { fingerprint: "fp", resolved: "no" },
+      { fingerprint: "fp", resolved: true },
+    ]) {
+      for (const decisions of [[valid, invalid], [invalid, valid]]) {
+        expect(parseProblemResolutionDecisions(JSON.stringify({ decisions }), new Set(["fp"]))).toEqual([]);
+      }
+    }
+  });
 });
 
 describe("createProblemResolutionAnalyzer", () => {
@@ -88,6 +100,22 @@ describe("createProblemResolutionAnalyzer", () => {
     const userPrompt = complete.mock.calls[0]?.[0].messages[1]?.content ?? "";
     expect(userPrompt).toContain("Missing authentication guard.");
     expect(userPrompt).toContain("if (!user) return false");
+  });
+
+  it("retains candidates when a valid verdict is duplicated by an invalid entry", async () => {
+    const sourceRoot = await createSourceRoot();
+    await writeFile(join(sourceRoot, "auth.ts"), "return success;\n");
+    const complete = vi.fn<ChatCompletionClient["complete"]>().mockResolvedValue({
+      providerId: "triage-provider", modelId: "triage-model", raw: {},
+      content: JSON.stringify({ decisions: [
+        { fingerprint: "fp-auth", resolved: true, reason: "Success returns." },
+        { fingerprint: "fp-auth", resolved: "invalid" },
+      ] }),
+    });
+    const analyzer = createProblemResolutionAnalyzer({ llm: { complete }, model: testModel, sourceRoot });
+    await expect(analyzer([{ file: "auth.ts", line: 1, severity: "high", category: "correctness", message: "Missing success", fingerprint: "fp-auth" }]))
+      .resolves.toEqual(new Set());
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("retains candidates when source is missing, outside the source root, or omitted by the model", async () => {

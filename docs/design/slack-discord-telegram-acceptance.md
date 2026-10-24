@@ -72,6 +72,19 @@ generic auth 遮罩抢先分类 JWT，均已修复。后续 `social-im-coverage-
 状态使用“待实施/本地通过/真实服务通过/真实平台通过/失败/环境跳过”。
 HTTP 替身、独立 SQLite/PG 连接、公网回调、平台客户端显示是不同证据层次。
 
+## 2026-10-24 复审定位
+
+| 对应断言 | 新增或更新的回归边界 | 测试位置 |
+| --- | --- | --- |
+| C02、S05 | Telegram bot/user/chat ID 的 safe-integer 正负边界；Discord 大 snowflake 保留；多行命令绕过、record 自定义原型与 `__proto__` 拒绝 | core `social-im-config.test.ts`、`im-config.test.ts`；server `social-im-protocol.test.ts` |
+| S02、A03 | 同 delivery key 不同 digest 返回脱敏 409，request/inbox/outbox 不增加；Slack trigger 主去重路径 | server `social-im-callbacks.test.ts`、`im-command-service.test.ts` |
+| R01–R07 | 真实 012→013 compact receipt；legacy/social 发送前 CAS、失租零 POST、最终代际 token、readiness 退避、expiry、终态通知及 status 查询取消；Telegram 私聊从回调到 actor chat ID 发送 | store `store-migration-fixture.test.ts`、`im-store-conformance.ts`；server `im-replies.test.ts`、`social-im-replies.test.ts`、`social-im-callbacks.test.ts`、`im-review-runtime.test.ts`、PG `im-store-pg.test.ts` |
+| O02–O06 | 平衡括号链接、多反引号截断、大写 scheme、Slack blockquote、GitLab `web_url` 跨 journal 恢复 | outputs `social-im.test.ts`、`publication-journal.test.ts` |
+| 生命周期与预算 | 重复无效 verdict 双向 fail-closed；triage 首轮/确认轮共享累计预算；多次部分修复正文有界且 fingerprint 完整，必要内容超限不发布/关闭 | server `problem-resolution.test.ts`、`runtime-generation.test.ts`；outputs `managed-issue-recurrence.test.ts` |
+| SM04 | pending hello 超时停止旧 transport 并重连；真实 SDK 无 hello 可 drain；无响应载荷的 slash 命令持久接收后空 ACK | server `slack-socket-mode.test.ts` |
+
+完整门禁结果另按仓库基线记录；这些样本不替代真实平台 L01–L03。
+
 ## 配置 C01–C05
 
 | ID | 输入/故障 | 必须观察到的结果 | 测试位置 |

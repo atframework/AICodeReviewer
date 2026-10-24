@@ -275,6 +275,28 @@ describe("remote publication journal", () => {
     expect(body).toContain("aicr:publication=");
   });
 
+  it.each(["write", "reconcile"] as const)("retains a GitLab web_url after %s and journal reload", async mode => {
+    const f = fixture();
+    const webUrl = "https://git.test/o/r/-/issues/1";
+    let remoteBody = "";
+    const fetch = vi.fn<FetchLike>(async (_url, init) => {
+      if (init?.method === "POST") {
+        remoteBody = JSON.parse(init.body!).body;
+        if (mode === "reconcile") throw new Error("lost response");
+      }
+      const remote = { id: 1, iid: 1, web_url: webUrl, body: remoteBody };
+      return init?.method === "POST" ? reply(remote) : reply([remote]);
+    });
+    const work = () => publicationFetch(fetch, "gitlab")("https://git.test/api/v4/projects/o%2Fr/issues", {
+      method: "POST", body: JSON.stringify({ body: "report" }),
+    });
+    if (mode === "reconcile") await expect(f.journal().run("out", "summary:0", work)).rejects.toThrow();
+    await f.journal().run("out", "summary:0", work);
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(f.saved()[0]?.response?.data.web_url).toBe(webUrl);
+    expect(f.journal("restored").publishedUrl("out", "summary:0")).toBe(webUrl);
+  });
+
   it("rejects malformed journals and unsupported protocol shapes", () => {
     const valid = { id: "a".repeat(64), channel: "out", call: "summary:0", strategy: "marker", status: "unknown",
       attempts: 1, reconciliations: 0, firstAttemptAt: 1, updatedAt: 1,

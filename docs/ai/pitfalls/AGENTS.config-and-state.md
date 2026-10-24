@@ -113,7 +113,13 @@ consumers in `packages/server/src/bootstrap.ts`.
 - A fixture filename or acceptance ID on an inventory row does not establish
   end-to-end coverage. Separate pure validation from reference checks, CAS,
   activation and recovery; retain unfinished plan artifacts. The U24 walker
-  uses Zod 3 metadata for auditing, not as a runtime UI renderer.
+  uses Zod 4 definitions for auditing, not as a runtime UI renderer.
+- Zod 4 `.default()` expects an output value and can bypass nested parsing;
+  `.prefault()` preserves legacy input-default behavior and nested defaults
+  (`config.ts`, `config.test.ts`). Zod 4 records drop own `__proto__` keys before
+  key validation. When the contract requires rejection rather than removal,
+  precheck both the input prototype and own prototype keys before record parsing
+  (`im-config.ts`, `im-config.test.ts`).
 - UI parity must exercise the generated registry and the real renderer through
   API persistence. Synthetic field fixtures can reach 100% while `[]`/`*`
   descendants disappear or UI IDs become config keys. Check row-relative paths,

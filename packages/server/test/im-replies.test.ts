@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appConfigSchema, type AppConfig } from "@aicr/core";
+import * as storeApi from "@aicr/store";
 import { claimDueImReplyNotifications, closeStoreDb, createStoreDb, finishImReviewRequest, findImReviewRequest, type SqliteStoreDb } from "@aicr/store";
 
 import { ImReplyService } from "../src/im/reply-service.js";
@@ -23,6 +24,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeStoreDb(store);
   rmSync(dir, { recursive: true, force: true });
 });
@@ -109,5 +111,115 @@ describe("IM-16: reply outbox", () => {
     }
     service.dispose();
     expect((await findImReviewRequest(store, "ns", "imr-1"))?.state).toBe("failed");
+  });
+
+  async function seedLegacyNotification(now: Date): Promise<void> {
+    await admitRequest();
+    await finishImReviewRequest(store, {
+      requestId: "imr-1", fence: 0, state: "succeeded", now,
+      notifications: [{ operationId: "imn-legacy", destinationIdentity: "feishu-app", operationKind: "review_terminal", payloadDigest: "d",
+        compactReceipt: JSON.stringify({ connectionName: "feishu-app", conversation: "{\"kind\":\"app_direct\"}",
+          actor: { type: "feishu_open_id", id: "ou_1" }, requestId: "imr-1", state: "succeeded",
+          repoRef: "org/service", revision: "0123456789abcdef0123456789abcdef01234567" }) }],
+    });
+  }
+
+  it("does not POST a legacy reply after its sending lease expires", async () => {
+    let now = new Date();
+    await seedLegacyNotification(now);
+    const calls: string[] = [];
+    const fetch: typeof globalThis.fetch = async input => {
+      const url = String(input); calls.push(url);
+      return Response.json(url.includes("tenant_access_token") ? { code: 0, tenant_access_token: "token" } : { code: 0 });
+    };
+    const finish = storeApi.finishImReplyNotification;
+    vi.spyOn(storeApi, "finishImReplyNotification").mockImplementation(async (db, input) => {
+      const result = await finish(db, input);
+      if (input.state === "sending" && result) now = new Date(now.getTime() + 61_000);
+      return result;
+    });
+    const service = new ImReplyService({ store, getConfig: () => config, env: () => undefined, fetch, now: () => now });
+    await service.scan();
+    await service.stop();
+    expect(calls).toHaveLength(0);
+    const fresh = new ImReplyService({ store, getConfig: () => config, env: () => undefined, fetch, now: () => now });
+    await fresh.scan();
+    await fresh.stop();
+    expect(store.sqlite.prepare("SELECT state FROM im_reply_outbox WHERE operation_id = 'imn-legacy'").get())
+      .toMatchObject({ state: "unknown" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps a legacy reply sending after POST response loss and expires it to unknown without resending", async () => {
+    let now = new Date();
+    await seedLegacyNotification(now);
+    const calls: string[] = [];
+    const fetch: typeof globalThis.fetch = async input => {
+      const url = String(input); calls.push(url);
+      if (url.includes("tenant_access_token")) return Response.json({ code: 0, tenant_access_token: "token" });
+      throw new Error("response lost");
+    };
+    const options = { store, getConfig: () => config, env: () => undefined, fetch, now: () => now };
+    const service = new ImReplyService(options);
+    await service.scan();
+    await service.stop();
+    expect(store.sqlite.prepare("SELECT state FROM im_reply_outbox WHERE operation_id = 'imn-legacy'").get())
+      .toMatchObject({ state: "sending" });
+    now = new Date(now.getTime() + 61_000);
+    const fresh = new ImReplyService(options);
+    await fresh.scan();
+    await fresh.stop();
+    expect(store.sqlite.prepare("SELECT state FROM im_reply_outbox WHERE operation_id = 'imn-legacy'").get())
+      .toMatchObject({ state: "unknown" });
+    expect(calls.filter(url => url.includes("/im/v1/messages"))).toHaveLength(1);
+  });
+
+  it("retries a legacy token failure before the message POST and recovers once", async () => {
+    let now = new Date();
+    await seedLegacyNotification(now);
+    const calls: string[] = [];
+    let failToken = true;
+    const fetch: typeof globalThis.fetch = async input => {
+      const url = String(input); calls.push(url);
+      if (url.includes("tenant_access_token")) {
+        if (failToken) throw new Error("token endpoint unavailable");
+        return Response.json({ code: 0, tenant_access_token: "token" });
+      }
+      return Response.json({ code: 0 });
+    };
+    const options = { store, getConfig: () => config, env: () => undefined, fetch, now: () => now };
+    const service = new ImReplyService(options);
+    await service.scan();
+    await service.stop();
+    const pending = store.sqlite.prepare("SELECT state, next_attempt_at FROM im_reply_outbox WHERE operation_id = 'imn-legacy'").get() as { state: string; next_attempt_at: number };
+    expect(pending.state).toBe("pending");
+    expect(calls.filter(url => url.includes("/im/v1/messages"))).toHaveLength(0);
+    failToken = false;
+    now = new Date(pending.next_attempt_at);
+    const fresh = new ImReplyService(options);
+    await fresh.scan();
+    await fresh.stop();
+    expect(store.sqlite.prepare("SELECT state FROM im_reply_outbox WHERE operation_id = 'imn-legacy'").get())
+      .toMatchObject({ state: "delivered" });
+    expect(calls.filter(url => url.includes("/im/v1/messages"))).toHaveLength(1);
+  });
+
+  it("persists a retry when legacy delivery is stopped after CAS but before POST", async () => {
+    const now = new Date();
+    await seedLegacyNotification(now);
+    const calls: string[] = [];
+    const fetch: typeof globalThis.fetch = async input => { calls.push(String(input)); return Response.json({ code: 0 }); };
+    const finish = storeApi.finishImReplyNotification;
+    const service = new ImReplyService({ store, getConfig: () => config, env: () => undefined, fetch, now: () => now });
+    vi.spyOn(storeApi, "finishImReplyNotification").mockImplementation(async (db, input) => {
+      const result = await finish(db, input);
+      if (input.state === "sending" && result) service.dispose();
+      return result;
+    });
+    await service.scan();
+    await service.stop();
+    expect(calls).toHaveLength(0);
+    expect(store.sqlite.prepare("SELECT state, next_attempt_at FROM im_reply_outbox WHERE operation_id = 'imn-legacy'").get())
+      .toMatchObject({ state: "pending" });
   });
 });

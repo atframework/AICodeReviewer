@@ -189,7 +189,7 @@ const routePreviewEventSchema: z.ZodType<ConfigRoutePreviewEvent> = z.object({
   baseBranch: z.string().min(1).max(512).optional(),
   headBranch: z.string().min(1).max(512).optional(),
   defaultBranch: z.string().min(1).max(512).optional(),
-  providerFields: z.record(z.string().max(4096).nullable()).optional(),
+  providerFields: z.record(z.string(), z.string().max(4096).nullable()).optional(),
 }).strict();
 
 const previewRouteRequestSchema = z.object({

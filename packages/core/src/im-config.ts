@@ -9,6 +9,7 @@ import {
   type ImConnectionKind,
   type ImConversation,
 } from "./im-contracts.js";
+import { isPlainObject } from "./utils.js";
 
 /**
  * Strict configuration schemas for the IM parent node and its output-channel
@@ -27,7 +28,9 @@ export const SOCIAL_IM_KINDS = ["slack_app", "discord_bot", "telegram_bot"] as c
 export const isSocialImKind = (kind: string): kind is typeof SOCIAL_IM_KINDS[number] =>
   (SOCIAL_IM_KINDS as readonly string[]).includes(kind);
 export const decimalPlatformIdSchema = z.string().regex(/^[1-9][0-9]*$/u).max(32);
-export const telegramChatIdSchema = z.string().regex(/^-?[1-9][0-9]*$/u).max(32);
+const safeIntegerPlatformId = (value: string): boolean => Number.isSafeInteger(Number(value));
+export const telegramActorIdSchema = decimalPlatformIdSchema.refine(safeIntegerPlatformId);
+export const telegramChatIdSchema = z.string().regex(/^-?[1-9][0-9]*$/u).max(32).refine(safeIntegerPlatformId);
 export const slackPlatformIdSchema = z.string().regex(/^[A-Z][A-Z0-9]+$/u).max(64);
 
 /** Named-map keys for connections and command bindings (execution contracts §2). */
@@ -41,6 +44,14 @@ export const imEntityNameSchema = z
   .refine((value) => !isPrototypeKey(value), {
     message: "im entity names must not be prototype-chain keys",
   });
+
+function imEntityRecordSchema<Value extends z.ZodType>(valueSchema: Value) {
+  const record = z.record(imEntityNameSchema, valueSchema);
+  return z.preprocess((value: unknown) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+    return isPlainObject(value) && !Object.keys(value).some(isPrototypeKey) ? value : undefined;
+  }, record);
+}
 
 /** Callback credential pair: literal and `*_env` are mutually exclusive. */
 function requireCredential(
@@ -178,7 +189,7 @@ const discordConnectionSchema = z.object({
 }).strict();
 const telegramConnectionSchema = z.object({
   kind: z.literal("telegram_bot"), ...socialTokenFields,
-  bot_id: decimalPlatformIdSchema, callback: telegramCallbackSchema.optional(),
+  bot_id: telegramActorIdSchema, callback: telegramCallbackSchema.optional(),
 }).strict();
 
 export const imConnectionSchema = z
@@ -410,8 +421,8 @@ const conversationsOverlap = (a: ImConversation, b: ImConversation): boolean => 
 
 export const imConfigSchema = z
   .object({
-    connections: z.record(imEntityNameSchema, imConnectionSchema).optional(),
-    command_bindings: z.record(imEntityNameSchema, imCommandBindingSchema).optional(),
+    connections: imEntityRecordSchema(imConnectionSchema).optional(),
+    command_bindings: imEntityRecordSchema(imCommandBindingSchema).optional(),
   })
   .strict()
   .superRefine((im, ctx) => {
@@ -480,7 +491,7 @@ export const imConfigSchema = z
       const allowedScopeKinds = SCOPE_ACTOR_KINDS_BY_CONNECTION_KIND[connection.kind];
       binding.actors.forEach((actor, index) => {
         if (isSocialImKind(connection.kind) && !("kind" in actor)) {
-          const schema = connection.kind === "slack_app" ? slackPlatformIdSchema : decimalPlatformIdSchema;
+          const schema = connection.kind === "slack_app" ? slackPlatformIdSchema : connection.kind === "telegram_bot" ? telegramActorIdSchema : decimalPlatformIdSchema;
           if (!schema.safeParse(actor.id).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...basePath, "actors", index, "id"], message: "invalid platform actor ID." });
         }
         if ("kind" in actor) {

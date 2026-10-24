@@ -3845,15 +3845,16 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       const dailySpend = dailyBudgetTracker.getDailySpend(billingScope);
       if (budget?.per_repo_daily_usd && dailySpend >= budget.per_repo_daily_usd) throw new LlmBudgetExceededError("per_repo_daily", budget.per_repo_daily_usd, dailySpend);
     };
-    const runClient: ChatCompletionClient = {
+    const budgetedClient = (client: ChatCompletionClient): ChatCompletionClient => ({
       async complete(input) {
         checkBudget();
-        const result = await route.llm.complete(input);
+        const result = await client.complete(input);
         const cost = (result as { estimatedCostUsd?: number }).estimatedCostUsd;
         if (typeof cost === "number" && Number.isFinite(cost) && cost > 0) runSpend += cost;
         return result;
       },
-    };
+    });
+    const runClient = budgetedClient(route.llm);
     return {
       ...route,
       llm: runClient,
@@ -3936,12 +3937,16 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           beforeRequest: async candidate => { checkBudget(); await rateLimiter.acquireAsync(candidate.providerId); },
           onCost: cost => { if (Number.isFinite(cost) && cost > 0) runSpend += cost; },
         }),
-        resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => createProblemResolutionAnalyzer({
-          ...getModelRouteFor(generation, resolveAnalysisSelection(generationConfig, analyzerContext.reviewEvent.workspaceId,
-            executionRoute(generationConfig, analyzerContext.reviewEvent)).triageModelChain, reviewMemoryScope(analyzerContext.reviewEvent)),
-          sourceRoot,
-          logContext: { runId: analyzerContext.runId, workspaceId: analyzerContext.reviewEvent.workspaceId, headSha: analyzerContext.reviewEvent.headSha },
-        }),
+        resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => {
+          const triageRoute = getModelRouteFor(generation, resolveAnalysisSelection(generationConfig, analyzerContext.reviewEvent.workspaceId,
+            executionRoute(generationConfig, analyzerContext.reviewEvent)).triageModelChain, reviewMemoryScope(analyzerContext.reviewEvent));
+          return createProblemResolutionAnalyzer({
+            ...triageRoute,
+            llm: budgetedClient(triageRoute.llm),
+            sourceRoot,
+            logContext: { runId: analyzerContext.runId, workspaceId: analyzerContext.reviewEvent.workspaceId, headSha: analyzerContext.reviewEvent.headSha },
+          });
+        },
       }),
       // H03/H04: workspace-layer agent and sandbox selection via the merged
       // analysis selection; an explicit container sandbox that fails

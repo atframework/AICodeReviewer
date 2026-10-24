@@ -420,7 +420,8 @@ describe("cancel command grammar and dispatch", () => {
     const conflicted = await processImCommand({
       store, cancellation, ...admitInput(command, config, { deliveryKey: "msg-stream", payloadDigest: "sha:other" }),
     });
-    expect(conflicted.kind).toBe("duplicate");
+    expect(conflicted.kind).toBe("rejected");
+    expect(conflicted.replyText).toContain("delivery_conflict");
     expect(executed).toBe(2);
   });
 });

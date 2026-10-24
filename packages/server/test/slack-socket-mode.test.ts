@@ -47,7 +47,7 @@ const body = (text = "help") => ({
   text,
   trigger_id: "123.456.hash",
 });
-async function setup(cold = false, failStarts = false) {
+async function setup(cold = false, failStarts = false, pendingStarts = false, startupTimeoutMs?: number) {
   const f = fixture("slack");
   let config = appConfigSchema.parse({
     ...f.config,
@@ -89,12 +89,14 @@ async function setup(cold = false, failStarts = false) {
     env: () => undefined,
     now: () => NOW,
     onStatus: status,
+    ...(startupTimeoutMs !== undefined ? { startupTimeoutMs } : {}),
     createTransport: (options: SlackSocketTransportOptions) => {
       const transport = {
         options,
         start: vi.fn(async () => {
           if (failStarts)
             throw new Error("xapp-private-url-must-not-be-logged");
+          if (pendingStarts) await new Promise<void>(() => {});
           options.onStatus("connected");
         }),
         stop: vi.fn(async () => {}),
@@ -200,7 +202,7 @@ it("returns chat identities and enforces channel/user authorization", async () =
   expect(channel).not.toHaveBeenCalled();
   expect(store.db.select().from(imReviewRequests).all()).toHaveLength(0);
 });
-it("ACKs unsupported events without admitting work and requires inline reply support", async () => {
+it("ACKs unsupported events and durably admits slash commands without response payloads", async () => {
   const f = await setup();
   const event = f.send({}, "event-1", "events_api");
   await vi.waitFor(() => expect(event).toHaveBeenCalledWith());
@@ -210,9 +212,13 @@ it("ACKs unsupported events without admitting work and requires inline reply sup
     "slash_commands",
     false,
   );
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  expect(noReply).not.toHaveBeenCalled();
-  expect(store.db.select().from(imReviewRequests).all()).toHaveLength(0);
+  await vi.waitFor(() => expect(noReply).toHaveBeenCalledOnce());
+  expect(noReply).toHaveBeenCalledWith();
+  expect(store.db.select().from(imReviewRequests).all()).toHaveLength(1);
+  const replay = f.send(body("review demo " + SHA), "command-retry", "slash_commands", false);
+  await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
+  expect(replay).toHaveBeenCalledWith();
+  expect(store.db.select().from(imReviewRequests).all()).toHaveLength(1);
 });
 it("refuses admission while metadata is cold", async () => {
   const f = await setup(true);
@@ -296,6 +302,23 @@ it("bounds repeated start failures at a 30-second retry and cancels retries on s
   const stoppedCount = f.transports.length;
   await vi.advanceTimersByTimeAsync(60_000);
   expect(f.transports).toHaveLength(stoppedCount);
+});
+it("times out a pending handshake, stops the stale transport, reconnects and drains", async () => {
+  vi.useFakeTimers();
+  const f = await setup(false, false, true, 50);
+  expect(f.transports).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(49);
+  expect(f.transports[0]!.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.transports[0]!.stop).toHaveBeenCalledOnce();
+  expect(f.status).toHaveBeenCalledWith("bot", "connect_failed");
+  await vi.advanceTimersByTimeAsync(999);
+  expect(f.transports).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.transports).toHaveLength(2);
+  await f.service.stop();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(f.transports).toHaveLength(2);
 });
 it("bounds blocked config capture and refuses late admission after timeout", async () => {
   const f = await setup();
@@ -415,6 +438,56 @@ it("runs the pinned SDK handshake and emits the correct wire ACK without raw SDK
     expect(statuses).toContain("connected");
   } finally {
     await transport.stop();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+it("reconnects and drains a real SDK socket whose peer never sends hello", async () => {
+  vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
+  vi.stubEnv("no_proxy", "127.0.0.1,localhost");
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (typeof address !== "object" || !address) throw new Error("loopback");
+  let connections = 0;
+  server.on("connection", () => { connections += 1; });
+  const f = fixture("slack");
+  const config = appConfigSchema.parse({
+    ...f.config,
+    im: {
+      ...f.config.im,
+      connections: { bot: {
+        ...f.connection,
+        callback: { enabled: false },
+        socket_mode: { enabled: true, app_token: "xapp-test" },
+      } },
+    },
+  });
+  const client = await readyClient("slack");
+  const statuses: string[] = [];
+  const service = new SlackSocketModeService({
+    store,
+    namespace: "socket",
+    getConfig: () => config,
+    socialClient: () => client,
+    env: () => undefined,
+    now: () => NOW,
+    startupTimeoutMs: 30,
+    onStatus: (_name, status) => { statuses.push(status); },
+    createTransport: (options) => createSlackSocketTransport({
+      ...options,
+      apiFetch: async () => Response.json({ ok: true, url: `ws://127.0.0.1:${address.port}` }),
+    }),
+  });
+  services.push(service);
+  try {
+    await service.reconcile();
+    await vi.waitFor(() => expect(connections).toBeGreaterThan(1), { timeout: 4000 });
+    expect(statuses).toContain("connect_failed");
+    expect(statuses).not.toContain("connected");
+    await service.stop();
+  } finally {
+    await service.stop();
     for (const socket of server.clients) socket.terminate();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

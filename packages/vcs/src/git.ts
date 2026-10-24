@@ -31,7 +31,12 @@ export interface GitCommandResult {
   readonly stderr: string;
 }
 
-export type GitCommandRunner = (args: readonly string[]) => Promise<GitCommandResult>;
+export interface GitCommandOptions {
+  /** Avoid interactive credential helpers when the adapter already supplies credentials. */
+  readonly disableCredentialHelper?: boolean;
+}
+
+export type GitCommandRunner = (args: readonly string[], options?: GitCommandOptions) => Promise<GitCommandResult>;
 
 export interface GitVcsAdapterOptions {
   readonly repositoryDir: string;
@@ -64,10 +69,19 @@ export interface GitDiffOptions {
 
 const execFileAsync = promisify(execFile);
 
-async function defaultGitRunner(args: readonly string[]): Promise<GitCommandResult> {
+async function defaultGitRunner(args: readonly string[], options?: GitCommandOptions): Promise<GitCommandResult> {
+  const configuredCount = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? "0", 10);
+  const configIndex = Number.isSafeInteger(configuredCount) && configuredCount >= 0 ? configuredCount : 0;
+  const env = options?.disableCredentialHelper ? {
+    ...process.env,
+    GIT_CONFIG_COUNT: String(configIndex + 1),
+    [`GIT_CONFIG_KEY_${configIndex}`]: "credential.helper",
+    [`GIT_CONFIG_VALUE_${configIndex}`]: "",
+  } : process.env;
   const result = await execFileAsync("git", [...args], {
     encoding: "utf8",
     maxBuffer: 50 * 1024 * 1024,
+    env,
   });
 
   return {
@@ -485,7 +499,9 @@ export class GitVcsAdapter implements VcsAdapter {
     return withTransientIoRetry(async () => {
       await options?.beforeAttempt?.();
       try {
-        return await this.git(this.buildGitArgs(args));
+        return await this.git(this.buildGitArgs(args), {
+          disableCredentialHelper: this.token !== undefined || this.tokenProvider !== undefined,
+        });
       } catch (error) {
         throw redactGitError(error);
       }

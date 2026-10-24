@@ -48,6 +48,29 @@ suite("im store conformance [postgres]", () => {
     expect(rows.rows[0]?.count).toBe("0");
   });
 
+  it("cancels a blocked request lookup at the PostgreSQL connection", async () => {
+    const { findImReviewRequest } = await import("../src/im-store.js");
+    const lock = await store.pool.connect();
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await lock.query("BEGIN");
+      await lock.query("LOCK TABLE im_review_requests IN ACCESS EXCLUSIVE MODE");
+      // The watchdog releases an old unbounded implementation so this regression
+      // fails as an assertion instead of hanging the whole suite.
+      releaseTimer = setTimeout(() => { void lock.query("ROLLBACK").catch(() => {}); }, 750);
+      const started = performance.now();
+      await expect(findImReviewRequest(store, "deadline", "missing", {
+        deadlineAt: Date.now() + 1000,
+        signal: AbortSignal.timeout(100),
+      })).rejects.toThrow();
+      expect(performance.now() - started).toBeLessThan(750);
+    } finally {
+      if (releaseTimer !== undefined) clearTimeout(releaseTimer);
+      await lock.query("ROLLBACK").catch(() => {});
+      lock.release();
+    }
+  });
+
   it("accepts, merges, fences, dispatches and retains atomically (R02–R06)", async () => {
     await runImStoreConformance(store);
   });

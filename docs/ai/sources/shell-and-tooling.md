@@ -47,6 +47,20 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `next_review`: 2026-12-12
 - `update_trigger`: Windows Node helper imports or pnpm dependency-resolution guidance changes.
 
+## Git credential helpers on Windows
+
+- Sources: [Git config environment](https://git-scm.com/docs/git-config#_environment)
+  and [Git for Windows](https://github.com/git-for-windows/git).
+- Evidence: `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` provide
+  process-scoped config. On 2026-10-24, Git for Windows 2.56.0.2 stalled in
+  `credential-helper-selector` after a successful HTTP advertisement even though
+  the URL already contained the token; setting `credential.helper` to empty for
+  that process completed the same fetch. This is not a requirement to disable
+  helpers for repositories that still need them.
+- `last_checked`: 2026-10-24
+- `next_review`: 2027-01-24
+- `update_trigger`: Git authentication, helper-selector or process-scoped config changes.
+
 ## Node runtime HTTP proxy
 
 - Source: [Node 24 HTTP proxy support](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support), including `http.setGlobalProxyFromEnv`.

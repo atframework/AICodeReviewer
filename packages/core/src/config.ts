@@ -12,7 +12,7 @@ import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-
 import { REVIEW_DEFAULT_MAX_FILES, REVIEW_DEFAULT_MAX_PATCH_BYTES } from "./review-policy.js";
 import { isPlainObject } from "./utils.js";
 import { validateConfigNamespace, workspaceRootKeys } from "./config-format.js";
-import { channelMemberDirectorySchema, imConfigSchema, wecomAppTargetSchema, isSocialImKind, decimalPlatformIdSchema, telegramChatIdSchema, slackPlatformIdSchema } from "./im-config.js";
+import { channelMemberDirectorySchema, imConfigSchema, wecomAppTargetSchema, isSocialImKind, decimalPlatformIdSchema, telegramActorIdSchema, telegramChatIdSchema, slackPlatformIdSchema } from "./im-config.js";
 
 import {
   assertNoSecretEnvIssues,
@@ -111,7 +111,9 @@ export const llmModelChainEntrySchema = z
 
 export const modelChainReferenceSchema = z
   .string({
-    invalid_type_error: "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group",
+    error: (issue) => issue.code === "invalid_type" && issue.input !== undefined
+      ? "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group"
+      : undefined,
   })
   .min(1)
   .refine((name) => name.trim() === name, {
@@ -495,7 +497,7 @@ export const outputChannelSchema = z
       }
       if (directory === undefined || !("source" in directory && directory.source === "file")) {
         const idSchema = channel.kind === "slack_app" ? z.string().regex(/^[UW][A-Z0-9]{1,63}$/u)
-          : channel.kind === "telegram_bot" ? decimalPlatformIdSchema.refine(id => Number.isSafeInteger(Number(id))) : decimalPlatformIdSchema;
+          : channel.kind === "telegram_bot" ? telegramActorIdSchema : decimalPlatformIdSchema;
         for (const [key, id] of Object.entries(channel.author_mappings ?? {})) {
           if (!idSchema.safeParse(id).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["author_mappings", key], message: "author mappings require platform user IDs, not usernames or markup." });
         }
@@ -600,11 +602,17 @@ export const sandboxSchema = z
   .strict();
 export const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi", "native-llm"]);
 
+const contextCompactionShape = {
+  auto: z.boolean(),
+  threshold_percent: z.number().int().min(1).max(100),
+  prune: z.boolean(),
+};
+
 export const contextCompactionSchema = z
   .object({
-    auto: z.boolean().default(true),
-    threshold_percent: z.number().int().min(1).max(100).optional(),
-    prune: z.boolean().default(true),
+    auto: contextCompactionShape.auto.default(true),
+    threshold_percent: contextCompactionShape.threshold_percent.optional(),
+    prune: contextCompactionShape.prune.default(true),
   })
   .strict();
 
@@ -654,16 +662,23 @@ export const agentWebSearchCredentialSchema = z.union([
   z.object({ value: z.string().min(1) }).strict(),
 ]);
 
+const agentWebSearchShape = {
+  enabled: z.boolean(),
+  providers: z.array(z.string().min(1)),
+  exclude: z.array(z.string().min(1)),
+  timeout_seconds: z.number().int().min(1).max(300),
+  credentials: z.partialRecord(agentWebSearchCredentialProviderSchema, agentWebSearchCredentialSchema),
+  searxng: agentWebSearchSearxngSchema,
+};
+
 export const agentWebSearchSchema = z
   .object({
-    enabled: z.boolean().default(false),
-    providers: z.array(z.string().min(1)).default([]),
-    exclude: z.array(z.string().min(1)).default([]),
-    timeout_seconds: z.number().int().min(1).max(300).optional(),
-    credentials: z
-      .record(agentWebSearchCredentialProviderSchema, agentWebSearchCredentialSchema)
-      .default({}),
-    searxng: agentWebSearchSearxngSchema.optional(),
+    enabled: agentWebSearchShape.enabled.default(false),
+    providers: agentWebSearchShape.providers.default([]),
+    exclude: agentWebSearchShape.exclude.default([]),
+    timeout_seconds: agentWebSearchShape.timeout_seconds.optional(),
+    credentials: agentWebSearchShape.credentials.default({}),
+    searxng: agentWebSearchShape.searxng.optional(),
   })
   .strict()
   .default({ enabled: false, providers: [], exclude: [], credentials: {} });
@@ -910,8 +925,9 @@ export const workspaceAgentSelectionSchema = z
     default: agentKindSchema.optional(),
     timeout_seconds: z.number().int().positive().optional(),
     auto_approve: z.boolean().optional(),
-    context_compaction: contextCompactionSchema.partial().optional(),
-    web_search: agentWebSearchSchema.removeDefault().partial().optional(),
+    // Layered overrides must not materialize defaults from the global schemas.
+    context_compaction: z.object(contextCompactionShape).partial().optional(),
+    web_search: z.object(agentWebSearchShape).partial().optional(),
   })
   .strict();
 
@@ -957,7 +973,7 @@ export const workspaceInstanceSchema = z
     review: reviewSchema.optional(),
     outputs: workspaceOutputsSchema.optional(),
     sandbox: sandboxSchema.optional(),
-    triage: triageSchema.optional(),
+    triage: triageSchema.unwrap().optional(),
     prompt: workspacePromptSchema,
     context_repositories: contextRepositoriesSchema.optional(),
     auth: z
@@ -980,9 +996,7 @@ const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }
 }).strict();
 
 export const trustProxyValueSchema: z.ZodType<
-  boolean | "loopback" | "linklocal" | "uniquelocal" | readonly string[],
-  z.ZodTypeDef,
-  unknown
+  boolean | "loopback" | "linklocal" | "uniquelocal" | readonly string[]
 > = z.union([
   z.boolean(),
   z.enum(["loopback", "linklocal", "uniquelocal"]),
@@ -1035,7 +1049,7 @@ export const storageDatabaseSchema = z
       .optional(),
   })
   .passthrough()
-  .default({ kind: "sqlite", sqlite: { path: "/app/data/aicr.sqlite" } });
+  .prefault({ kind: "sqlite", sqlite: { path: "/app/data/aicr.sqlite" } });
 
 export const storageCacheSchema = z
   .object({
@@ -1097,7 +1111,7 @@ export const storageSchema = z
       .default({ deleted_project_grace_days: 30 }),
   })
   .passthrough()
-  .default({});
+  .prefault({});
 
 export const adminAuthSchema = z
   .object({
@@ -1121,7 +1135,7 @@ export const adminAuthSchema = z
         ["password_hash", "password_hash_env"],
       ]);
   })
-  .default({});
+  .prefault({});
 
 /**
  * Dynamic config source switch (architecture §3.15). Bootstrap-owned: the database can
@@ -1157,7 +1171,7 @@ export const configSourcesSchema = z
       .default({ refresh_interval_seconds: 5 }),
   })
   .strict()
-  .default({});
+  .prefault({});
 
 /**
  * Named system-prompt documents (markdown with optional frontmatter metadata),
@@ -1177,7 +1191,11 @@ export const llmConfigSchema = z
     model_chain: z.record(
       modelChainReferenceSchema,
       z.array(llmModelChainEntrySchema).min(1),
-      { invalid_type_error: "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default" },
+      {
+        error: (issue) => issue.code === "invalid_type" && issue.input !== undefined
+          ? "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default"
+          : undefined,
+      },
     ).default({}),
     default_model_chain: modelChainReferenceSchema.default("default"),
     triage_model_chain: modelChainReferenceSchema.optional(),
@@ -1378,7 +1396,7 @@ const appConfigObjectSchema = z
     admin: adminAuthSchema,
     config_sources: configSourcesSchema,
     server: serverSchema,
-    llm: llmConfigSchema.default({ providers: [], model_chain: {} }),
+    llm: llmConfigSchema.prefault({ providers: [], model_chain: {} }),
     triggers: z.array(triggerSchema).default([]),
     outputs: outputsConfigSchema.default({ template_engine: "handlebars", templates: {}, channels: [] }),
     prompts: promptsConfigSchema.default({ system: {} }),

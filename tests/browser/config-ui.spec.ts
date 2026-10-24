@@ -927,7 +927,7 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await expect(drawer.locator('[data-field-id="provider:id"] input')).toHaveValue("kimi-for-coding-anthropic");
     await expect(drawer.locator('[data-field-id="provider:base_url"] input')).toHaveValue("https://api.kimi.com/coding");
     await expect(drawer.locator('[data-field-id="provider:api_key_env"] input')).toHaveValue("KIMI_API_KEY");
-    await expect(drawer.locator('[data-field-id="provider:catalog_provider"] input')).toHaveValue("kimi-for-coding");
+    await expect(drawer.locator('[data-field-id="provider:catalog_provider"] input')).toHaveValue("kimi-code-plan-cn");
 
     // Prefilled drafts remain editable: point the env reference at the fixture
     // secret so publish validation accepts it, then save.
@@ -943,7 +943,7 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await expect(drawer.locator("#cfg-provider-preset")).toHaveCount(0);
     await expect(drawer.locator("#cfg-drawer-kind")).toHaveValue("anthropic");
     await expect(drawer.locator('[data-field-id="provider:base_url"] input')).toHaveValue("https://api.kimi.com/coding");
-    await expect(drawer.locator('[data-field-id="provider:catalog_provider"] input')).toHaveValue("kimi-for-coding");
+    await expect(drawer.locator('[data-field-id="provider:catalog_provider"] input')).toHaveValue("kimi-code-plan-cn");
     await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
 
     // Cleanup.

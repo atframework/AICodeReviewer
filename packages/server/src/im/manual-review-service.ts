@@ -428,7 +428,10 @@ export class ManualReviewService {
       const validating = (attempts.validating ?? 0) + 1;
       const policy = retryPolicy(config);
       if (validating > policy.attempts) {
-        await finishImReviewRequest(this.options.store, { requestId: request.requestId, fence, state: "failed", errorCode: "im.validation_attempts_exhausted", now });
+        await finishImReviewRequest(this.options.store, {
+          requestId: request.requestId, fence, state: "failed", errorCode: "im.validation_attempts_exhausted",
+          notifications: [buildTerminalNotification(request, "failed", "im.validation_attempts_exhausted")].filter((value): value is NonNullable<typeof value> => value !== undefined), now,
+        });
         return;
       }
       if (!await updateImReviewRequest(this.options.store, { requestId: request.requestId, fence, attemptsByPhaseJson: JSON.stringify({ ...attempts, validating }), now })) return;
@@ -581,7 +584,9 @@ export class ManualReviewService {
     const attempt = (phaseAttempts[phase] ?? 0) + 1;
     if (attempt > retryPolicy(config).attempts) {
       await finishImReviewRequest(this.options.store, { requestId, fence, state: resume === undefined ? "failed" : "publication_unknown",
-        errorCode: `im.${phase}_attempts_exhausted`, now });
+        errorCode: `im.${phase}_attempts_exhausted`,
+        notifications: [buildTerminalNotification(request, resume === undefined ? "failed" : "publication_unknown", `im.${phase}_attempts_exhausted`)]
+          .filter((value): value is NonNullable<typeof value> => value !== undefined), now });
       return;
     }
     phaseAttempts = { ...phaseAttempts, [phase]: attempt };

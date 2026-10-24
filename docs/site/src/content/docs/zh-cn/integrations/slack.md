@@ -203,11 +203,12 @@ node scripts/register-social-im.mjs --platform slack --slack-mode socket
 其他 envelope 只 ACK，不处理 App Agent、mentions 或按钮；已有这些功能的应用须另行规划其接收器。
 保留原 HTTP URL 和 signing secret，以便回切。
 
-服务核验 hello 中的 App ID、命令 workspace 和当前授权，持久接收后按 envelope ID 返回 ephemeral ACK。
+服务核验 hello 中的 App ID、命令 workspace 和当前授权。slash 命令在持久接收后 ACK；不支持响应载荷的 envelope 收到空 ACK，其他 envelope 仅 ACK。
 去重优先使用 trigger ID 的哈希，无 trigger ID 时使用 envelope ID 的哈希。
 接收预算一秒；readiness 或持久执行不可用时不 ACK，不创建任务，留待平台重投。
+连接 API、WebSocket upgrade 和已验证 hello 的整体启动期限为 15 秒；旧 transport 停止后才按上限重连。
 SDK 处理 heartbeat，服务按 1、2、4 秒递增至 30 秒重连；配置变更最多 30 秒内重建连接，
-变更后的旧连接立即拒绝新命令。进程排空时断开连接。
+变更后的旧连接立即拒绝新命令。进程排空时断开连接，包括尚未完成握手的连接。
 
 同一 App 使用一个命令接收实例；平台多连接会分配 envelope，不保证每个实例均收到。
 使用标准 HTTP(S) proxy/no_proxy 环境变量时，HTTP 开连接与 WebSocket 共用显式代理 dispatcher。

@@ -57,7 +57,7 @@ polling 和 webhook 不能同时使用。未知用户不能通过 `chat-id` 自�
 不要改用广播频道、猜测 ID 或为排障关闭 privacy mode。生产 webhook 注册仍使用 `["message"]`，不删除待投递更新。
 依据：[getUpdates](https://core.telegram.org/bots/api#getupdates)、[Update](https://core.telegram.org/bots/api#update)、[getChatMember](https://core.telegram.org/bots/api#getchatmember)。
 
-ID 使用带引号的十进制字符串，群 ID 可以为负数。仅支持已建立的 private/group/supergroup；
+ID 使用带引号的十进制字符串，取值范围为 `-9007199254740991` 至 `9007199254740991`；Bot 和用户 ID 为正数，群 ID 可以为负数。仅支持已建立的 private/group/supergroup；
 forum/topic、channel、business、匿名 `sender_chat`、Bot 自己发送及编辑更新不触发审查。
 依据：[Bot API](https://core.telegram.org/bots/api)、[privacy mode](https://core.telegram.org/bots/features#privacy-mode)。
 

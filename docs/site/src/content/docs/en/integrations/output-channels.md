@@ -137,6 +137,11 @@ issues across reviews. Key behaviors:
   capped by `review.problem_issue.max_recent_issues` (default 30, range 1–200,
   overridable per workspace). Fingerprints outside the recent window are not
   deduplicated or closed in that run.
+- **Body budget.** Consolidated bodies are capped at 65,536 UTF-16 units.
+  Resolved Base64 metadata is omitted first, followed by visible resolved
+  details. Open content and complete fingerprint markers are preserved. If
+  required content still exceeds the budget, publication fails before any
+  update, close, or lifecycle comment.
 - **GitHub `resolved_action`.** Supports `none`, `close`, and `mark_resolved`
   (GitHub has no issue-delete API). Gitea and GitLab additionally support
   `delete` (on GitLab the token user must be a project owner or admin).

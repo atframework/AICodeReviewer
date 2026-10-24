@@ -27,7 +27,7 @@ function marker(id: string): string { return `<!-- aicr:publication=${id} -->`; 
 
 function compactResponse(raw: unknown): Record<string, string | number> {
   const result: Record<string, string | number> = {};
-  for (const key of ["id", "number", "iid", "index", "html_url", "url", "state", "message_id", "code", "channel", "channel_id", "ts"]) {
+  for (const key of ["id", "number", "iid", "index", "html_url", "web_url", "url", "state", "message_id", "code", "channel", "channel_id", "ts"]) {
     const value = object(raw)[key];
     if ((typeof value === "string" && value.length <= 2048) || (typeof value === "number" && Number.isFinite(value))) result[key] = value;
   }

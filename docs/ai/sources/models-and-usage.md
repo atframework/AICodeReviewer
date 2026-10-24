@@ -44,8 +44,9 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
   - <https://opencode.ai/docs/providers/>
   - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/packages/types/src/provider-settings.ts>
 - Evidence: models.dev supplies provider/model metadata. Verify schema and provider IDs on refresh; do not infer stable search capabilities or current endpoint availability from a catalog row. Adapter injection must honor complete native model shapes and explicit user overrides.
-- `last_checked`: 2026-08-09
-- `next_review`: 2026-11-09
+  The 2026-10-24 snapshot contains 230 providers and 8888 models. Kimi Coding metadata is split into `kimi-code-plan-cn` and `kimi-code-plan-global`; the `https://api.kimi.com/coding/v1` preset uses the CN provider ID while preserving existing model IDs.
+- `last_checked`: 2026-10-24
+- `next_review`: 2027-01-24
 - `update_trigger`: Re-check before changing the model-catalog fetch URL, the api.json field mapping into `ModelSpec`, the per-tool config-injection strategy, or the build-time fallback snapshot source.
 
 ## China platform endpoints (config UI provider presets)

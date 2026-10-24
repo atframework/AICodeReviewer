@@ -162,7 +162,7 @@ export function socialReplyNotification(
 export async function processSocialCommand(
   store: StoreDb,
   input: ImCommandAdmitInput & { readonly replyOutbox: boolean },
-): Promise<{ readonly text: string; readonly requestId: string | null }> {
+): Promise<{ readonly text: string; readonly requestId: string | null; readonly httpStatus?: 409 }> {
   const authorized = authorizeImCommand(input);
   if (
     authorized.kind !== "authorized" ||
@@ -182,7 +182,10 @@ export async function processSocialCommand(
     text = `Actor: ${input.actor.type}:${input.actor.id}\nConversation: ${"id" in input.conversation ? input.conversation.id : input.actor.id}`;
   if (input.command.kind === "status") {
     statusId = input.command.requestId;
-    const request = await findImReviewRequest(store, input.namespace, statusId);
+    const request = await findImReviewRequest(store, input.namespace, statusId, {
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
+    });
     text =
       request && ownsRequest(input, authorized.binding, request)
         ? `Request ${request.requestId}: ${request.state}`
@@ -235,6 +238,9 @@ export async function processSocialCommand(
           : text,
       requestId: outcome.requestId || statusId,
     };
+  if (outcome.kind === "conflict") {
+    return { text: "Command conflict.", requestId: null, httpStatus: 409 };
+  }
   if (outcome.kind === "duplicate")
     return {
       text: outcome.requestId

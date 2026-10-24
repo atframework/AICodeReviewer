@@ -86,6 +86,7 @@ function commandInput(delivery: AcceptImDeliveryInput, req: NewImReviewRequest, 
 
 export async function runImStoreConformance(store: StoreDb): Promise<void> {
   await acceptsAndDeduplicatesDeliveries(store);
+  await notificationOperationIdentity(store);
   await promotesRecordedDelivery(store);
   await mergesActiveTargetsAndReleasesOnFinish(store);
   await mergesActiveTargetsWithoutConsumingQuota(store);
@@ -97,6 +98,96 @@ export async function runImStoreConformance(store: StoreDb): Promise<void> {
   await blockedWorkspaceClaims(store);
   await retentionLifecycle(store);
   await socialReplyAdmissionAndRecovery(store);
+  await outboxExpiryAndSourceFencing(store);
+}
+
+async function notificationOperationIdentity(store: StoreDb): Promise<void> {
+  const namespace = `ns-operation-${randomUUID()}`;
+  const delivery = deliveryInput({ namespace });
+  const operationId = `operation-${randomUUID()}`;
+  const notification = {
+    operationId,
+    destinationIdentity: "telegram:123",
+    operationKind: "social_command_reply",
+    payloadDigest: "digest-1",
+    payloadJson: JSON.stringify({ version: 1, text: "accepted" }),
+    nextAttemptAt: T0,
+    expiry: new Date(T0.getTime() + 60_000),
+  };
+  const input = { ...delivery, notification: () => notification };
+  expect((await acceptImDelivery(store, input)).kind).toBe("created");
+
+  // Retention may remove the inbox proof while the durable operation remains.
+  // Identical payload identity is idempotent even when replay scheduling differs.
+  expect(await deleteExpiredImInbox(store, namespace, new Date(T0.getTime() + 1000), [])).toBe(1);
+  expect((await acceptImDelivery(store, input)).kind).toBe("created");
+  expect(await deleteExpiredImInbox(store, namespace, new Date(T0.getTime() + 2000), [])).toBe(1);
+  expect((await acceptImDelivery(store, {
+    ...input,
+    now: new Date(T0.getTime() + 2000),
+    notification: () => ({
+      ...notification,
+      nextAttemptAt: new Date(T0.getTime() + 2000),
+      expiry: new Date(T0.getTime() + 62_000),
+    }),
+  })).kind).toBe("created");
+  const claimed = await claimDueImReplyNotifications(store, { owner: "operation-owner", limit: 100, now: T0 });
+  expect(claimed.filter(row => row.operationId === operationId)).toHaveLength(1);
+  expect(claimed.find(row => row.operationId === operationId)?.payloadJson).toBe(notification.payloadJson);
+
+  for (const conflict of [
+    { ...notification, payloadDigest: "digest-2" },
+    { ...notification, payloadJson: JSON.stringify({ version: 1, text: "changed" }) },
+    { ...notification, destinationIdentity: "telegram:other" },
+  ]) {
+    const conflictingDelivery = deliveryInput({ namespace });
+    await expect(acceptImDelivery(store, { ...conflictingDelivery, notification: () => conflict }))
+      .rejects.toThrow("IM notification operation conflict");
+    // The conflicting insert rolled back its newly-created inbox row too.
+    expect((await acceptImDelivery(store, conflictingDelivery)).kind).toBe("created");
+  }
+
+  const req = request();
+  const commandDelivery = commandInput(deliveryInput({ namespace }), req);
+  await expect(acceptImDelivery(store, {
+    ...commandDelivery,
+    notification: () => ({ ...notification, payloadDigest: "request-conflict" }),
+  })).rejects.toThrow("IM notification operation conflict");
+  expect(await findImReviewRequest(store, namespace, req.requestId)).toBeUndefined();
+  expect((await acceptImDelivery(store, commandDelivery)).kind).toBe("created");
+}
+
+async function outboxExpiryAndSourceFencing(store: StoreDb): Promise<void> {
+  const namespace = `ns-outbox-${randomUUID()}`;
+  const makeInput = (operationId: string, expiry: Date) => ({
+    ...deliveryInput({ namespace }),
+    notification: () => ({ operationId, destinationIdentity: "telegram:123", operationKind: "social_command_reply",
+      payloadDigest: operationId, payloadJson: JSON.stringify({ operationId }), expiry, nextAttemptAt: T0 }),
+  });
+
+  const retryId = `retry-${randomUUID()}`;
+  await acceptImDelivery(store, makeInput(retryId, new Date(T0.getTime() + 60_000)));
+  const retryClaim = (await claimDueImReplyNotifications(store, { owner: "retry-owner", limit: 100, now: T0 }))
+    .find(row => row.operationId === retryId)!;
+  expect(await finishImReplyNotification(store, { operationId: retryId, fence: retryClaim.fence, state: "delivered", now: T0 })).toBe(false);
+  expect(await finishImReplyNotification(store, { operationId: retryId, fence: retryClaim.fence, owner: "retry-owner",
+    state: "pending", retryAt: new Date(T0.getTime() + 5000), now: T0 })).toBe(true);
+  const reclaimed = (await claimDueImReplyNotifications(store, { owner: "next-owner", limit: 100, now: new Date(T0.getTime() + 5000) }))
+    .find(row => row.operationId === retryId)!;
+  expect(reclaimed.fence).toBeGreaterThan(retryClaim.fence);
+
+  const expiryId = `expiry-${randomUUID()}`;
+  await acceptImDelivery(store, makeInput(expiryId, new Date(T0.getTime() + 1000)));
+  const expiryClaim = (await claimDueImReplyNotifications(store, { owner: "expiry-owner", limit: 100, now: T0 }))
+    .find(row => row.operationId === expiryId)!;
+  const afterExpiry = new Date(T0.getTime() + 2000);
+  expect((await claimDueImReplyNotifications(store, { owner: "other-owner", limit: 100, now: afterExpiry }))
+    .some(row => row.operationId === expiryId)).toBe(false);
+  // Expiry is terminal and invalidates the old worker, including untrusted
+  // ownerless calls which used to overwrite the row with a receipt.
+  expect(await finishImReplyNotification(store, { operationId: expiryId, fence: expiryClaim.fence, state: "delivered", now: T0 })).toBe(false);
+  expect(await finishImReplyNotification(store, { operationId: expiryId, fence: expiryClaim.fence, owner: "expiry-owner",
+    state: "delivered", now: T0 })).toBe(false);
 }
 
 async function socialReplyAdmissionAndRecovery(store: StoreDb): Promise<void> {
@@ -415,8 +506,9 @@ async function dispatchSequencesAndSnapshotReferences(store: StoreDb): Promise<v
   const reclaimed = (await claimDueImReplyNotifications(store, { owner: "reply-2", limit: 10, now: new Date(T0.getTime() + 61_000) }))
     .find(row => row.operationId === notificationId);
   expect(reclaimed?.fence).toBeGreaterThan(firstNotification!.fence);
-  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: firstNotification!.fence, state: "delivered", now: T0 })).toBe(false);
-  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: reclaimed!.fence, state: "delivered", now: T0 })).toBe(true);
+  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: firstNotification!.fence, owner: "reply-1", state: "delivered", now: T0 })).toBe(false);
+  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: reclaimed!.fence, owner: "reply-2", state: "sending", now: new Date(T0.getTime() + 61_000) })).toBe(true);
+  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: reclaimed!.fence, owner: "reply-2", state: "delivered", now: new Date(T0.getTime() + 61_000) })).toBe(true);
 
   // A terminal request never re-enters the claim scan (§5 terminal rule).
   expect((await claimDueImReviewRequests(store, { namespace: "ns-test", now: new Date(T0.getTime() + 120_000), leaseMs: 60_000, owner: "w3", limit: 100 }))

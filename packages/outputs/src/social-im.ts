@@ -257,7 +257,7 @@ export class SocialImClient {
           entity.length <= 0 ||
           entity.offset + entity.length > message.text.length ||
           (entity.type === "text_link" &&
-            !/^(?:https?:\/\/|tg:\/\/user\?id=[1-9][0-9]{0,15}$)/u.test(entity.url ?? "")),
+            !/^(?:https?:\/\/|tg:\/\/user\?id=[1-9][0-9]{0,15}$)/iu.test(entity.url ?? "")),
       )
     )
       return { kind: "rejected", code: "invalid_message" };

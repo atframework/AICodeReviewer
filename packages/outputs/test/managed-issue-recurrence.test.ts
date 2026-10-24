@@ -24,7 +24,7 @@ function fingerprints(body: string, kind: "open" | "resolved"): string[] {
 interface StoredIssue { number: number; iid: number; title: string; body: string; state: string }
 type RunOptions = {
   issueMode?: "consolidated" | "per_commit";
-  resolvedAction?: "close" | "none";
+  resolvedAction?: "close" | "mark_resolved" | "none";
   reviewedFiles?: readonly string[];
 };
 
@@ -163,5 +163,52 @@ describe.each(["github", "gitea", "gitlab"] as const)("%s consolidated issue rec
     expect(h.issues.get(17)!.state).toBe("open");
     expect(h.writes.filter(write => write.number === 17)).toHaveLength(0);
     expect(analyzer).not.toHaveBeenCalled();
+  });
+
+  it("bounds cumulative resolved history without losing fingerprints or final closure", async () => {
+    const h = harness();
+    const resolvedIds = Array.from({ length: 33 }, (_, index) => `resolved-${index}`);
+    const longProblems = resolvedIds.map(fingerprint => ({
+      ...originalProblems[0]!, fingerprint, file: `${fingerprint}.ts`, message: "x".repeat(1024),
+    }));
+    const problems = [...originalProblems, ...longProblems];
+    const reviewedFiles = problems.map(problem => problem.file);
+    await h.run("original", problems, async () => new Set(), { reviewedFiles });
+    for (let index = 0; index < resolvedIds.length; index += 1) {
+      const current = [...originalProblems.slice(1), ...longProblems.slice(index + 1)];
+      await h.run(`resolve-${index}`, current, async candidates => new Set(candidates.map(p => p.fingerprint!)), { reviewedFiles });
+    }
+    const body = h.issues.get(17)!.body;
+    expect(body.length).toBeLessThanOrEqual(65_536);
+    expect(fingerprints(body, "open")).toEqual(["fixed", "remaining"]);
+    const resolved = fingerprints(body, "resolved");
+    expect(resolved).toHaveLength(34);
+    for (const fingerprint of ["recurring", ...Array.from({ length: 33 }, (_, index) => `resolved-${index}`)]) {
+      expect(resolved).toContain(fingerprint);
+    }
+    await h.run("all-fixed", [], async candidates => new Set(candidates.map(p => p.fingerprint!)), { resolvedAction: "mark_resolved" });
+    expect(h.issues.get(17)!.state).toBe("closed");
+    expect(h.issues.get(17)!.body).toContain("✅ **Resolved**");
+    expect(h.issues.get(17)!.body.length).toBeLessThanOrEqual(65_536);
+  });
+
+  it("fails closed when required fingerprints alone exceed the body budget", async () => {
+    const h = harness();
+    const problems = Array.from({ length: 1100 }, (_, index) => ({
+      ...originalProblems[0]!, fingerprint: index.toString(16).padStart(64, "0"), file: `f${index}.ts`,
+    }));
+    await expect(h.run("too-many", problems, async () => new Set())).rejects.toThrow("65536");
+    expect(h.issues).toHaveLength(0);
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it("truncates resolved diagnostics without lone UTF-16 surrogates", async () => {
+    for (const marker of ["🙂", "👩‍💻", "e\u0301"]) {
+      const h = harness();
+      const problem = { ...originalProblems[0]!, message: `${"x".repeat(399)}${marker}` };
+      await h.run("original", [problem], async () => new Set());
+      await h.run("resolved", [], async () => new Set(["recurring"]));
+      expect(h.issues.get(17)!.body).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+    }
   });
 });

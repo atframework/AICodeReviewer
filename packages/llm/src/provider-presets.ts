@@ -87,7 +87,7 @@ const PRESET_PAIRS: readonly PresetPairInput[] = [
 		openAiBaseUrl: "https://api.kimi.com/coding/v1",
 		anthropicBaseUrl: "https://api.kimi.com/coding",
 		apiKeyEnv: "KIMI_API_KEY",
-		catalogProvider: "kimi-for-coding",
+		catalogProvider: "kimi-code-plan-cn",
 		docsUrl: "https://www.kimi.com/code/docs/",
 		suggestedModels: ["kimi-for-coding", "k3-256k", "k3", "kimi-for-coding-highspeed"],
 		note: "Subscription-plan key from the Kimi Code console; not interchangeable with Kimi Open Platform (pay-as-you-go) keys.",

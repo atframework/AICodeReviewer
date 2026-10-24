@@ -25,6 +25,13 @@ cannot change only the reported revision. Keep the network regression in
 - Submodule retries must recover partial clone directories and fetch the pinned
   commit even when not reachable from advertised refs. An unavailable URL/commit
   yields an explanatory redacted response, not an unbounded warning/retry loop.
+- When the adapter already embeds an HTTP token in the remote URL or auth
+  header, disable the system credential helper for that process through
+  `GIT_CONFIG_*`; do not let an interactive selector block fetch or persist the
+  token elsewhere. Keep helper-backed unauthenticated repositories unchanged.
+  Git for Windows' `credential-helper-selector` can otherwise stall after a
+  successful HTTP advertisement and prevent agent startup. Verify the real fetch
+  and old/new-run isolation in `git.test.ts` and `ui-run-isolation.spec.ts`.
 - Validate command parsers against real Git/SVN/P4 output. Git blame porcelain
   uses both four-field group-start and three-field coalesced headers; accept the
   optional fourth field. Synthetic three-field-only fixtures missed that defect.

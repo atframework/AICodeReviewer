@@ -342,7 +342,7 @@ export function verifyTelegramCommand(input: {
           ? { kind: "bot_direct" }
           : { kind: "group", id: chatId },
       deliveryKey: String(raw.update_id),
-      text: `aicr ${rest.trim()}`,
+      text: `aicr ${rest}`,
     };
   } catch {
     return reject;

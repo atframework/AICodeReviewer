@@ -292,6 +292,10 @@ describe("C03: credential, identity and wiring mistakes fail at exact paths", ()
 
   it("rejects prototype-chain keys and malformed entity names in im maps", () => {
     expect(imConfigSchema.safeParse({ connections: { __proto__: connections["corp-review"]! } }).success).toBe(false);
+    expect(imConfigSchema.safeParse({ command_bindings: { __proto__: binding } }).success).toBe(false);
+    const ownPrototypeKey = JSON.parse(`{"__proto__":${JSON.stringify(connections["corp-review"]!)}}`) as Record<string, unknown>;
+    expect(Object.hasOwn(ownPrototypeKey, "__proto__")).toBe(true);
+    expect(imConfigSchema.safeParse({ connections: ownPrototypeKey }).success).toBe(false);
     expect(imConfigSchema.safeParse({ connections: { "-bad": connections["corp-review"]! } }).success).toBe(false);
     expect(imConfigSchema.safeParse({ connections: { ["x".repeat(65)]: connections["corp-review"]! } }).success).toBe(false);
   });

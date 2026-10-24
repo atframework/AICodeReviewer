@@ -46,8 +46,11 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   `processVerifiedSocialCommand`; never synthesize HTTP signatures or duplicate
   admission. Use the pinned SDK, explicit proxy dispatcher and silent SDK logger.
   Preserve other app settings; unsupported event/interactive envelopes are ACK-only.
-  Cover real SDK handshake, identity rejection, hot reload, drain and reconnect
-  with `slack-socket-mode.test.ts`. Connection logs do not prove command delivery.
+  Bound the whole startup through verified hello, not only the connection API;
+  stop the stale transport on timeout and drain pending handshakes. `accepts_response_payload: false`
+  still requires an empty ACK after durable admission. Cover real SDK handshake,
+  missing hello, identity rejection, hot reload, drain and reconnect with
+  `slack-socket-mode.test.ts`. Connection logs do not prove command delivery.
   A Slack challenge-parameter error belongs to Events API URL verification;
   configure the command's Slash Commands URL and preserve existing App Agent
   event endpoints. This callback accepts form commands, not Events API JSON.
@@ -97,6 +100,15 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   For reply outbox exceptions, distinguish failure before POST from ambiguous
   sends: persist bounded pre-send retry/backoff, retain post-send fencing, and
   log fixed codes only. Cover both sides in `social-im-replies.test.ts`.
+  For legacy compact and versioned social replies, make `sending` CAS the last
+  non-network asynchronous step. The final config generation owns authorization,
+  readiness, client and credentials; after CAS only synchronous checks, the POST
+  and fenced receipt updates remain. Every worker write checks owner/fence;
+  expiry and terminal states invalidate old fences. Cover lost leases and config
+  rotation in `im-replies.test.ts` and `social-im-replies.test.ts`.
+  Same delivery key with a different digest is an integrity conflict (social HTTP
+  409), not an idempotent duplicate. Outbox operation conflicts compare durable
+  payload identity, not retry scheduling timestamps.
   Sync affected config/examples, output docs, public locales and roadmap entries;
   run applicable final gates from the repository baseline.
 - For routing changes, compare preview with actual publisher calls in old/new

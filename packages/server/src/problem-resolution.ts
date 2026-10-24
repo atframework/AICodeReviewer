@@ -65,13 +65,16 @@ export function parseProblemResolutionDecisions(
     const parsed = JSON.parse(json) as Record<string, unknown>;
     if (!Array.isArray(parsed.decisions)) return [];
     const decisions = new Map<string, ProblemResolutionDecision>();
+    const seenFingerprints = new Set<string>();
     const duplicates = new Set<string>();
     for (const rawDecision of parsed.decisions) {
       if (!rawDecision || typeof rawDecision !== "object") continue;
       const candidate = rawDecision as Record<string, unknown>;
       const fingerprint = typeof candidate.fingerprint === "string" ? candidate.fingerprint : "";
-      if (!expectedFingerprints.has(fingerprint) || typeof candidate.resolved !== "boolean") continue;
-      if (decisions.has(fingerprint)) duplicates.add(fingerprint);
+      if (!expectedFingerprints.has(fingerprint)) continue;
+      if (seenFingerprints.has(fingerprint)) duplicates.add(fingerprint);
+      seenFingerprints.add(fingerprint);
+      if (typeof candidate.resolved !== "boolean") continue;
       const reason = typeof candidate.reason === "string" ? candidate.reason.trim() : "";
       decisions.set(fingerprint, {
         fingerprint,

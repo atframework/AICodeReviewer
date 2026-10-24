@@ -231,6 +231,26 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
     expect(store.sqlite.prepare("SELECT COUNT(*) AS total FROM im_active_targets").get()).toMatchObject({ total: 0 });
   });
 
+  it("creates a terminal notification when validation attempts are exhausted", async () => {
+    const requestId = await seedRequest();
+    const clock = new Date(Date.now() + 1000);
+    const claim = (await claimDueImReviewRequests(store, {
+      namespace: "ns-w", now: clock, leaseMs: 1, owner: "lost", limit: 1,
+    }))[0]!;
+    await updateImReviewRequest(store, { requestId, fence: claim.fence,
+      attemptsByPhaseJson: JSON.stringify({ validating: 3 }), releaseLease: true, now: clock });
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config,
+      now: () => new Date(clock.getTime() + 2), createAdapter: () => mockAdapter(),
+      dispatch: async () => { throw new Error("must not dispatch"); }, executeReview: vi.fn() });
+    await service.scan();
+    expect(await findImReviewRequest(store, "ns-w", requestId)).toMatchObject({
+      state: "failed", errorCode: "im.validation_attempts_exhausted",
+    });
+    const notification = store.sqlite.prepare("SELECT state, compact_receipt FROM im_reply_outbox WHERE request_id = ?").get(requestId) as { state: string; compact_receipt: string } | undefined;
+    expect(notification?.state).toBe("pending");
+    expect(JSON.parse(notification!.compact_receipt)).toMatchObject({ requestId, errorCode: "im.validation_attempts_exhausted" });
+  });
+
   it("rejects a request whose revision does not exist in the repository", async () => {
     const requestId = await seedRequest();
     const service = new ManualReviewService({
@@ -372,6 +392,9 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
       }
     }
     expect(executeReview).not.toHaveBeenCalled();
+    const notification = store.sqlite.prepare("SELECT state, compact_receipt FROM im_reply_outbox WHERE request_id = ?").get(requestId) as { state: string; compact_receipt: string } | undefined;
+    expect(notification?.state).toBe("pending");
+    expect(JSON.parse(notification!.compact_receipt)).toMatchObject({ requestId, errorCode: "im.analysis_attempts_exhausted" });
   });
 
   it("keeps the commit author separate from the chat operator (V05)", async () => {
@@ -647,5 +670,7 @@ describe("R14/R15: publication checkpoint recovery", () => {
     const exhaustedId = await crashWhilePublishing(JSON.stringify({ publication: 3 }));
     await service.scan();
     expect(await findImReviewRequest(store, "ns-w", exhaustedId)).toMatchObject({ state: "publication_unknown", errorCode: "im.publication_attempts_exhausted" });
+    expect(store.sqlite.prepare("SELECT COUNT(*) AS count FROM im_reply_outbox WHERE request_id = ?").get(exhaustedId))
+      .toMatchObject({ count: 1 });
   });
 });

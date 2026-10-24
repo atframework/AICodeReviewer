@@ -201,18 +201,21 @@ export function callbackRequest(
   command: string,
   delivery = 900,
   actorId?: string,
+  slackTriggerId?: string,
 ): Request {
   let raw: string;
   const headers = new Headers();
   if (platform === "slack") {
-    raw = new URLSearchParams({
+    const form = new URLSearchParams({
       api_app_id: "A123",
       team_id: "T123",
       user_id: actorId ?? "U234",
       channel_id: "C123",
       command: "/aicr",
       text: command,
-    }).toString();
+    });
+    if (slackTriggerId !== undefined) form.set("trigger_id", slackTriggerId);
+    raw = form.toString();
     const ts = String(NOW / 1000);
     headers.set("x-slack-request-timestamp", ts);
     headers.set(

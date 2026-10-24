@@ -42,57 +42,48 @@ const referencePages = ["en/reference/config-fields.md", "zh-cn/reference/config
 // ---------------------------------------------------------------------------
 
 const PRIMITIVE_TYPES = new Set([
-  "ZodString",
-  "ZodNumber",
-  "ZodBoolean",
-  "ZodBigInt",
-  "ZodDate",
-  "ZodLiteral",
-  "ZodEnum",
-  "ZodNativeEnum",
-  "ZodAny",
-  "ZodUnknown",
-  "ZodNull",
-  "ZodUndefined",
-  "ZodVoid",
+  "string",
+  "number",
+  "boolean",
+  "bigint",
+  "date",
+  "literal",
+  "enum",
+  "any",
+  "unknown",
+  "null",
+  "undefined",
+  "void",
 ]);
 
-// Wrapper types and the `_def` key holding the wrapped schema. ZodDefault in
-// zod 3.25 has no unwrap(); reading `_def.innerType` uniformly avoids version
-// differences between optional/default/nullable/readonly/catch. ZodLazy uses
-// a getter and is handled separately below.
-const WRAPPER_INNER_KEYS = {
-  ZodOptional: "innerType",
-  ZodDefault: "innerType",
-  ZodNullable: "innerType",
-  ZodReadonly: "innerType",
-  ZodCatch: "innerType",
-};
+// Zod 4 stores wrapper metadata in `def`. Refinements and brands no longer
+// introduce wrapper nodes; preprocess and other pipes expose their output
+// schema through `def.out`.
+const WRAPPER_INNER_KEYS = new Set([
+  "optional",
+  "default",
+  "prefault",
+  "nullable",
+  "readonly",
+  "catch",
+  "nonoptional",
+  "success",
+]);
 
 function unwrap(schema) {
   let current = schema;
-  while (current && current._def) {
-    const typeName = current._def.typeName;
-    const innerKey = WRAPPER_INNER_KEYS[typeName];
-    if (innerKey && current._def[innerKey]) {
-      current = current._def[innerKey];
+  while (current?.def) {
+    const { type } = current.def;
+    if (WRAPPER_INNER_KEYS.has(type) && current.def.innerType) {
+      current = current.def.innerType;
       continue;
     }
-    if (typeName === "ZodEffects") {
-      // z.preprocess wraps the output schema in _def.schema instead of
-      // innerType().
-      current =
-        current._def.effect?.type === "preprocess"
-          ? current._def.schema
-          : current.innerType();
+    if (type === "lazy") {
+      current = current.def.getter();
       continue;
     }
-    if (typeName === "ZodLazy") {
-      current = current._def.getter();
-      continue;
-    }
-    if (typeName === "ZodPipeline") {
-      current = current._def.out;
+    if (type === "pipe") {
+      current = current.def.out;
       continue;
     }
     return current;
@@ -102,52 +93,42 @@ function unwrap(schema) {
 
 function isPrimitiveLike(schema) {
   const inner = unwrap(schema);
-  const typeName = inner._def.typeName;
-  if (typeName === "ZodUnion" || typeName === "ZodIntersection" || typeName === "ZodDiscriminatedUnion") {
-    const options =
-      typeName === "ZodIntersection"
-        ? [inner._def.left, inner._def.right]
-        : inner.options;
+  const { type } = inner.def;
+  if (type === "union" || type === "intersection") {
+    const options = type === "intersection" ? [inner.def.left, inner.def.right] : inner.options;
     return options.every(isPrimitiveLike);
   }
-  return PRIMITIVE_TYPES.has(typeName);
+  return PRIMITIVE_TYPES.has(type);
 }
 
 function enumOptions(schema) {
   const inner = unwrap(schema);
-  if (inner._def.typeName === "ZodEnum") {
-    return [...inner.options];
-  }
-  if (inner._def.typeName === "ZodNativeEnum") {
-    return Object.values(inner._def.values);
-  }
-  return undefined;
+  return inner.def.type === "enum" ? [...inner.options] : undefined;
 }
 
 function recordValueSchema(schema) {
-  const inner = unwrap(schema);
-  return inner._def.valueType ?? inner.valueSchema;
+  return unwrap(schema).valueType;
 }
 
 // Collect every addressable node path (objects, arrays, records, leaves) and
 // the options of enum leaves. Array-of-object children carry a `[]` segment;
-// record children carry an `<id>` placeholder segment. `ZodNever` fields are
+// record children carry an `<id>` placeholder segment. `never` fields are
 // rejected by validation and intentionally not treated as settable fields.
 function collectSchemaPaths(schema, path, nodes, enums) {
   const inner = unwrap(schema);
-  const typeName = inner._def.typeName;
+  const { type } = inner.def;
 
-  if (typeName === "ZodNever") {
+  if (type === "never") {
     return;
   }
-  if (typeName === "ZodObject") {
+  if (type === "object") {
     if (path) nodes.add(path);
     for (const [key, child] of Object.entries(inner.shape)) {
       collectSchemaPaths(child, path ? `${path}.${key}` : key, nodes, enums);
     }
     return;
   }
-  if (typeName === "ZodArray") {
+  if (type === "array") {
     if (isPrimitiveLike(inner.element)) {
       nodes.add(path);
       return;
@@ -155,18 +136,17 @@ function collectSchemaPaths(schema, path, nodes, enums) {
     collectSchemaPaths(inner.element, `${path}[]`, nodes, enums);
     return;
   }
-  if (typeName === "ZodRecord") {
+  if (type === "record") {
     nodes.add(path);
     collectSchemaPaths(recordValueSchema(inner), `${path}.<id>`, nodes, enums);
     return;
   }
-  if (typeName === "ZodUnion" || typeName === "ZodIntersection" || typeName === "ZodDiscriminatedUnion") {
+  if (type === "union" || type === "intersection") {
     if (isPrimitiveLike(inner)) {
       nodes.add(path);
       return;
     }
-    const options =
-      typeName === "ZodIntersection" ? [inner._def.left, inner._def.right] : inner.options;
+    const options = type === "intersection" ? [inner.def.left, inner.def.right] : inner.options;
     for (const option of options) {
       if (!isPrimitiveLike(option)) {
         collectSchemaPaths(option, path, nodes, enums);

@@ -62,6 +62,123 @@ export function splitMarkdownCode(content: string): MarkdownCodeSegment[] {
   });
 }
 
+export interface MarkdownLink {
+  readonly start: number;
+  readonly end: number;
+  readonly label: string;
+  readonly url: string;
+  readonly raw: string;
+}
+
+function isEscaped(content: string, index: number): boolean {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && content[cursor] === "\\"; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+
+function readMarkdownLink(content: string, start: number): MarkdownLink | undefined {
+  if (content[start] !== "[" || isEscaped(content, start)) return undefined;
+  let labelDepth = 1;
+  let cursor = start + 1;
+  for (; cursor < content.length; cursor += 1) {
+    const char = content[cursor];
+    if (char === "\n") return undefined;
+    if (char === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (char === "[") labelDepth += 1;
+    if (char === "]") {
+      labelDepth -= 1;
+      if (labelDepth === 0) break;
+    }
+  }
+  if (labelDepth !== 0 || content[cursor + 1] !== "(") return undefined;
+  const labelEnd = cursor;
+  let destinationDepth = 1;
+  cursor += 2;
+  for (; cursor < content.length; cursor += 1) {
+    const char = content[cursor];
+    if (char === "\n") return undefined;
+    if (char === "\\") {
+      cursor += 1;
+      continue;
+    }
+    if (char === "(") destinationDepth += 1;
+    if (char === ")") {
+      destinationDepth -= 1;
+      if (destinationDepth === 0) {
+        return {
+          start,
+          end: cursor + 1,
+          label: content.slice(start + 1, labelEnd),
+          url: content.slice(labelEnd + 2, cursor),
+          raw: content.slice(start, cursor + 1),
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+export function scanMarkdownLinks(content: string): readonly MarkdownLink[] {
+  const links: MarkdownLink[] = [];
+  for (let cursor = 0; cursor < content.length;) {
+    const start = content.indexOf("[", cursor);
+    if (start < 0) break;
+    const link = readMarkdownLink(content, start);
+    if (link === undefined) {
+      cursor = start + 1;
+      continue;
+    }
+    links.push(link);
+    cursor = link.end;
+  }
+  return links;
+}
+
+export function mapMarkdownLinks(content: string, map: (link: MarkdownLink) => string): string {
+  let output = "";
+  let offset = 0;
+  for (const link of scanMarkdownLinks(content)) {
+    output += content.slice(offset, link.start) + map(link);
+    offset = link.end;
+  }
+  return output + content.slice(offset);
+}
+
+export interface MarkdownAtom {
+  readonly raw: string;
+  readonly atomic: boolean;
+}
+
+export function splitMarkdownAtoms(content: string): readonly MarkdownAtom[] {
+  const atoms: MarkdownAtom[] = [];
+  const appendText = (raw: string): void => {
+    let offset = 0;
+    for (const match of raw.matchAll(/<[^<>\n]+>|&(?:amp|lt|gt);/gu)) {
+      if (match.index > offset) atoms.push({ raw: raw.slice(offset, match.index), atomic: false });
+      atoms.push({ raw: match[0], atomic: true });
+      offset = match.index + match[0].length;
+    }
+    if (offset < raw.length) atoms.push({ raw: raw.slice(offset), atomic: false });
+  };
+  for (const segment of splitMarkdownCode(content)) {
+    if (segment.kind !== "text") {
+      atoms.push({ raw: segment.raw, atomic: true });
+      continue;
+    }
+    let offset = 0;
+    for (const link of scanMarkdownLinks(segment.raw)) {
+      appendText(segment.raw.slice(offset, link.start));
+      atoms.push({ raw: link.raw, atomic: true });
+      offset = link.end;
+    }
+    appendText(segment.raw.slice(offset));
+  }
+  return atoms;
+}
+
 /** Keep source examples intact while removing publication bookkeeping from visible prose. */
 export function normalizeSocialImMarkdown(content: string): string {
   const segments = splitMarkdownCode(content.replace(/\r\n?/gu, "\n"));

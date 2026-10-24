@@ -85,6 +85,33 @@ describe("social IM configuration", () => {
       ).toBe(false);
     },
   );
+  it("enforces Telegram safe-integer IDs without truncating Discord snowflakes", () => {
+    const max = String(Number.MAX_SAFE_INTEGER);
+    const overflow = String(Number.MAX_SAFE_INTEGER + 1);
+    expect(imConnectionSchema.safeParse({ ...socialConnections.telegram, bot_id: max }).success).toBe(true);
+    expect(imConnectionSchema.safeParse({ ...socialConnections.telegram, bot_id: overflow }).success).toBe(false);
+    for (const chatId of [max, `-${max}`]) {
+      expect(outputChannelSchema.safeParse({ name: "tg", kind: "telegram_bot", connection: "telegram", chat_id: chatId }).success).toBe(true);
+    }
+    expect(outputChannelSchema.safeParse({ name: "tg", kind: "telegram_bot", connection: "telegram", chat_id: overflow }).success).toBe(false);
+    expect(outputChannelSchema.safeParse({ name: "tg", kind: "telegram_bot", connection: "telegram", chat_id: `-${overflow}` }).success).toBe(false);
+    const parseBinding = (actorId: string, groupId: string) => imConfigSchema.safeParse({
+      connections: { telegram: socialConnections.telegram },
+      command_bindings: { reviewers: {
+        enabled: true,
+        connection: "telegram",
+        actors: [{ type: "telegram_user_id", id: actorId }],
+        conversations: [{ kind: "group", id: groupId }],
+        commands: ["help"],
+      } },
+    }).success;
+    expect(parseBinding(max, `-${max}`)).toBe(true);
+    expect(parseBinding(overflow, `-${max}`)).toBe(false);
+    expect(parseBinding(max, `-${overflow}`)).toBe(false);
+    const discordSnowflake = "9223372036854775807";
+    const discord = outputChannelSchema.parse({ name: "discord", kind: "discord_bot", connection: "discord", channel_id: discordSnowflake });
+    expect(discord.channel_id).toBe(discordSnowflake);
+  });
   it("rejects inline secrets, broad mentions and unknown destination features", () => {
     const channel = {
       name: "slack",

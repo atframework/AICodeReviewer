@@ -439,7 +439,7 @@ IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）
 | `im.connections.<id>.bot_user_id` | string | — | Slack Bot user 身份；还需 `app_id` |
 | `im.connections.<id>.application_id` | string | — | Discord application snowflake |
 | `im.connections.<id>.guild_id` | string | — | Discord guild snowflake |
-| `im.connections.<id>.bot_id` | string | — | Telegram Bot 数字 ID |
+| `im.connections.<id>.bot_id` | string | — | Telegram Bot 正整数 ID，不超过 `9007199254740991` |
 | `im.connections.<id>.token` | string | — | Bot API 凭据；与 `token_env` 互斥，持久化时加密 |
 | `im.connections.<id>.token_env` | string | — | Bot API 凭据环境引用 |
 | `im.connections.<id>.socket_mode.enabled` | boolean | — | 仅 Slack；运行时默认 false；与启用的 HTTP callback 互斥 |
@@ -451,7 +451,7 @@ IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）
 | `im.connections.<id>.callback.secret_token` | string | — | Telegram webhook secret；与 `_env` 引用互斥，加密落库 |
 | `im.connections.<id>.callback.secret_token_env` | string | — | Telegram webhook secret 引用 |
 | `outputs.channels[].channel_id` | string | — | Slack/Discord 准确频道 ID |
-| `outputs.channels[].chat_id` | string | — | Telegram 带引号的有符号十进制 chat ID |
+| `outputs.channels[].chat_id` | string | — | Telegram 带引号的有符号十进制 chat ID，范围为 `-9007199254740991` 至 `9007199254740991` |
 
 启用 connection 需 token，启用 callback 需对应验证材料。output 需匹配的 `connection`，
 拒绝内联凭据、自定义 API origin、目录、原生 mention、线程/topic 字段。

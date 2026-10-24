@@ -169,6 +169,7 @@ export interface SlackSocketModeServiceOptions extends ImCallbackRoutesOptions {
     options: SlackSocketTransportOptions,
   ) => SlackSocketTransport;
   readonly onStatus?: (connection: string, status: string) => void;
+  readonly startupTimeoutMs?: number;
 }
 
 export class SlackSocketModeService {
@@ -334,13 +335,30 @@ export class SlackSocketModeService {
         },
       });
       entry.transport = transport;
-      void transport
-        .start()
-        .catch(() => {
+      let rejectStartup!: (reason?: unknown) => void;
+      const startupBoundary = new Promise<never>((_, reject) => {
+        rejectStartup = reject;
+      });
+      let timedOut = false;
+      const onStartupAbort = () => rejectStartup(new Error("Slack Socket Mode stopped."));
+      entry.controller.signal.addEventListener("abort", onStartupAbort, { once: true });
+      const startupTimer = setTimeout(() => {
+        timedOut = true;
+        rejectStartup(new Error("Slack Socket Mode handshake timed out."));
+      }, this.options.startupTimeoutMs ?? 15_000);
+      startupTimer.unref?.();
+      void Promise.race([transport.start(), startupBoundary])
+        .catch(async () => {
+          if (entry.controller.signal.aborted || entry.transport !== transport) return;
           this.status(name, "connect_failed");
-          retry();
+          if (timedOut) {
+            try { await transport.stop(); } catch { /* retry retains the bounded backoff */ }
+          }
+          if (!entry.controller.signal.aborted && entry.transport === transport) retry();
         })
         .finally(() => {
+          clearTimeout(startupTimer);
+          entry.controller.signal.removeEventListener("abort", onStartupAbort);
           entry.starting = false;
         });
     } catch {
@@ -363,7 +381,6 @@ export class SlackSocketModeService {
       await envelope.ack();
       return;
     }
-    if (envelope.accepts_response_payload !== true) return;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1000);
     const signal = AbortSignal.any([
@@ -415,7 +432,11 @@ export class SlackSocketModeService {
         this.status(name, "admission_unavailable");
         return;
       }
-      await envelope.ack((await response.json()) as Record<string, unknown>);
+      if (envelope.accepts_response_payload === true) {
+        await envelope.ack((await response.json()) as Record<string, unknown>);
+      } else {
+        await envelope.ack();
+      }
     } finally {
       clearTimeout(timer);
       controller.abort();

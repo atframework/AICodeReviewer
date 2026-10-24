@@ -408,3 +408,96 @@ it("does not reclaim a persisted sending row after an exit before receipt persis
   expect(calls).toHaveLength(0);
   expect(store.db.select().from(imReplyOutbox).get()!.state).toBe("unknown");
 });
+
+it.each([
+  { advanceMs: 1000, expected: "expired" },
+  { advanceMs: 61_000, expected: "unknown" },
+])("does not POST after pre-send expiry advances by $advanceMs ms", async ({ advanceMs, expected }) => {
+  const f = await seed("telegram");
+  if (expected === "expired") store.db.update(imReplyOutbox).set({ expiry: new Date(NOW + 1000) }).run();
+  let now = NOW;
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const finish = storeApi.finishImReplyNotification;
+  vi.spyOn(storeApi, "finishImReplyNotification").mockImplementation(async (db, input) => {
+    const result = await finish(db, input);
+    if (input.state === "sending" && result) now += advanceMs;
+    return result;
+  });
+  const options = { store, getConfig: () => f.config, env: () => undefined,
+    fetch: apiFixture("telegram", calls), now: () => new Date(now) };
+  const service = new ImReplyService(options);
+  await service.scan();
+  await service.stop();
+  expect(calls.filter(call => call.url.endsWith("sendMessage"))).toHaveLength(0);
+  if (expected === "unknown") {
+    const fresh = new ImReplyService(options);
+    await fresh.scan();
+    await fresh.stop();
+  }
+  expect(store.db.select().from(imReplyOutbox).get()!.state).toBe(expected);
+  expect(calls.filter(call => call.url.endsWith("sendMessage"))).toHaveLength(0);
+});
+
+it("uses the rotated token from the final config generation for readiness and POST", async () => {
+  const f = await seed("telegram");
+  const rotated = structuredClone(f.config);
+  rotated.im!.connections!.bot!.token = "123456789:rotated";
+  let reads = 0;
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const service = new ImReplyService({
+    store,
+    getConfig: () => ++reads === 1 ? f.config : rotated,
+    env: () => undefined,
+    fetch: apiFixture("telegram", calls),
+    now: () => new Date(NOW),
+  });
+  await service.scan();
+  await service.stop();
+  const post = calls.find(call => call.url.endsWith("sendMessage"));
+  expect(post?.url).toContain("/bot123456789:rotated/sendMessage");
+  expect(store.db.select().from(imReplyOutbox).get()!.state).toBe("delivered");
+});
+
+it("backs off a temporary readiness failure and recovers without a duplicate", async () => {
+  const f = await seed("telegram");
+  let now = NOW;
+  let unavailable = true;
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const api = apiFixture("telegram", calls);
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    if (unavailable && String(input).endsWith("getMe")) throw new Error("metadata unavailable");
+    return api(input, init);
+  };
+  const options = { store, getConfig: () => f.config, env: () => undefined, fetch, now: () => new Date(now) };
+  const service = new ImReplyService(options);
+  await service.scan();
+  await service.stop();
+  const pending = store.db.select().from(imReplyOutbox).get()!;
+  expect(pending.state).toBe("pending");
+  expect(pending.nextAttemptAt!.getTime()).toBeGreaterThan(now);
+  expect(calls.filter(call => call.url.endsWith("sendMessage"))).toHaveLength(0);
+  unavailable = false;
+  now = pending.nextAttemptAt!.getTime();
+  const fresh = new ImReplyService(options);
+  await fresh.scan();
+  await fresh.stop();
+  expect(store.db.select().from(imReplyOutbox).get()!.state).toBe("delivered");
+  expect(calls.filter(call => call.url.endsWith("sendMessage"))).toHaveLength(1);
+});
+
+it("persists a retry when social delivery is stopped after CAS but before POST", async () => {
+  const f = await seed("telegram");
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const finish = storeApi.finishImReplyNotification;
+  const service = new ImReplyService({ store, getConfig: () => f.config, env: () => undefined,
+    fetch: apiFixture("telegram", calls), now: () => new Date(NOW) });
+  vi.spyOn(storeApi, "finishImReplyNotification").mockImplementation(async (db, input) => {
+    const result = await finish(db, input);
+    if (input.state === "sending" && result) service.dispose();
+    return result;
+  });
+  await service.scan();
+  await service.stop();
+  expect(calls.filter(call => call.url.endsWith("sendMessage"))).toHaveLength(0);
+  expect(store.db.select().from(imReplyOutbox).get()!).toMatchObject({ state: "pending" });
+});

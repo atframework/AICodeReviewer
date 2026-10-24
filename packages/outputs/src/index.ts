@@ -2441,6 +2441,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			}) };
 		}
 
+		const closeBody = resolvedAction === "mark_resolved" ? managedIssueBodyWithResolvedPrefix(issue.body) : issue.body;
 		const lifecycleMsg = [
 			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 			"",
@@ -2454,12 +2455,8 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		});
 
 		if (resolvedAction === "mark_resolved") {
-			const markerEnd = issue.body.indexOf("\n", issue.body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
-			const markers = markerEnd > 0 ? issue.body.slice(0, markerEnd + 1) : "";
-			const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
-			const originalBody = markerEnd > 0 ? issue.body.slice(markerEnd + 1) : issue.body;
 			await request("PATCH", `${repoPath}/issues/${issue.number}`, {
-				body: markers + resolvedPrefix + originalBody,
+				body: closeBody,
 				state: "closed",
 			});
 		} else {
@@ -3554,6 +3551,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 			}) };
 		}
 
+		const closeBody = resolvedAction === "mark_resolved" ? managedIssueBodyWithResolvedPrefix(issue.body) : issue.body;
 		const lifecycleMsg = [
 			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 			"",
@@ -3567,12 +3565,8 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 		});
 
 		if (resolvedAction === "mark_resolved") {
-			const markerEnd = issue.body.indexOf("\n", issue.body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
-			const markers = markerEnd > 0 ? issue.body.slice(0, markerEnd + 1) : "";
-			const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
-			const originalBody = markerEnd > 0 ? issue.body.slice(markerEnd + 1) : issue.body;
 			await request("PUT", `${projectPath}/issues/${issue.iid}`, {
-				description: markers + resolvedPrefix + originalBody,
+				description: closeBody,
 				state_event: "close",
 			});
 		} else {
@@ -4598,6 +4592,34 @@ async function prepareStoredConsolidatedReconciliation(
 	};
 }
 
+const MANAGED_ISSUE_BODY_MAX_CHARS = 65_536;
+const managedIssueDiagnosticSegmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+function assertManagedIssueBodyBudget(body: string): string {
+	if (body.length > MANAGED_ISSUE_BODY_MAX_CHARS) {
+		throw new Error(`Managed issue body exceeds ${MANAGED_ISSUE_BODY_MAX_CHARS} characters.`);
+	}
+	return body;
+}
+
+function managedIssueBodyWithResolvedPrefix(body: string): string {
+	const markerEnd = body.indexOf("\n", body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
+	const markers = markerEnd > 0 ? body.slice(0, markerEnd + 1) : "";
+	const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
+	const originalBody = markerEnd > 0 ? body.slice(markerEnd + 1) : body;
+	return assertManagedIssueBodyBudget(markers + resolvedPrefix + originalBody);
+}
+
+function truncateManagedIssueDiagnostic(value: string, maxChars: number): string {
+	if (value.length <= maxChars) return value;
+	let output = "";
+	for (const { segment } of managedIssueDiagnosticSegmenter.segment(value)) {
+		if (output.length + segment.length > maxChars) break;
+		output += segment;
+	}
+	return `${output}…`;
+}
+
 function buildConsolidatedIssueBody(
 	problems: readonly ReviewProblem[],
 	options: {
@@ -4608,6 +4630,8 @@ function buildConsolidatedIssueBody(
 		readonly headSha?: string;
 		readonly categorization?: ConsolidatedIssueCategorization;
 		readonly previousBody?: string;
+		readonly omitResolvedMeta?: boolean;
+		readonly compactResolved?: boolean;
 	},
 ): string {
 	const cat = options.categorization;
@@ -4626,7 +4650,7 @@ function buildConsolidatedIssueBody(
 		if (info) resolvedDetails.set(fp, info);
 	}
 	for (const fp of allFingerprints) resolvedFingerprints.delete(fp);
-	const resolvedMeta = [...resolvedFingerprints].flatMap(fp => {
+	const resolvedMeta = options.omitResolvedMeta ? [] : [...resolvedFingerprints].flatMap(fp => {
 		const info = resolvedDetails.get(fp);
 		return info ? [{ ...info, ...(info.message ? { message: info.message.slice(0, REVIEW_PROBLEM_META_MESSAGE_MAX_CHARS) } : {}) }] : [];
 	});
@@ -4687,13 +4711,13 @@ function buildConsolidatedIssueBody(
 		sections.push("The following issues are no longer present in the latest analysis:");
 		sections.push("");
 		for (const fp of resolvedFingerprints) {
-			const info = resolvedDetails.get(fp);
+			const info = options.compactResolved ? undefined : resolvedDetails.get(fp);
 			if (info) {
 				const location = info.endLine ? `${info.file}:${info.line}-${info.endLine}` : `${info.file}:${info.line}`;
 				sections.push(`- ~~**${info.severity} \u00b7 ${info.category}** \u2014 \`${location}\`~~ \u2705 Resolved`);
 				if (info.message) {
 					const diagnostic = info.message.split(/\r?\n/u)[0]?.trim() ?? "";
-					sections.push(`  ${diagnostic.slice(0, 400)}${diagnostic.length > 400 ? "…" : ""}`);
+					sections.push(`  ${truncateManagedIssueDiagnostic(diagnostic, 400)}`);
 				}
 			} else {
 				sections.push(`- ~~\`${fp}\`~~ \u2705 Resolved`);
@@ -4703,7 +4727,15 @@ function buildConsolidatedIssueBody(
 		sections.push("</details>");
 	}
 
-	return normalizeMarkdownBody(sections.join("\n"));
+	const body = normalizeMarkdownBody(sections.join("\n"));
+	if (body.length <= MANAGED_ISSUE_BODY_MAX_CHARS) return body;
+	if (!options.omitResolvedMeta) {
+		return buildConsolidatedIssueBody(problems, { ...options, omitResolvedMeta: true });
+	}
+	if (!options.compactResolved) {
+		return buildConsolidatedIssueBody(problems, { ...options, omitResolvedMeta: true, compactResolved: true });
+	}
+	throw new Error(`Managed issue body exceeds ${MANAGED_ISSUE_BODY_MAX_CHARS} characters.`);
 }
 
 interface SeverityGroup {
@@ -5484,6 +5516,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			}) };
 		}
 
+		const closeBody = resolvedAction === "mark_resolved" ? managedIssueBodyWithResolvedPrefix(issue.body) : issue.body;
 		const lifecycleMsg = [
 			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 			"",
@@ -5497,12 +5530,8 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		});
 
 		if (resolvedAction === "mark_resolved") {
-			const markerEnd = issue.body.indexOf("\n", issue.body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
-			const markers = markerEnd > 0 ? issue.body.slice(0, markerEnd + 1) : "";
-			const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
-			const originalBody = markerEnd > 0 ? issue.body.slice(markerEnd + 1) : issue.body;
 			await request("PATCH", `${repoPath}/issues/${issue.number}`, {
-				body: markers + resolvedPrefix + originalBody,
+				body: closeBody,
 				state: "closed",
 			});
 		} else {

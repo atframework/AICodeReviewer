@@ -137,6 +137,31 @@ export function validateImNotification(notification: ImNotificationInput): void 
   if (notification.payloadJson !== undefined && Buffer.byteLength(notification.payloadJson, "utf8") > 16 * 1024) throw new Error("IM notification payload exceeds limit.");
 }
 
+export interface ImNotificationPersistentIdentity {
+  readonly operationId: string;
+  readonly namespace: string;
+  readonly requestId: string | null;
+  readonly destinationIdentity: string;
+  readonly operationKind: string;
+  readonly payloadDigest: string;
+  readonly payloadJson: string | null;
+  readonly compactReceipt: string | null;
+  readonly nextAttemptAt: Date | null;
+  readonly expiry: Date | null;
+}
+
+export function assertImNotificationIdentity(
+  existing: ImNotificationPersistentIdentity | undefined,
+  expected: ImNotificationPersistentIdentity,
+): void {
+  if (existing === undefined || existing.namespace !== expected.namespace || existing.requestId !== expected.requestId ||
+      existing.destinationIdentity !== expected.destinationIdentity || existing.operationKind !== expected.operationKind ||
+      existing.payloadDigest !== expected.payloadDigest || existing.payloadJson !== expected.payloadJson ||
+      existing.compactReceipt !== expected.compactReceipt) {
+    throw new Error("IM notification operation conflict.");
+  }
+}
+
 export function checkImAdmissionBudget(input: AcceptImDeliveryInput): void {
   input.signal?.throwIfAborted();
   if (input.deadlineAt !== undefined && Date.now() >= input.deadlineAt) throw new Error("IM admission deadline exceeded.");
@@ -235,11 +260,26 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
       const notification = input.notification?.({ kind, requestId });
       if (!notification) return;
       validateImNotification(notification);
-      tx.insert(imReplyOutbox).values({ ...notification, namespace: input.delivery.namespace,
-        requestId: requestId || null, payloadJson: notification.payloadJson ?? null, compactReceipt: notification.compactReceipt ?? null,
+      const values = {
+        operationId: notification.operationId,
+        namespace: input.delivery.namespace,
+        requestId: requestId || null,
+        destinationIdentity: notification.destinationIdentity,
+        operationKind: notification.operationKind,
+        payloadDigest: notification.payloadDigest,
+        payloadJson: notification.payloadJson ?? null,
+        compactReceipt: notification.compactReceipt ?? null,
         expiry: notification.expiry ?? new Date(input.now.getTime() + 86_400_000),
-        state: "pending", nextAttemptAt: notification.nextAttemptAt ?? input.now, createdAt: input.now, updatedAt: input.now,
-      }).onConflictDoNothing().run();
+        state: "pending",
+        nextAttemptAt: notification.nextAttemptAt ?? input.now,
+        createdAt: input.now,
+        updatedAt: input.now,
+      };
+      const insertedNotification = tx.insert(imReplyOutbox).values(values).onConflictDoNothing().returning().all();
+      if (insertedNotification.length === 0) {
+        const existing = tx.select().from(imReplyOutbox).where(eq(imReplyOutbox.operationId, notification.operationId)).get();
+        assertImNotificationIdentity(existing, values);
+      }
       checkImAdmissionBudget(input);
     };
     let inboxId = newImRowId();
@@ -396,11 +436,38 @@ function toRequestRow(row: typeof imReviewRequests.$inferSelect): ImReviewReques
   return { ...row };
 }
 
-export async function findImReviewRequest(store: StoreDb, namespace: string, requestId: string): Promise<ImReviewRequestRow | undefined> {
-  if (store.kind === "postgres") return findImReviewRequestPg(store, namespace, requestId);
-  const rows = await store.db.select().from(imReviewRequests)
-    .where(and(eq(imReviewRequests.namespace, namespace), eq(imReviewRequests.requestId, requestId)));
-  return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
+export interface ImReviewRequestQueryOptions {
+  readonly signal?: AbortSignal | undefined;
+  readonly deadlineAt?: number | undefined;
+}
+
+export function checkImReviewRequestQueryBudget(options: ImReviewRequestQueryOptions): void {
+  options.signal?.throwIfAborted();
+  if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) {
+    throw new Error("IM request query deadline exceeded.");
+  }
+}
+
+export async function findImReviewRequest(
+  store: StoreDb,
+  namespace: string,
+  requestId: string,
+  options: ImReviewRequestQueryOptions = {},
+): Promise<ImReviewRequestRow | undefined> {
+  if (store.kind === "postgres") return findImReviewRequestPg(store, namespace, requestId, options);
+  const busyTimeout = options.deadlineAt === undefined ? undefined : Number(store.sqlite.pragma("busy_timeout", { simple: true }));
+  if (busyTimeout !== undefined) {
+    store.sqlite.pragma(`busy_timeout = ${Math.min(busyTimeout, Math.max(1, Math.min(250, options.deadlineAt! - Date.now())))}`);
+  }
+  try {
+    checkImReviewRequestQueryBudget(options);
+    const rows = await store.db.select().from(imReviewRequests)
+      .where(and(eq(imReviewRequests.namespace, namespace), eq(imReviewRequests.requestId, requestId)));
+    checkImReviewRequestQueryBudget(options);
+    return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
+  } finally {
+    if (busyTimeout !== undefined) store.sqlite.pragma(`busy_timeout = ${busyTimeout}`);
+  }
 }
 
 /** Claims due requests whose lease is absent or expired; CAS fence increments. */
@@ -638,6 +705,7 @@ export interface ImReplyNotificationRow {
   readonly compactReceipt: string | null;
   readonly payloadJson: string | null;
   readonly leaseOwner: string | null;
+  readonly leaseUntil: Date | null;
   readonly attempts: number;
   readonly fence: number;
 }
@@ -656,7 +724,10 @@ export async function claimDueImReplyNotifications(store: StoreDb, input: { read
     const claimed: ImReplyNotificationRow[] = [];
     for (const row of due) {
       if (row.expiry !== null && row.expiry.getTime() <= input.now.getTime()) {
-        tx.update(imReplyOutbox).set({ state: "expired", updatedAt: input.now }).where(eq(imReplyOutbox.operationId, row.operationId)).run();
+        tx.update(imReplyOutbox).set({ state: "expired", leaseOwner: null, leaseUntil: null, nextAttemptAt: null,
+          fence: sql`${imReplyOutbox.fence} + 1`, updatedAt: input.now,
+        }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence),
+          inArray(imReplyOutbox.state, ["pending", "delivering"]))).run();
         continue;
       }
       const next = tx.update(imReplyOutbox).set({
@@ -666,27 +737,45 @@ export async function claimDueImReplyNotifications(store: StoreDb, input: { read
         attempts: row.attempts + 1,
         fence: sql`${imReplyOutbox.fence} + 1`,
         updatedAt: input.now,
-      }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence))).returning().all();
+      }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence),
+        inArray(imReplyOutbox.state, ["pending", "delivering"]))).returning().all();
       if (next.length > 0) claimed.push(next[0]!);
     }
     return claimed;
   });
 }
 
-/** Terminal update for one notification (delivered / failed / back to pending). */
-export async function finishImReplyNotification(store: StoreDb, input: { readonly operationId: string; readonly fence: number; readonly state: "delivered" | "failed" | "pending" | "sending" | "unknown" | "rejected"; readonly retryAt?: Date; readonly owner?: string; readonly compactReceipt?: string; readonly now: Date }): Promise<boolean> {
+export interface FinishImReplyNotificationInput {
+  readonly operationId: string;
+  readonly fence: number;
+  readonly state: "delivered" | "failed" | "pending" | "sending" | "unknown" | "rejected" | "expired";
+  readonly retryAt?: Date;
+  readonly owner?: string;
+  readonly compactReceipt?: string;
+  readonly now: Date;
+}
+
+/** Fenced worker transition; ownerless and cross-stage writes never apply. */
+export async function finishImReplyNotification(store: StoreDb, input: FinishImReplyNotificationInput): Promise<boolean> {
   if (store.kind === "postgres") return finishImReplyNotificationPg(store, input);
+  if (input.owner === undefined) return false;
+  const sourceStates = input.state === "sending" ? ["delivering"]
+    : input.state === "delivered" || input.state === "unknown" ? ["sending"]
+    : ["delivering", "sending"];
   const rows = store.db.update(imReplyOutbox).set({
     state: input.state,
     ...(input.compactReceipt !== undefined ? { compactReceipt: input.compactReceipt } : {}),
-    ...(["unknown", "rejected"].includes(input.state) ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
     ...(input.state === "pending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: input.retryAt ?? input.now } : {}),
-    ...(input.state === "failed" ? { leaseOwner: null, leaseUntil: null } : {}),
-    ...(input.state === "delivered" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
+    ...(input.state !== "pending" && input.state !== "sending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
     updatedAt: input.now,
-  }).where(and(eq(imReplyOutbox.operationId, input.operationId), eq(imReplyOutbox.fence, input.fence),
-    ...(input.owner === undefined ? [] : [eq(imReplyOutbox.leaseOwner, input.owner), gt(imReplyOutbox.leaseUntil, input.now),
-      eq(imReplyOutbox.state, input.state === "sending" ? "delivering" : "sending")]))).returning().all();
+  }).where(and(
+    eq(imReplyOutbox.operationId, input.operationId),
+    eq(imReplyOutbox.fence, input.fence),
+    eq(imReplyOutbox.leaseOwner, input.owner),
+    gt(imReplyOutbox.leaseUntil, input.now),
+    inArray(imReplyOutbox.state, sourceStates),
+    ...(input.state === "sending" ? [or(isNull(imReplyOutbox.expiry), gt(imReplyOutbox.expiry, input.now))] : []),
+  )).returning().all();
   return rows.length > 0;
 }
 

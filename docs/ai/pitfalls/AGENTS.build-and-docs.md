@@ -25,9 +25,13 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   verify package-local resolution before changing manifests (`redis-queue.ts`).
   Unsupported Node can kill test workers before assertions. Compare expected
   test files with collected results rather than trusting partial green output.
-- Check TypeScript/ESLint/Astro peers together. A major Zod bump is a schema
-  migration: default/refinement ordering, errors, MCP compatibility and docs
-  introspection all need regression evidence. Live manifests own version limits.
+- Check TypeScript/ESLint/Astro peers together. When the newest releases have
+  incompatible peer ranges, record and validate a compatible exception rather
+  than forcing an unsupported pair. TypeScript 6 runtime projects should declare
+  `types: ["node"]` explicitly instead of relying on implicit `@types` inclusion.
+  A major Zod bump is a schema migration: default/refinement ordering, errors,
+  MCP compatibility and docs introspection all need regression evidence. Live
+  manifests own version limits.
 - Hydrate LFS snapshot/SVG/PNG assets before packaging. CI/docs/image checkouts use
   `lfs: true`; working-tree packaging follows `git lfs pull`, not `git archive`.
   Keep the model snapshot path aligned across code, attributes and deploy checks.

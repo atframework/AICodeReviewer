@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0]
+
 ### Fixed
+
+- Slack, Discord and Telegram callbacks return a sanitized HTTP 409 when a delivery key is reused with different content instead of acknowledging it as a duplicate. Telegram enforces safe-integer IDs and preserves multiline command rejection; Discord snowflakes remain exact strings.
+- Slack Socket Mode bounds the full handshake through verified `hello`, stops stale transports before reconnecting, drains pending handshakes, and sends an empty ACK after durable admission when response payloads are unsupported.
+- Legacy and versioned reply outbox sends use owner/fence checks before POST, reject stale workers after lease expiry, retain uncertain outcomes, use credentials from the final config generation, retry pre-send failures, and emit notifications for retry-exhausted terminal states. PostgreSQL status lookups are cancellable, and GitLab `web_url` receipts survive journal recovery.
+- Slack and Telegram preserve balanced link parentheses, multi-backtick code tokens, uppercase HTTP schemes and Slack blockquotes during conversion and truncation. Managed consolidated issue bodies have a 65,536-unit budget with staged resolved-detail reduction and grapheme-safe excerpts; required fingerprint overflow fails before publication or closure.
+- Problem-resolution rejects valid verdicts duplicated by invalid entries in either order and includes initial and confirmation triage calls in the review's cumulative model budget. Zod 4 config parsing preserves nested defaults and rejects custom prototypes and explicit `__proto__` keys.
+- Git fetch no longer invokes the system credential helper when the adapter already supplies a token, preventing Git for Windows' interactive helper selector from blocking the run before agent startup. Repositories that rely on helper-provided credentials retain the existing behavior.
 
 - Docs site dev/preview servers now bind `127.0.0.1` instead of `localhost`: on hosts where the resolver returns `::1` first, the default produced an IPv6-only `[::1]` listener that was unreachable wherever the IPv6 loopback is broken, so the printed `http://localhost:4321` URL never opened.
 
 ### Changed
+
+- Updated workspace dependencies to the latest compatible releases, including Zod 4, Undici 8, OpenTelemetry 0.300 and Astro 7.4. TypeScript remains at 6.0.3 because the current typescript-eslint peer range excludes 6.1 and 7.x. Node.js is now `>=22.23.4`; the root `packageManager` again pins pnpm 10.20.0 to match CI and the deployment image.
+- Refreshed the offline models.dev snapshot to 230 providers and 8888 models. The Kimi Coding preset now resolves through `kimi-code-plan-cn` after the upstream provider split, preserving existing model IDs and endpoint behavior.
 
 - Docs site wide-screen layout: content column cap raised from 45rem to 96rem on docs pages and 120rem on the splash landing page so 2.5K/4K viewports are used, while running text stays capped at a 62ch prose measure (~62 Latin / ~39 CJK characters per line, within WCAG 1.4.8); tables, code blocks, and card grids keep the full column width, and full-width component boxes (Aside/Card/LinkCard) let their inner text fill the frame. The previous full-bleed experiment (100% width plus root font-size scaling) produced ~229-character lines at 2560px and is removed. Landing pages no longer duplicate the site title in the browser tab (`Home | AICodeReviewer` / `首页 | AICodeReviewer`).
 
@@ -111,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Review deduplication and async queue support (in-memory, Redis).
 - Structured logging with pino and secret scrubber.
 
-[Unreleased]: https://github.com/atframework/AICodeReviewer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/atframework/AICodeReviewer/compare/v0.4.0...HEAD
 [0.1.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.1.0
 [0.2.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.2.0
 [0.3.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.3.0
+[0.4.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.4.0

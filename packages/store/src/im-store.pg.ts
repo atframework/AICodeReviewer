@@ -5,6 +5,7 @@
  */
 
 import { and, eq, gt, gte, inArray, notInArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 
 import { randomUUID } from "node:crypto";
 
@@ -22,17 +23,61 @@ import type {
   AcceptImDeliveryOutcome,
   CancelImReviewRequestInput,
   ClaimedImReviewRequest,
+  FinishImReplyNotificationInput,
   FinishImReviewRequestInput,
   ImActionRecord,
   ImFencedUpdate,
+  ImReviewRequestQueryOptions,
   ImReviewRequestRow,
 } from "./im-store.js";
-import { ImActionRollback, ImRateLimitRollback, normalizeRevision, validateImNotification, checkImAdmissionBudget } from "./im-store.js";
+import {
+  ImActionRollback,
+  ImRateLimitRollback,
+  assertImNotificationIdentity,
+  normalizeRevision,
+  validateImNotification,
+  checkImAdmissionBudget,
+  checkImReviewRequestQueryBudget,
+} from "./im-store.js";
 
-export async function findImReviewRequestPg(store: PgStoreDb, namespace: string, requestId: string): Promise<ImReviewRequestRow | undefined> {
-  const rows = await store.db.select().from(imReviewRequests)
-    .where(and(eq(imReviewRequests.namespace, namespace), eq(imReviewRequests.requestId, requestId)));
-  return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
+export async function findImReviewRequestPg(
+  store: PgStoreDb,
+  namespace: string,
+  requestId: string,
+  options: ImReviewRequestQueryOptions = {},
+): Promise<ImReviewRequestRow | undefined> {
+  if (options.signal === undefined && options.deadlineAt === undefined) {
+    const rows = await store.db.select().from(imReviewRequests)
+      .where(and(eq(imReviewRequests.namespace, namespace), eq(imReviewRequests.requestId, requestId)));
+    return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
+  }
+  checkImReviewRequestQueryBudget(options);
+  const client = await store.pool.connect();
+  let aborted = false;
+  const onAbort = (): void => {
+    aborted = true;
+    client.connection.stream.destroy();
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    checkImReviewRequestQueryBudget(options);
+    if (options.deadlineAt !== undefined) {
+      const remaining = Math.max(1, options.deadlineAt - Date.now());
+      await client.query("SELECT set_config('statement_timeout', $1, false)", [String(remaining)]);
+    }
+    checkImReviewRequestQueryBudget(options);
+    const rows = await drizzlePg(client).select().from(imReviewRequests)
+      .where(and(eq(imReviewRequests.namespace, namespace), eq(imReviewRequests.requestId, requestId)));
+    checkImReviewRequestQueryBudget(options);
+    return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
+  } catch (error) {
+    if (aborted) options.signal?.throwIfAborted();
+    checkImReviewRequestQueryBudget(options);
+    throw error;
+  } finally {
+    options.signal?.removeEventListener("abort", onAbort);
+    client.release(aborted);
+  }
 }
 
 export async function listImActiveConfigSnapshotIdsPg(store: PgStoreDb, namespace: string, now = new Date()): Promise<string[]> {
@@ -109,11 +154,27 @@ export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDelive
       const notification = input.notification?.({ kind, requestId });
       if (!notification) return;
       validateImNotification(notification);
-      await tx.insert(imReplyOutbox).values({ ...notification, namespace: input.delivery.namespace,
-        requestId: requestId || null, payloadJson: notification.payloadJson ?? null, compactReceipt: notification.compactReceipt ?? null,
+      const values = {
+        operationId: notification.operationId,
+        namespace: input.delivery.namespace,
+        requestId: requestId || null,
+        destinationIdentity: notification.destinationIdentity,
+        operationKind: notification.operationKind,
+        payloadDigest: notification.payloadDigest,
+        payloadJson: notification.payloadJson ?? null,
+        compactReceipt: notification.compactReceipt ?? null,
         expiry: notification.expiry ?? new Date(input.now.getTime() + 86_400_000),
-        state: "pending", nextAttemptAt: notification.nextAttemptAt ?? input.now, createdAt: input.now, updatedAt: input.now,
-      }).onConflictDoNothing();
+        state: "pending",
+        nextAttemptAt: notification.nextAttemptAt ?? input.now,
+        createdAt: input.now,
+        updatedAt: input.now,
+      };
+      const insertedNotification = await tx.insert(imReplyOutbox).values(values).onConflictDoNothing().returning();
+      if (insertedNotification.length === 0) {
+        const existing = (await tx.select().from(imReplyOutbox)
+          .where(eq(imReplyOutbox.operationId, notification.operationId)).for("update"))[0];
+        assertImNotificationIdentity(existing, values);
+      }
       checkImAdmissionBudget(input);
     };
     let inboxId: string = randomUUID();
@@ -466,6 +527,7 @@ export interface ImReplyNotificationRowPg {
   readonly compactReceipt: string | null;
   readonly payloadJson: string | null;
   readonly leaseOwner: string | null;
+  readonly leaseUntil: Date | null;
   readonly attempts: number;
   readonly fence: number;
 }
@@ -482,7 +544,10 @@ export async function claimDueImReplyNotificationsPg(store: PgStoreDb, input: { 
     const claimed: ImReplyNotificationRowPg[] = [];
     for (const row of due) {
       if (row.expiry !== null && row.expiry.getTime() <= input.now.getTime()) {
-        await tx.update(imReplyOutbox).set({ state: "expired", updatedAt: input.now }).where(eq(imReplyOutbox.operationId, row.operationId));
+        await tx.update(imReplyOutbox).set({ state: "expired", leaseOwner: null, leaseUntil: null, nextAttemptAt: null,
+          fence: sql`${imReplyOutbox.fence} + 1`, updatedAt: input.now,
+        }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence),
+          inArray(imReplyOutbox.state, ["pending", "delivering"])));
         continue;
       }
       const next = await tx.update(imReplyOutbox).set({
@@ -492,25 +557,33 @@ export async function claimDueImReplyNotificationsPg(store: PgStoreDb, input: { 
         attempts: row.attempts + 1,
         fence: sql`${imReplyOutbox.fence} + 1`,
         updatedAt: input.now,
-      }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence))).returning();
+      }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence),
+        inArray(imReplyOutbox.state, ["pending", "delivering"]))).returning();
       if (next.length > 0) claimed.push(next[0]!);
     }
     return claimed;
   });
 }
 
-export async function finishImReplyNotificationPg(store: PgStoreDb, input: { readonly operationId: string; readonly fence: number; readonly state: "delivered" | "failed" | "pending" | "sending" | "unknown" | "rejected"; readonly retryAt?: Date; readonly owner?: string; readonly compactReceipt?: string; readonly now: Date }): Promise<boolean> {
+export async function finishImReplyNotificationPg(store: PgStoreDb, input: FinishImReplyNotificationInput): Promise<boolean> {
+  if (input.owner === undefined) return false;
+  const sourceStates = input.state === "sending" ? ["delivering"]
+    : input.state === "delivered" || input.state === "unknown" ? ["sending"]
+    : ["delivering", "sending"];
   const rows = await store.db.update(imReplyOutbox).set({
     state: input.state,
     ...(input.compactReceipt !== undefined ? { compactReceipt: input.compactReceipt } : {}),
-    ...(["unknown", "rejected"].includes(input.state) ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
     ...(input.state === "pending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: input.retryAt ?? input.now } : {}),
-    ...(input.state === "failed" ? { leaseOwner: null, leaseUntil: null } : {}),
-    ...(input.state === "delivered" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
+    ...(input.state !== "pending" && input.state !== "sending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
     updatedAt: input.now,
-  }).where(and(eq(imReplyOutbox.operationId, input.operationId), eq(imReplyOutbox.fence, input.fence),
-    ...(input.owner === undefined ? [] : [eq(imReplyOutbox.leaseOwner, input.owner), gt(imReplyOutbox.leaseUntil, input.now),
-      eq(imReplyOutbox.state, input.state === "sending" ? "delivering" : "sending")]))).returning();
+  }).where(and(
+    eq(imReplyOutbox.operationId, input.operationId),
+    eq(imReplyOutbox.fence, input.fence),
+    eq(imReplyOutbox.leaseOwner, input.owner),
+    gt(imReplyOutbox.leaseUntil, input.now),
+    inArray(imReplyOutbox.state, sourceStates),
+    ...(input.state === "sending" ? [or(isNull(imReplyOutbox.expiry), gt(imReplyOutbox.expiry, input.now))] : []),
+  )).returning();
   return rows.length > 0;
 }
 

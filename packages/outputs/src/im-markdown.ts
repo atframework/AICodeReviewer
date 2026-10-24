@@ -1,5 +1,5 @@
 import { fixAndValidateMarkdown } from "@aicr/core";
-import { normalizeSocialImMarkdown, splitMarkdownFences } from "./markdown-code.js";
+import { mapMarkdownLinks, normalizeSocialImMarkdown, splitMarkdownCode, splitMarkdownFences } from "./markdown-code.js";
 
 const FENCE_LINE_RE = /^(\s{0,3})(`{3,}|~{3,})/u;
 
@@ -210,12 +210,11 @@ export function toDingTalkMarkdown(content: string): string {
 // > quotes, - lists, --- divider.
 // Does NOT support: headings (#), [text](url) links, tables.
 
-const SLACK_LINK_RE = /\[([^\]]+)\]\(([^)]+)\)/gu;
 const SLACK_HEADING_RE = /^(#{1,6})[ \t]+(.+)$/gmu;
-const SLACK_BLOCKQUOTE_RE = /^>[ \t]?(.*)$/gmu;
+const SLACK_BLOCKQUOTE_RE = /^(?:>|&gt;)[ \t]?(.*)$/gmu;
 
 function slackFixLinks(text: string): string {
-  return text.replace(SLACK_LINK_RE, (_match, label: string, url: string) => {
+  return mapMarkdownLinks(text, ({ label, url }) => {
     try {
       const parsed = new URL(url.replace(/&amp;/gu, "&"));
       if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || /[<>|\s]/u.test(url)) return label;
@@ -291,17 +290,19 @@ function slackFixTables(text: string): string {
 export function toSlackMarkdown(content: string): string {
   const escape = (text: string) => text.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
   const inline = (text: string): string => text.replace(
-    /(?<!`)(`+)([^\n]*?)\1(?!`)|\*\*([^*]+)\*\*|\[[^\]\n]+\]\([^\n)]+\)/gu,
+    /(?<!`)(`+)([^\n]*?)\1(?!`)|\*\*([^*]+)\*\*/gu,
     (match, code: string | undefined, _body: string | undefined, bold: string | undefined) => {
       if (code !== undefined) return match;
-      if (bold !== undefined) return inline(bold).split("\n").map(line => line ? `*${line}*` : "").join("\n");
-      return slackFixLinks(match);
+      return inline(bold!).split("\n").map(line => line ? `*${line}*` : "").join("\n");
     },
   );
   // Protect inline source as well as fences; Slack does not interpret fence language labels.
   return splitMarkdownFences(normalizeSocialImMarkdown(content)).map(segment => {
     if (segment.kind === "code_block") return escape(segment.raw.replace(/^( {0,3})(`{3,}|~{3,})[^\n]*\n/u, "$1$2\n"));
-    let t = slackFixHeadings(inline(escape(segment.raw)));
+    let t = splitMarkdownCode(inline(escape(segment.raw)))
+      .map(part => part.kind === "text" ? slackFixLinks(part.raw) : part.raw)
+      .join("");
+    t = slackFixHeadings(t);
     t = slackFixBlockquotes(t);
     t = slackFixTables(t);
     return t;

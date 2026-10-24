@@ -7,7 +7,7 @@
  * (H05). Backed by a real SQLite config store wired through
  * `config_sources.database.enabled`.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import { createReviewEvent, prepareConfigPublication, publishConfig, previewConf
 import { createSqliteConfigStore } from "@aicr/core";
 import type { AppConfig } from "@aicr/core";
 import { closeStoreDb, createStoreDb } from "@aicr/store";
+import { computeScopeFingerprint } from "@aicr/outputs";
 import { bootstrapServerApp } from "../src/bootstrap.js";
 import { resolveTriggerRetryConfig, runTriggerProcessing, type ServerAppOptions } from "../src/index.js";
 import { RuntimeConfigManager } from "../src/runtime-config.js";
@@ -263,6 +264,79 @@ describe("runtime config generation integration (bootstrap)", () => {
     await publishOverridden();
     expect(memberCalls).toBe(4);
   });
+  it("shares the cumulative run budget across initial and confirmation resolution calls", async () => {
+    const modelRequests: { model?: unknown; messages: { content: string }[] }[] = [];
+    const writes: { method: string; body: Record<string, unknown> }[] = [];
+    let oldIssue = {
+      number: 17,
+      title: "[AICR] one problem",
+      state: "open",
+      body: [
+        "<!-- aicr:managed=problem-issue -->", "<!-- aicr:consolidated=true -->",
+        "<!-- aicr:channel=findings -->", "<!-- aicr:label=aicr-managed -->",
+        `<!-- aicr:scope_fingerprint=${computeScopeFingerprint("acme", "repo", "old-head")} -->`,
+        "<!-- aicr:commit=old-head -->", "<!-- aicr:open_problems=fp-old -->", "",
+        "#### HIGH (1)", "", "**correctness** — `auth.ts:1` <!-- aicr:fp=fp-old -->", "",
+        "Missing success return.", "",
+      ].join("\n"),
+    };
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (url.includes("/chat/completions")) {
+        modelRequests.push(body);
+        return Response.json({
+          choices: [{ message: { content: JSON.stringify({ decisions: JSON.parse(body.messages[1].content).candidates.map((candidate: { fingerprint: string }) => ({
+            fingerprint: candidate.fingerprint, resolved: false, reason: "The failure remains.",
+          })) }) } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        });
+      }
+      const method = init?.method ?? "GET";
+      if (method !== "GET") {
+        writes.push({ method, body });
+        oldIssue = { ...oldIssue, ...body };
+        return Response.json(oldIssue);
+      }
+      if (url.includes("/issues?")) return Response.json([{ ...oldIssue, description: oldIssue.body }]);
+      if (url.includes("/compare/")) return Response.json({ status: "ahead" });
+      return Response.json(oldIssue);
+    });
+    const file = {
+      ...FILE_DOCUMENT,
+      llm: {
+        ...FILE_DOCUMENT.llm,
+        budget: { per_run_usd: 0.01 },
+        providers: [{ ...FILE_DOCUMENT.llm.providers[0]!, cost_input_per_mtok: 1000, cost_output_per_mtok: 1000 }],
+      },
+      outputs: {
+        channels: [{ name: "findings", kind: "gitea_problem_issue", trigger: "gitea-internal",
+          issue_mode: "consolidated", resolved_action: "close", marker_label: "aicr-managed" }],
+        routes: { default: { summary: ["findings"] } },
+      },
+    };
+    const { options } = await bootstrap(makeConfig(), file);
+    await publishOperations([
+      { op: "create", collection: "model_groups", record: { id: "triage", name: "triage", enabled: true,
+        value: [{ provider: "openai-prod", model: "triage-model", role: "light" }] } },
+      { op: "create", collection: "workspaces", record: { id: "ws", name: "ws", enabled: true,
+        value: { source_repo: { trigger: "gitea-internal", repo: "acme/repo" }, triage_model_chain: "triage" } } },
+    ], file);
+    const generation = await options.runtimeConfig!.admission();
+    const event = createReviewEvent({ triggerName: "gitea-internal", provider: "gitea", workspaceId: "ws", targetKind: "push",
+      repoRef: "acme/repo", headSha: "new-head", author: {}, reason: "test" });
+    const context = { reviewEvent: event, payload: {}, provider: "gitea" as const, eventName: "push", configSnapshotId: generation.snapshotId };
+    const run = await options.reviewOrchestration!.optionsResolver!(context);
+    const sourceRoot = run.sourceRootResolver!(event);
+    mkdirSync(sourceRoot, { recursive: true });
+    writeFileSync(join(sourceRoot, "auth.ts"), "return failure;\n");
+    const publisher = await run.outputPublisherResolver!(context, { sourceRoot });
+    await publisher!.publishSummary!("Summary", [], { reviewedFiles: ["auth.ts"] });
+    expect(modelRequests).toHaveLength(1);
+    expect(modelRequests[0]?.model).toBe("triage-model");
+    expect(writes.some(write => write.body.state === "closed")).toBe(false);
+  });
+
   it("pins database-managed author models through publication, preserves references and shares the run budget", async () => {
     const modelRequests: Record<string, unknown>[] = [];
     const cards: string[] = [];

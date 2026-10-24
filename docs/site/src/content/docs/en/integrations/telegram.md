@@ -56,7 +56,7 @@ Do not substitute a broadcast channel, guess the ID or disable privacy mode for 
 Production webhook registration still uses `["message"]` and preserves pending updates.
 [getUpdates](https://core.telegram.org/bots/api#getupdates), [Update](https://core.telegram.org/bots/api#update), [getChatMember](https://core.telegram.org/bots/api#getchatmember).
 
-IDs are quoted decimal strings; group IDs can be negative. Only established private/group/supergroup chats are supported. Forum/topic, channel, business, anonymous `sender_chat`, bot-authored and edited updates do not trigger reviews. [Bot API](https://core.telegram.org/bots/api), [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
+IDs are quoted decimal strings in the safe-integer range `-9007199254740991` to `9007199254740991`. Bot and user IDs are positive; group IDs can be negative. Only established private/group/supergroup chats are supported. Forum/topic, channel, business, anonymous `sender_chat`, bot-authored and edited updates do not trigger reviews. [Bot API](https://core.telegram.org/bots/api), [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
 
 For a new Bot with no webhook, load the helper above and run:
 

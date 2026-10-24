@@ -8,9 +8,9 @@ import { isPlainObject } from "./utils.js";
  * complete (architecture §3.16, test U24): every schema-accepted leaf has exactly one
  * inventory row carrying value kind, default, source ownership, inheritance,
  * capability, resolver, consumer, UI control, and test id. The walker uses
- * Zod 3 accessors and version-specific `_def` metadata for this audit gate,
- * and fails closed on schema constructs it does not
- * understand, so new fields cannot slip past the inventory gate unnoticed.
+ * Zod 4 definitions and public accessors for this audit gate, and fails closed
+ * on schema constructs it does not understand, so new fields cannot slip past
+ * the inventory gate unnoticed.
  *
  * `wired`/`consumer` reflect the audited runtime state (2026-09-13):
  * schema acceptance alone never marks a field wired. Unwired fields carry a
@@ -24,7 +24,7 @@ import { isPlainObject } from "./utils.js";
 export interface SchemaFieldLeaf {
   /** Canonical schema path: object keys dotted, `[]` after arrays, `*` for records. */
   readonly path: string;
-  /** Zod first-party type name of the leaf (ZodString, ZodEnum, ZodNever, …). */
+  /** Stable inventory type label (ZodString, ZodEnum, ZodNever, …). */
   readonly typeName: string;
   /** True when the schema declares a default for this exact path. */
   readonly hasDefault: boolean;
@@ -34,43 +34,40 @@ export interface SchemaFieldLeaf {
   readonly enumValues?: readonly string[];
 }
 
+type Schema = z.core.SomeType;
+
 interface UnwrapResult {
-  readonly schema: z.ZodTypeAny;
+  readonly schema: Schema;
   readonly hasDefault: boolean;
   readonly defaultValue?: unknown;
 }
 
-function unwrapSchema(schema: z.ZodTypeAny): UnwrapResult {
+function unwrapSchema(schema: Schema): UnwrapResult {
   let current = schema;
   let hasDefault = false;
   let defaultValue: unknown;
   for (;;) {
-    if (current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
-      current = current.unwrap();
-      continue;
-    }
-    if (current instanceof z.ZodDefault) {
+    if (current instanceof z.ZodDefault || current instanceof z.ZodPrefault) {
       if (!hasDefault) {
         hasDefault = true;
-        defaultValue = current._def.defaultValue();
+        defaultValue = current._zod.def.defaultValue;
       }
-      current = current.removeDefault();
-      continue;
-    }
-    if (current instanceof z.ZodEffects) {
-      current = current.innerType();
-      continue;
-    }
-    if (current instanceof z.ZodCatch) {
-      current = current.removeCatch();
-      continue;
-    }
-    if (current instanceof z.ZodReadonly) {
       current = current.unwrap();
       continue;
     }
-    if (current instanceof z.ZodBranded) {
+    if (
+      current instanceof z.ZodOptional ||
+      current instanceof z.ZodExactOptional ||
+      current instanceof z.ZodNullable ||
+      current instanceof z.ZodCatch ||
+      current instanceof z.ZodReadonly ||
+      current instanceof z.ZodLazy
+    ) {
       current = current.unwrap();
+      continue;
+    }
+    if (current instanceof z.ZodPipe) {
+      current = current.out;
       continue;
     }
     if (defaultValue === undefined) {
@@ -81,21 +78,39 @@ function unwrapSchema(schema: z.ZodTypeAny): UnwrapResult {
 }
 
 const PRIMITIVE_LEAF_TYPES: ReadonlySet<string> = new Set([
-  z.ZodFirstPartyTypeKind.ZodString,
-  z.ZodFirstPartyTypeKind.ZodNumber,
-  z.ZodFirstPartyTypeKind.ZodBoolean,
-  z.ZodFirstPartyTypeKind.ZodEnum,
-  z.ZodFirstPartyTypeKind.ZodNativeEnum,
-  z.ZodFirstPartyTypeKind.ZodLiteral,
-  z.ZodFirstPartyTypeKind.ZodNever,
-  z.ZodFirstPartyTypeKind.ZodUnknown,
-  z.ZodFirstPartyTypeKind.ZodAny,
-  z.ZodFirstPartyTypeKind.ZodVoid,
-  z.ZodFirstPartyTypeKind.ZodUndefined,
-  z.ZodFirstPartyTypeKind.ZodNull,
-  z.ZodFirstPartyTypeKind.ZodDate,
-  z.ZodFirstPartyTypeKind.ZodBigInt,
+  "string",
+  "number",
+  "boolean",
+  "enum",
+  "literal",
+  "never",
+  "unknown",
+  "any",
+  "void",
+  "undefined",
+  "null",
+  "date",
+  "bigint",
 ]);
+
+function schemaTypeName(schema: Schema): string {
+  switch (schema._zod.def.type) {
+    case "string": return "ZodString";
+    case "number": return "ZodNumber";
+    case "boolean": return "ZodBoolean";
+    case "enum": return "ZodEnum";
+    case "literal": return "ZodLiteral";
+    case "never": return "ZodNever";
+    case "unknown": return "ZodUnknown";
+    case "any": return "ZodAny";
+    case "void": return "ZodVoid";
+    case "undefined": return "ZodUndefined";
+    case "null": return "ZodNull";
+    case "date": return "ZodDate";
+    case "bigint": return "ZodBigInt";
+    default: return schema._zod.def.type;
+  }
+}
 
 function joinSchemaPath(parts: readonly string[]): string {
   let out = "";
@@ -109,6 +124,17 @@ function joinSchemaPath(parts: readonly string[]): string {
   return out;
 }
 
+function stringEnumValues(values: Iterable<unknown>, path: readonly string[]): readonly string[] {
+  const result: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      throw new TypeError(`collectSchemaFieldPaths: non-string enum value at ${joinSchemaPath(path)}.`);
+    }
+    result.push(value);
+  }
+  return result;
+}
+
 function leafFrom(path: readonly string[], unwrapped: UnwrapResult, typeName: string): SchemaFieldLeaf {
   const base = {
     path: joinSchemaPath(path),
@@ -118,10 +144,10 @@ function leafFrom(path: readonly string[], unwrapped: UnwrapResult, typeName: st
   const withDefault =
     unwrapped.hasDefault && unwrapped.defaultValue !== undefined ? { ...base, defaultValue: unwrapped.defaultValue } : base;
   if (unwrapped.schema instanceof z.ZodEnum) {
-    return { ...withDefault, enumValues: unwrapped.schema.options as readonly string[] };
+    return { ...withDefault, enumValues: stringEnumValues(unwrapped.schema.options, path) };
   }
   if (unwrapped.schema instanceof z.ZodLiteral) {
-    return { ...withDefault, enumValues: [unwrapped.schema.value as string] };
+    return { ...withDefault, enumValues: stringEnumValues(unwrapped.schema.values, path) };
   }
   return withDefault;
 }
@@ -135,37 +161,37 @@ function leafFrom(path: readonly string[], unwrapped: UnwrapResult, typeName: st
  * agree on the leaf type, and literal discriminators aggregate their values
  * into the merged enum values.
  */
-export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFieldLeaf[] {
+export function collectSchemaFieldPaths(root: z.ZodType): readonly SchemaFieldLeaf[] {
   const leaves: SchemaFieldLeaf[] = [];
 
-  const optionIsLeafLike = (option: z.ZodTypeAny): boolean => {
+  const optionIsLeafLike = (option: Schema): boolean => {
     const inner = unwrapSchema(option).schema;
-    const innerType: string = inner._def.typeName;
-    if (PRIMITIVE_LEAF_TYPES.has(innerType)) {
+    if (PRIMITIVE_LEAF_TYPES.has(inner._zod.def.type)) {
       return true;
     }
     if (inner instanceof z.ZodArray) {
       const element = unwrapSchema(inner.element).schema;
-      return PRIMITIVE_LEAF_TYPES.has(element._def.typeName as string);
+      return PRIMITIVE_LEAF_TYPES.has(element._zod.def.type);
     }
     if (inner instanceof z.ZodObject) {
-      // Strip/strict objects carry a ZodNever catchall; anything else is
-      // an opaque managed surface (passthrough or explicit catchall).
-      if ((inner._def.catchall as z.ZodTypeAny)._def.typeName !== z.ZodFirstPartyTypeKind.ZodNever) {
+      // Strip objects have no catchall and strict objects use ZodNever;
+      // anything else is an opaque managed surface.
+      const catchall = inner._zod.def.catchall;
+      if (catchall !== undefined && catchall._zod.def.type !== "never") {
         return true;
       }
       // Strict objects are value leaves only when every field is a
       // primitive scalar (e.g. the exact/glob/regex matcher alternatives);
       // otherwise the union mixes structural containers and stays guarded.
-      return Object.values(inner.shape as Record<string, z.ZodTypeAny>).every((field) =>
-        PRIMITIVE_LEAF_TYPES.has(unwrapSchema(field).schema._def.typeName as string),
+      return Object.values(inner.shape).every((field) =>
+        PRIMITIVE_LEAF_TYPES.has(unwrapSchema(field).schema._zod.def.type),
       );
     }
     // Open maps (e.g. tool_choice function payloads) are opaque too.
     return inner instanceof z.ZodRecord;
   };
 
-  const mergeUnionOptions = (options: readonly z.ZodTypeAny[], path: readonly string[]): void => {
+  const mergeUnionOptions = (options: readonly Schema[], path: readonly string[]): void => {
     const merged = new Map<string, SchemaFieldLeaf>();
     for (const option of options) {
       const start = leaves.length;
@@ -193,7 +219,7 @@ export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFiel
     }
   };
 
-  const visit = (schema: z.ZodTypeAny, path: string[], inheritedDefault: unknown): void => {
+  const visit = (schema: Schema, path: string[], inheritedDefault: unknown): void => {
     const unwrapped = unwrapSchema(schema);
     // An ancestor's explicit value becomes this field's input; its own
     // default runs only when that input is undefined, as in Zod parsing.
@@ -202,38 +228,36 @@ export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFiel
         ? unwrapped
         : { schema: unwrapped.schema, hasDefault: true, defaultValue: inheritedDefault };
     const node = effective.schema;
-    const typeName: string = node._def.typeName;
 
-    if (PRIMITIVE_LEAF_TYPES.has(typeName)) {
-      leaves.push(leafFrom(path, effective, typeName));
+    if (PRIMITIVE_LEAF_TYPES.has(node._zod.def.type)) {
+      leaves.push(leafFrom(path, effective, schemaTypeName(node)));
       return;
     }
     if (node instanceof z.ZodObject) {
       const childDefaults =
         effective.hasDefault && isPlainObject(effective.defaultValue)
-          ? (effective.defaultValue as Record<string, unknown>)
+          ? effective.defaultValue
           : undefined;
-      for (const [key, child] of Object.entries(node.shape as Record<string, z.ZodTypeAny>)) {
+      for (const [key, child] of Object.entries(node.shape)) {
         visit(child, [...path, key], childDefaults?.[key]);
       }
       return;
     }
     if (node instanceof z.ZodArray) {
       const element = unwrapSchema(node.element);
-      const elementType: string = element.schema._def.typeName;
-      if (PRIMITIVE_LEAF_TYPES.has(elementType)) {
-        leaves.push(leafFrom(path, effective, `${elementType}[]`));
+      if (PRIMITIVE_LEAF_TYPES.has(element.schema._zod.def.type)) {
+        leaves.push(leafFrom(path, effective, `${schemaTypeName(element.schema)}[]`));
         return;
       }
       visit(node.element, [...path, "[]"], undefined);
       return;
     }
     if (node instanceof z.ZodRecord) {
-      visit(node.valueSchema, [...path, "*"], undefined);
+      visit(node.valueType, [...path, "*"], undefined);
       return;
     }
     if (node instanceof z.ZodUnion || node instanceof z.ZodDiscriminatedUnion) {
-      const options = node.options as readonly z.ZodTypeAny[];
+      const options = node.options;
       if (options.every(optionIsLeafLike)) {
         leaves.push(leafFrom(path, effective, "union"));
         return;
@@ -241,7 +265,7 @@ export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFiel
       mergeUnionOptions(options, path);
       return;
     }
-    throw new TypeError(`collectSchemaFieldPaths: unsupported schema type ${String(typeName)} at ${joinSchemaPath(path)}.`);
+    throw new TypeError(`collectSchemaFieldPaths: unsupported schema type ${node._zod.def.type} at ${joinSchemaPath(path)}.`);
   };
 
   visit(root, [], undefined);
@@ -530,12 +554,12 @@ function workspaceAgentRows(): ConfigFieldSpec[] {
   const fields: readonly (readonly [string, RowSpec])[] = [
     ["timeout_seconds", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
     ["auto_approve", { t: "ZodBoolean", own: "business", wir: true, ui: "toggle" }],
-    ["context_compaction.auto", { t: "ZodBoolean", d: true, own: "business", wir: true, ui: "toggle" }],
+    ["context_compaction.auto", { t: "ZodBoolean", own: "business", wir: true, ui: "toggle" }],
     ["context_compaction.threshold_percent", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
-    ["context_compaction.prune", { t: "ZodBoolean", d: true, own: "business", wir: true, ui: "toggle" }],
-    ["web_search.enabled", { t: "ZodBoolean", d: false, own: "business", wir: true, ui: "toggle" }],
-    ["web_search.providers", { t: "ZodString[]", d: [], own: "business", wir: true, ui: "multiselect" }],
-    ["web_search.exclude", { t: "ZodString[]", d: [], own: "business", wir: true, ui: "multiselect" }],
+    ["context_compaction.prune", { t: "ZodBoolean", own: "business", wir: true, ui: "toggle" }],
+    ["web_search.enabled", { t: "ZodBoolean", own: "business", wir: true, ui: "toggle" }],
+    ["web_search.providers", { t: "ZodString[]", own: "business", wir: true, ui: "multiselect" }],
+    ["web_search.exclude", { t: "ZodString[]", own: "business", wir: true, ui: "multiselect" }],
     ["web_search.timeout_seconds", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
     ["web_search.credentials.*", { t: "union", own: "business", wir: true, ui: "secret-ref", cap: "env var name string or { value } literal" }],
     ...["endpoint", "categories", "engines", "language"].map(suffix => [`web_search.searxng.${suffix}`, { t: "ZodString", own: "business", wir: true, ui: "text" }] as const),

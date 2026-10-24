@@ -211,6 +211,10 @@ export async function processVerifiedSocialCommand(
       signal: signal,
       deadlineAt,
     });
+    signal.throwIfAborted();
+    if (result.httpStatus === 409) {
+      return response({ error: "delivery_conflict" }, 409);
+    }
     text = result.text;
   }
   signal.throwIfAborted();

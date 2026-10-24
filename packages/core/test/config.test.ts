@@ -123,19 +123,68 @@ describe("mergeConfigLayers", () => {
   it("applies built-in defaults when given an empty config", () => {
     const merged = mergeConfigLayers({});
 
-    expect(merged.agent.default).toBe("kilo");
-    expect(merged.agent.timeout_seconds).toBe(1800);
-    expect(merged.agent.auto_approve).toBe(true);
-    // No sandbox.kind default (H04): unset means auto-detect with native
-    // fallback; an explicit container kind is a hard trust statement.
-    expect(merged.agent.sandbox.kind).toBeUndefined();
-    expect(merged.agent.sandbox.engine).toBeUndefined();
-    expect(merged.outputs.template_engine).toBe("handlebars");
-    expect(merged.queue.kind).toBe("memory");
-    expect(merged.workspaces.cache.max_total_gb).toBe(50);
-    expect(merged.workspaces.cache.eviction).toBe("lru");
-    expect(merged.workspaces.instances).toEqual({});
-    expect(merged.review.incremental).toBe(true);
+    // The empty sandbox retains H04 auto-detection; no kind or engine is invented.
+    expect(merged).toEqual({
+      storage: {
+        database: { kind: "sqlite", migrate: "auto", sqlite: { path: "/app/data/aicr.sqlite" } },
+        cache: { kind: "memory" },
+        object: { kind: "filesystem", filesystem: { root: "/app/data/objects" } },
+        retention: { deleted_project_grace_days: 30 },
+      },
+      admin: {
+        username_env: "AICR_ADMIN_USERNAME",
+        password_env: "AICR_ADMIN_PASSWORD",
+        session_ttl_seconds: 86400,
+      },
+      config_sources: {
+        database: { enabled: false, backend: "storage", namespace: "default" },
+        runtime: { refresh_interval_seconds: 5 },
+      },
+      server: { port: 8080, hostname: "0.0.0.0", trust_proxy: false },
+      llm: {
+        providers: [],
+        model_chain: {},
+        default_model_chain: "default",
+        model_catalog: {
+          enabled: false,
+          source_url: "https://models.dev/api.json",
+          refresh_interval_hours: 24,
+          fetch_timeout_ms: 10000,
+          offline: false,
+          apply_to_model_spec: true,
+          cache: { backend: "sqlite" },
+          overrides: {},
+        },
+      },
+      triggers: [],
+      outputs: { template_engine: "handlebars", templates: {}, channels: [] },
+      prompts: { system: {} },
+      queue: { kind: "memory" },
+      agent: {
+        default: "kilo",
+        timeout_seconds: 1800,
+        auto_approve: true,
+        sandbox: {},
+        context_compaction: { auto: true, prune: true },
+        web_search: { enabled: false, providers: [], exclude: [], credentials: {} },
+      },
+      review: {
+        incremental: true,
+        skip_lgtm: true,
+        languages_auto_detect: true,
+        include: ["**/*"],
+        exclude: ["**/vendor/**", "**/*.min.js", "**/*.lock"],
+        max_files: 2000,
+        max_patch_bytes: 20_971_520,
+        output_language: "zh-CN",
+        commit_strategy: "aggregate",
+      },
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {},
+      },
+    });
   });
 
   it("replaces arrays wholesale instead of concatenating during merge", () => {
@@ -868,7 +917,9 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues[0]?.path).toEqual(["llm", field]);
-      expect(result.error.issues[0]?.message).toContain("llm.model_chain.");
+      expect(result.error.issues[0]?.message).toBe(field === "model_chain"
+        ? "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default"
+        : "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group");
     }
   });
 
@@ -1537,6 +1588,18 @@ describe("mergeConfigLayers", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("does not materialize global defaults for empty workspace agent overrides", () => {
+    const config = appConfigSchema.parse({
+      workspaces: {
+        defaults: { agent: { context_compaction: {}, web_search: {} } },
+        instances: { ws: { agent: { context_compaction: {}, web_search: {} } } },
+      },
+    });
+    expect(config.workspaces.defaults.agent).toEqual({ context_compaction: {}, web_search: {} });
+    expect(config.workspaces.instances.ws?.agent).toEqual({ context_compaction: {}, web_search: {} });
+    expect(config.workspaces.instances.ws?.triage).toBeUndefined();
   });
 
   it("accepts llm per_provider_overrides from Plan §3.5", () => {

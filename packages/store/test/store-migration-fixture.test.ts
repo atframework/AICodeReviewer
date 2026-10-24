@@ -184,4 +184,43 @@ describe("store migration from a real 001–006 ledger (M02)", () => {
       await closeStoreDb(store);
     }
   });
+
+  it("upgrades a real 012 compact-receipt row without changing its recovery state", async () => {
+    const dbPath = join(tmpDir, "pre-payload.db");
+    const historical = STORE_SQLITE_MIGRATIONS.slice(0, -1);
+    expect(historical.at(-1)?.name).toBe("012_review_event");
+    expect(STORE_SQLITE_MIGRATIONS.at(-1)?.name).toBe("013_im_reply_payload");
+    const sqlite = new Database(dbPath);
+    sqlite.exec("CREATE TABLE _migrations (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL DEFAULT (unixepoch()));");
+    const mark = sqlite.prepare("INSERT INTO _migrations (name) VALUES (?)");
+    for (const step of historical) {
+      sqlite.exec(step.sql);
+      mark.run(step.name);
+    }
+    const receipt = JSON.stringify({ requestId: "imr-legacy", state: "succeeded" });
+    sqlite.prepare(`INSERT INTO im_reply_outbox (
+      operation_id, namespace, destination_identity, operation_kind, payload_digest,
+      state, compact_receipt, next_attempt_at, lease_owner, lease_until, fence, created_at, updated_at
+    ) VALUES ('imn-legacy', 'ns', 'feishu-app', 'review_terminal', 'digest',
+      'delivering', ?, 1700000001000, 'old-owner', 1700000002000, 7, 1700000000000, 1700000000000)`).run(receipt);
+    sqlite.close();
+
+    const store = createStoreDb(dbPath);
+    try {
+      const row = store.sqlite.prepare(`SELECT payload_json, compact_receipt, state, next_attempt_at,
+        lease_owner, lease_until, fence FROM im_reply_outbox WHERE operation_id = 'imn-legacy'`).get() as Record<string, unknown>;
+      expect(row).toEqual({
+        payload_json: null,
+        compact_receipt: receipt,
+        state: "delivering",
+        next_attempt_at: 1700000001000,
+        lease_owner: "old-owner",
+        lease_until: 1700000002000,
+        fence: 7,
+      });
+      expect(store.sqlite.prepare("SELECT COUNT(*) AS n FROM _migrations").get()).toEqual({ n: STORE_SQLITE_MIGRATIONS.length });
+    } finally {
+      await closeStoreDb(store);
+    }
+  });
 });

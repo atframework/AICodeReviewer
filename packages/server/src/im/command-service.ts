@@ -301,6 +301,7 @@ export type ImCommandAdmitOutcome =
   | { readonly kind: "accepted"; readonly requestId: string }
   | { readonly kind: "active_merged"; readonly requestId: string }
   | { readonly kind: "duplicate"; readonly requestId: string | null }
+  | { readonly kind: "conflict"; readonly reason: "delivery_conflict" }
   | { readonly kind: "rejected"; readonly reason: string }
   | { readonly kind: "rate_limited" };
 
@@ -343,7 +344,7 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.deadlineAt ? { deadlineAt: input.deadlineAt } : {}),
     });
-    if (outcome.kind === "conflict") return { kind: "duplicate", requestId: null };
+    if (outcome.kind === "conflict") return { kind: "conflict", reason: "delivery_conflict" };
     return { kind: "accepted", requestId: "" };
   }
 
@@ -406,7 +407,7 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
     case "rate_limited":
       return { kind: "rate_limited" };
     case "conflict":
-      return { kind: "duplicate", requestId: null };
+      return { kind: "conflict", reason: "delivery_conflict" };
     default:
       return { kind: "rejected", reason: "internal_error" };
   }
@@ -643,6 +644,9 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
     try {
       const replyText = await input.query.answer({ command: input.command, connectionName: input.connectionName, binding: authorized.binding });
       const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });
+      if (outcome.kind === "conflict") {
+        return { kind: "rejected", replyText: rejectionReplyText(outcome.reason, input), requestId: null };
+      }
       if (outcome.kind === "rate_limited") {
         return { kind: "rate_limited", replyText: "请求过于频繁，请稍后再试。", requestId: null };
       }
@@ -655,6 +659,9 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
 
   if (input.command.kind === "chat-id") {
     const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });
+    if (outcome.kind === "conflict") {
+      return { kind: "rejected", replyText: rejectionReplyText(outcome.reason, input), requestId: null };
+    }
     if (outcome.kind === "rejected" || outcome.kind === "rate_limited") {
       const replyText = outcome.kind === "rate_limited" ? "请求过于频繁，请稍后再试。" : rejectionReplyText(outcome.reason ?? "unauthorized", input);
       return { kind: outcome.kind === "rejected" ? "rejected" : "rate_limited", replyText, requestId: null };
@@ -664,6 +671,9 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
 
   if (input.command.kind === "status") {
     const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });
+    if (outcome.kind === "conflict") {
+      return { kind: "rejected", replyText: rejectionReplyText(outcome.reason, input), requestId: null };
+    }
     if (outcome.kind === "rejected" || outcome.kind === "rate_limited") {
       const replyText = outcome.kind === "rate_limited" ? "请求过于频繁，请稍后再试。" : rejectionReplyText(outcome.reason ?? "unauthorized", input);
       return { kind: outcome.kind === "rejected" ? "rejected" : "rate_limited", replyText, requestId: null };
@@ -694,8 +704,10 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
       },
       now: input.now,
     });
-    if (admission.kind === "conflict"
-      || (admission.kind === "duplicate" && input.deliveryDuplicate !== false)) {
+    if (admission.kind === "conflict") {
+      return { kind: "rejected", replyText: rejectionReplyText("delivery_conflict", input), requestId: null };
+    }
+    if (admission.kind === "duplicate" && input.deliveryDuplicate !== false) {
       return { kind: "duplicate", replyText: "该命令已受理，请勿重复发送。", requestId: null };
     }
     try {
@@ -708,6 +720,9 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
   }
 
   const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });
+  if (outcome.kind === "conflict") {
+    return { kind: "rejected", replyText: rejectionReplyText(outcome.reason, input), requestId: null };
+  }
   switch (outcome.kind) {
     case "accepted":
       return { kind: "accepted", replyText: `已收到评审请求（${outcome.requestId}），完成后按绑定渠道通知。`, requestId: outcome.requestId };

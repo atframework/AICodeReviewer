@@ -474,7 +474,7 @@ scope actors and `allow_all_repositories: true` are rejected.
 | `im.connections.<id>.bot_user_id` | string | — | Slack Bot user identity; Slack also requires `app_id` |
 | `im.connections.<id>.application_id` | string | — | Discord application snowflake |
 | `im.connections.<id>.guild_id` | string | — | Discord guild snowflake |
-| `im.connections.<id>.bot_id` | string | — | Telegram Bot numeric ID |
+| `im.connections.<id>.bot_id` | string | — | Telegram Bot numeric ID; positive and no greater than `9007199254740991` |
 | `im.connections.<id>.token` | string | — | Bot API credential; mutually exclusive with `token_env`; sealed on persistence |
 | `im.connections.<id>.token_env` | string | — | Bot API credential environment reference |
 | `im.connections.<id>.socket_mode.enabled` | boolean | — | Slack only; runtime default false; mutually exclusive with enabled HTTP callback |
@@ -486,7 +486,7 @@ scope actors and `allow_all_repositories: true` are rejected.
 | `im.connections.<id>.callback.secret_token` | string | — | Telegram webhook secret; mutually exclusive with its `_env` reference; sealed |
 | `im.connections.<id>.callback.secret_token_env` | string | — | Telegram webhook secret reference |
 | `outputs.channels[].channel_id` | string | — | Slack/Discord exact channel ID |
-| `outputs.channels[].chat_id` | string | — | Telegram signed decimal chat ID, quoted |
+| `outputs.channels[].chat_id` | string | — | Telegram signed decimal chat ID, quoted; within `-9007199254740991` to `9007199254740991` |
 
 Enabled connections require a token; enabled callbacks require their verification material.
 Output channels require a matching `connection` and reject inline credentials, custom API origins,

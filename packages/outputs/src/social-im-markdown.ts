@@ -1,6 +1,8 @@
 import { toSlackMarkdown } from "./im-markdown.js";
 import {
+  scanMarkdownLinks,
   normalizeSocialImMarkdown,
+  splitMarkdownAtoms,
   splitMarkdownCode,
   splitMarkdownFences,
 } from "./markdown-code.js";
@@ -41,10 +43,7 @@ export function boundSocialMarkdown(
   const suffix = `${notice}${detailUrl && safeUrl(detailUrl) ? `\n${detailUrl}` : ""}`;
   if (suffix.length >= limit)
     throw new Error("Social IM metadata exceeds message budget.");
-  const atomic =
-    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\1|`[^`\n]*`|<[^<>\n]+>|\[[^\]\n]*\]\([^\n)]*\)|&(?:amp|lt|gt);/gu;
   let output = "";
-  let offset = 0;
   const append = (value: string): boolean => {
     for (const { segment } of segmenter.segment(value)) {
       if (output.length + segment.length + suffix.length > limit) return false;
@@ -52,15 +51,15 @@ export function boundSocialMarkdown(
     }
     return true;
   };
-  for (const match of text.matchAll(atomic)) {
-    if (!append(text.slice(offset, match.index)))
+  for (const atom of splitMarkdownAtoms(text)) {
+    if (atom.atomic) {
+      if (output.length + atom.raw.length + suffix.length > limit)
+        return output.trimEnd() + suffix;
+      output += atom.raw;
+    } else if (!append(atom.raw)) {
       return output.trimEnd() + suffix;
-    if (output.length + match[0].length + suffix.length > limit)
-      return output.trimEnd() + suffix;
-    output += match[0];
-    offset = match.index + match[0].length;
+    }
   }
-  append(text.slice(offset));
   return output.trimEnd() + suffix;
 }
 
@@ -114,29 +113,30 @@ export function toTelegramMessage(
       entities.push({ type: "bold", offset: text.length, length: body.length });
     text += body;
   };
+  const appendLinks = (source: string, bold: boolean): void => {
+    let offset = 0;
+    for (const link of scanMarkdownLinks(source)) {
+      append(source.slice(offset, link.start), bold);
+      append(link.label, bold, safeUrl(link.url) ? { type: "text_link", url: link.url } : undefined);
+      offset = link.end;
+    }
+    append(source.slice(offset), bold);
+  };
   const inline = (source: string, bold = false, headings = true): void => {
     const tokens = new RegExp(
-      /(?<!`)(`+)([^\n]*?)\1(?!`)|\*\*([^*]+)\*\*|\[([^\]\n]+)\]\(([^\n)]+)\)/u
+      /(?<!`)(`+)([^\n]*?)\1(?!`)|\*\*([^*]+)\*\*/u
         .source + (headings ? /|^#{1,6}[ \t]+([^\n]*)/u.source : ""),
       "gmu",
     );
     let offset = 0;
     for (const match of source.matchAll(tokens)) {
-      append(source.slice(offset, match.index), bold);
+      appendLinks(source.slice(offset, match.index), bold);
       if (match[2] !== undefined) append(match[2], false, { type: "code" });
       else if (match[3] !== undefined) inline(match[3], true, false);
-      else if (match[4] !== undefined)
-        append(
-          match[4],
-          bold,
-          safeUrl(match[5]!)
-            ? { type: "text_link", url: match[5]! }
-            : undefined,
-        );
-      else inline(match[6]!, true, false);
+      else inline(match[4]!, true, false);
       offset = match.index + match[0].length;
     }
-    append(source.slice(offset), bold);
+    appendLinks(source.slice(offset), bold);
   };
   for (const segment of splitMarkdownFences(
     normalizeSocialImMarkdown(content),

@@ -116,4 +116,5 @@ S13：[Node Socket Mode SDK](https://docs.slack.dev/tools/node-slack-sdk/socket-
 [SDK 源码](https://github.com/slackapi/node-slack-sdk/tree/main/packages/socket-mode)。
 本地实际安装并核验 @slack/socket-mode 3.1.0：使用 undici dispatcher；slack_event 回调收到单个包含 ack/body/type 的对象；
 hello 的 connection_info.app_id 可核验连接身份，slash payload 可能没有 api_app_id。
-固定 undici 7.29.0；接收器显式 EnvHttpProxyAgent，原始 SDK 日志关闭；服务自行管理有界重试和停止。
+固定 undici 8.12.3；接收器显式 EnvHttpProxyAgent，原始 SDK 日志关闭；服务自行管理有界重试和停止。
+2026-10-24 复核 Socket envelope 行为：`accepts_response_payload: false` 只禁止 ACK 携带响应载荷，不免除 ACK；slash 命令仍在持久接收后返回空 ACK。连接 API、upgrade 和已验证 hello 的整体启动预算为 15 秒，pending handshake 也可 drain。

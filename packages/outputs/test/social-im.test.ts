@@ -549,4 +549,37 @@ describe("social IM message formatting", () => {
         long.text.indexOf("\n\n…"),
       );
   });
+  it("preserves balanced parentheses in Slack and Telegram links", () => {
+    const url = "https://gitlab.example/group/a_(b)/-/issues/1?x=(y)&nested=(a(b)c)";
+    const source = `[target](${url})`;
+    expect(toBoundedSlackMarkdown(source)).toBe(`<${url.replace("&", "&amp;")}|target>`);
+    const telegram = toTelegramMessage(source);
+    expect(telegram.text).toBe("target");
+    expect(telegram.entities).toEqual([{ type: "text_link", offset: 0, length: 6, url }]);
+  });
+  it("does not split a multi-backtick inline code token while truncating", () => {
+    const source = `${"x".repeat(1837)} \`\`a\`b\`\` ${"y".repeat(100)}`;
+    const result = toDiscordMarkdown(source);
+    expect(result.length).toBeLessThanOrEqual(1900);
+    expect(result).toContain("truncated");
+    expect(result).not.toContain("a`b");
+  });
+  it("converts Slack blockquotes without treating fenced source as quotes", () => {
+    expect(toBoundedSlackMarkdown("> quote")).toBe("_quote_");
+    expect(toBoundedSlackMarkdown("```\n> code\n```")).toBe("```\n&gt; code\n```");
+  });
+  it("sends Telegram text links with uppercase HTTP schemes", async () => {
+    const fixture = fixtures.find(item => item.connection.kind === "telegram_bot")!;
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const fetch = api(fixture, () => response(fixture.receipt));
+    const recordingFetch: FetchLike = async (input, init) => {
+      if (String(input).endsWith("sendMessage")) calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return fetch(input, init);
+    };
+    const client = new SocialImClient(fixture.connection, "123:test-token", { fetch: recordingFetch });
+    expect(await client.refreshReadiness(fixture.destination)).toBe(true);
+    const message = toTelegramMessage("[details](HTTPS://example.org/report)");
+    expect(await client.sendMessage(fixture.destination, message)).toMatchObject({ kind: "delivered" });
+    expect(calls[0]?.body.entities).toEqual([{ type: "text_link", offset: 0, length: 7, url: "HTTPS://example.org/report" }]);
+  });
 });

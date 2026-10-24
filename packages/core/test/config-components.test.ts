@@ -176,4 +176,33 @@ describe("collectSchemaFieldPaths", () => {
     const schema = z.object({ choice: z.string().default("child") }).default({ choice: "parent" });
     expect(collectSchemaFieldPaths(schema)[0]?.defaultValue).toBe(schema.parse(undefined).choice);
   });
+
+  it("tracks prefault defaults through Zod 4 pipe, lazy, refinement, and brand nodes", () => {
+    const schema = z.object({
+      defaulted: z.object({ choice: z.string().default("child") }).prefault({}),
+      route: z.preprocess((value) => value, z.object({ kind: z.enum(["a", "b"]) }).strict()),
+      lazy: z.lazy(() => z.object({ value: z.string() }).strict()),
+      id: z.string().brand("ConfigId").superRefine(() => {}),
+    });
+    const parsed = schema.parse({ route: { kind: "a" }, lazy: { value: "x" }, id: "id" });
+    const leaves = new Map(collectSchemaFieldPaths(schema).map((leaf) => [leaf.path, leaf]));
+    expect(parsed.defaulted.choice).toBe("child");
+    expect(leaves.get("defaulted.choice")?.defaultValue).toBe("child");
+    expect(leaves.get("route.kind")?.enumValues).toEqual(["a", "b"]);
+    expect(leaves.get("lazy.value")?.typeName).toBe("ZodString");
+    expect(leaves.get("id")?.typeName).toBe("ZodString");
+  });
+
+  it("walks Zod 4 record values and keeps passthrough union options opaque", () => {
+    const schema = z.object({
+      mapping: z.record(z.string(), z.object({ value: z.string() }).strict()),
+      choice: z.union([
+        z.object({ known: z.string() }).passthrough(),
+        z.object({ other: z.number() }).strict(),
+      ]),
+    });
+    const leaves = collectSchemaFieldPaths(schema);
+    expect(leaves.map((leaf) => leaf.path)).toEqual(["mapping.*.value", "choice"]);
+    expect(leaves[1]?.typeName).toBe("union");
+  });
 });

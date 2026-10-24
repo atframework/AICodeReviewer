@@ -336,6 +336,31 @@ describe("GitVcsAdapter", () => {
     expect(providerCalls).toBe(2);
   });
 
+  it("disables interactive credential helpers only for adapter-managed credentials", async () => {
+    const options: { disableCredentialHelper?: boolean }[] = [];
+    const git: GitCommandRunner = async (_args, option) => {
+      options.push(option ?? {});
+      if (_args[2] === "rev-parse") return { stdout: "true\n", stderr: "" };
+      if (_args[2] === "diff") return { stdout: "src/app.ts\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    };
+    const event = createReviewEvent({
+      triggerName: "gitea", provider: "gitea", workspaceId: "ws", targetKind: "push",
+      repoRef: "owent/example", baseSha: "base", headSha: "head", author: {}, reason: "gitea:push",
+    });
+    const managed = createGitVcsAdapter({ repositoryDir: "C:/repo", git, remoteUrl: "https://git.example.com/owent/example.git",
+      tokenProvider: async () => "inst-token" });
+    await managed.listChanges(event);
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every(option => option.disableCredentialHelper === true)).toBe(true);
+
+    options.length = 0;
+    const unmanaged = createGitVcsAdapter({ repositoryDir: "C:/repo", git, remoteUrl: "https://git.example.com/owent/example.git" });
+    await unmanaged.listChanges(event);
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every(option => option.disableCredentialHelper === false)).toBe(true);
+  });
+
   it("syncs only once per adapter by default", async () => {
     const calls: string[][] = [];
     const git: GitCommandRunner = async (args) => {

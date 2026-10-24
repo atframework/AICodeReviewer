@@ -134,6 +134,7 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 | [M37](milestones/M37.md) | Git push 完整评审单元 |
 | [M38](milestones/M38.md) | IM 回调重新评审与恢复修复 |
 | [M39](milestones/M39.md) | Slack、Discord、Telegram 本地接入 |
+| [M40](milestones/M40.md) | 社交 IM 复审与依赖、模型快照维护 |
 | [P0–P15](milestones/local-priority-queue.md) | 本地优先执行队列 |
 
 归档规则见根 [AGENTS.md](../../AGENTS.md)；详细过程由 Git 历史追溯。

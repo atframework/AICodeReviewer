@@ -427,6 +427,17 @@ describe("config api validate + preview-route (A09)", () => {
     expect(typeof body.status).toBe("string");
   });
 
+  it("preview-route validates nullable string provider fields", async () => {
+    const event = { triggerName: "t", targetKind: "push", providerFields: { text: "value", empty: null } };
+    const accepted = await request(makeApp(), "/preview-route", { method: "POST", body: { event } });
+    expect(accepted.status).toBe(200);
+    const rejected = await request(makeApp(), "/preview-route", {
+      method: "POST",
+      body: { event: { ...event, providerFields: { invalid: 1 } } },
+    });
+    expect(rejected.status).toBe(400);
+  });
+
   it("rejects malformed DTOs with field-level issues", async () => {
     const app = makeApp();
     const response = await request(app, "/validate", {

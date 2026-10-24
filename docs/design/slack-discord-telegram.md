@@ -61,8 +61,8 @@
 | telegram_bot | bot_id；token/token_env 二选一 | enabled；secret_token/secret_token_env 二选一 | connection；chat_id |
 
 - enabled 缺省沿用 connection=true、callback=false、binding=false。disabled 草案允许保存；启用时凭据必须可解析。
-- 所有平台 ID 在配置/存储中用字符串。Discord snowflake 不能转为 JS number；Telegram chat_id 可为负十进制。
-  Telegram JSON 数字先验证 safe integer 再规范化为十进制字符串；禁止科学计数、浮点和正号形式的配置 ID。
+- 所有平台 ID 在配置/存储中用字符串。Discord snowflake 不能转为 JS number，允许超过 JS safe integer 的十进制字符串。
+  Telegram bot/user ID 使用正十进制，chat_id 可为负十进制；配置与 JSON 数字均限制在 `-9007199254740991` 至 `9007199254740991`，禁止科学计数、浮点和正号形式。
 - 新 output 必须引用同 kind 的连接；不能混用内联 token、webhook_url、base_url、target 或线程字段。
   Slack/Discord channel_id 不接受显示名；Telegram 不接受 `@username`，避免改名/迁移绕过精确目的地。
 - API origin 固定为 `https://slack.com/api`、`https://discord.com/api/v10`、`https://api.telegram.org`。
@@ -127,7 +127,7 @@ status 同时检查原请求 actor、连接身份、会话和仓库范围，不�
 协议适配器只认证和规范化；由共享服务做授权、接收和状态查询。
 Slack form 重复敏感字段、Discord JSON 重复认证/身份关键字段及非法 UTF-8 必须拒绝，不能以重新序列化内容验签。
 Telegram 无平台签名 timestamp，不能套用 Slack 5 分钟规则误拒合法延迟更新。
-对所有协议的同 key 不同业务 digest 返回冲突，不创建第二个请求；不保存原始聊天全文/response_url/token。
+对所有协议的同 key 不同业务 digest 返回脱敏 HTTP 409，不创建第二个请求或通知 outbox；同 key 同 digest 仍按幂等重投处理。不保存原始聊天全文/response_url/token。
 
 内部 ACK 目标 1 秒，Slack/Discord 平台硬期限 3 秒（S2/D2）。实现须有可取消的接收预算：
 预算从异步读取 generation/config 前开始，配置读取、body 和事务共用同一 deadline；
@@ -257,9 +257,11 @@ Authorization、Slack response_url、Discord interaction token、Telegram `/bot<
 ## Slack Socket Mode
 
 `socket_mode.enabled` 与 HTTP callback 互斥，凭据为 `app_token`/`app_token_env`，不影响 Bot 输出 token。
-server `slack-socket-mode.ts` 使用 @slack/socket-mode 3.1.0 与 undici 7.29.0；显式代理覆盖开连接 API 和 WebSocket。
+server `slack-socket-mode.ts` 使用 @slack/socket-mode 3.1.0 与 undici 8.12.3；显式代理覆盖开连接 API 和 WebSocket。
 hello 必须匹配 App ID，slash payload 必须匹配 team，随后复用 `processVerifiedSocialCommand`，保留授权、readiness、持久 snapshot 和队列。
+连接 API、WebSocket upgrade 和已验证 hello 的整体启动期限为 15 秒；超时停止旧 transport 并进入有界退避，pending handshake 也可 drain。
 接收限 256 KiB，拒绝重复 JSON 键；一秒接收预算包含配置读取，持久提交后 ACK，失败不 ACK。
+`accepts_response_payload: false` 的 slash envelope 同样接收后 ACK，但 ACK 不携带响应载荷。
 trigger_id 哈希与 HTTP 共享去重；缺失时使用 envelope_id 哈希。原始临时 URL、token 和 envelope 不持久化。
 SDK 处理 heartbeat，服务负责有界重连、30 秒配置轮询和排空断开。其他事件只 ACK，不实施 App Agent/mentions/按钮。
 一个应用只启用一个命令接收实例；服务不会自动修改应用级 Socket Mode 开关。

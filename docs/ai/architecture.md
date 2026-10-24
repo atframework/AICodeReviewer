@@ -29,7 +29,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 
 ### 2.1 技术栈基线
 
-- 核心实现使用 TypeScript / Node 22+（下限由 `better-sqlite3` 13 的 engines 决定）。
+- 核心实现使用 TypeScript / Node 22.23.4+（下限由当前文档站和运行时依赖的 engines 共同决定；CI 与部署镜像使用 Node 24）。
 - 工作区用 pnpm 管理，TypeScript project references 负责跨包构建。
 - LLM 直连与外部 Agent CLI 两条路径并存，但长期主路径是“服务编排 + AgentAdapter + Sandbox”。
 - 运行环境以单容器自托管为主，Podman 与 Docker 平等支持。

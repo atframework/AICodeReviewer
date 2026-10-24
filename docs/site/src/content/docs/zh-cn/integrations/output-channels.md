@@ -113,6 +113,9 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
 - **最近 issue 上限。** 对账只列出仍处于 open 状态的 issue（`state=open`），上限由
   `review.problem_issue.max_recent_issues` 控制（默认 30，范围 1–200，可按 workspace 覆盖）。
   最近窗口之外的 fingerprint 不会在该 run 去重或关闭。
+- **正文预算。** consolidated 正文最多 65,536 个 UTF-16 单元。超限时先省略 resolved
+  Base64 元数据，再省略可见的 resolved 详情；开放问题和完整 fingerprint 标记始终保留。
+  必要内容仍超限时，发布在更新、关闭或生命周期评论前失败。
 - **GitHub `resolved_action`。** 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除
   API）。Gitea 和 GitLab 额外支持 `delete`（GitLab 上 token 用户必须是项目 owner 或 admin）。
 - **GitLab assignee。** 非项目成员的 assignee 会被静默丢弃，且 CE 忽略复数 `assignee_ids`
