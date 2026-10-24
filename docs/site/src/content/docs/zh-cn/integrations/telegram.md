@@ -4,6 +4,7 @@ description: 通过 Telegram 发送审查报告和执行授权的审查命令。
 ---
 
 AICR 支持 `telegram_bot`，每次发布一条聚合报告，通过 HTTP 接收 `help`、`chat-id`、`review`、`status` 四种命令。
+命令必须为单行。`/aicr@TestBot` 后或消息末尾含换行时，命令会被拒绝且不产生回复。
 按钮和自然语言请求未纳入此实现。
 
 ## 创建和安装

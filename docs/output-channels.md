@@ -453,7 +453,8 @@ closed issues are outside the open-issue reconciliation window.
 The final close publishes the completed body and empty open-fingerprint marker
 with the closed state. Existing unmarked resolved lists cannot be reconstructed
 as fingerprint history. Consolidated bodies have a local 65,536 UTF-16-unit
-budget. When resolved history makes the body too large, Base64 metadata is
+budget, including the `mark_resolved` prefix on closure. When resolved history
+makes the body too large, Base64 metadata is
 omitted first, followed by visible resolved details; open content and complete
 fingerprint markers are never truncated. If required content still exceeds the
 budget, creation, update and close fail before a remote mutation or lifecycle

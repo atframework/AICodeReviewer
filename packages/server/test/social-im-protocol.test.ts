@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { parseImCommand } from "../src/im/command-service.js";
 import {
   verifySlackCommand,
   verifyDiscordCommand,
@@ -138,10 +139,13 @@ it("accepts Telegram directed group commands and ignores anonymous, topics and w
       "ignored",
     );
   for (const suffix of ["\nhelp", " help\n"]) {
-    expect(verify({ ...raw, message: { ...raw.message, text: `/aicr@TestBot${suffix}` } })).toMatchObject({
+    const result = verify({ ...raw, message: { ...raw.message, text: `/aicr@TestBot${suffix}` } });
+    expect(result).toMatchObject({
       kind: "command",
       text: `aicr ${suffix}`,
     });
+    if (result.kind !== "command") throw new Error("fixture");
+    expect(parseImCommand(result.text)).toEqual({ kind: "invalid", reason: "multiline" });
   }
   expect(verify({ ...raw, update_id: Number.MAX_SAFE_INTEGER + 1 }).kind).toBe(
     "rejected",

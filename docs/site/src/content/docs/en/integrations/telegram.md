@@ -4,6 +4,7 @@ description: Send review reports and run authorized review commands through Tele
 ---
 
 AICR supports `telegram_bot` for an aggregated report and four HTTP commands: `help`, `chat-id`, `review`, `status`.
+Commands must fit on one line. A newline after `/aicr@TestBot` or at the end of the message is rejected without a command reply.
 Buttons and natural-language requests are outside this implementation.
 
 ## Create and install

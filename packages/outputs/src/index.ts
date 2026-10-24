@@ -2434,6 +2434,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		if (categorization && issue.scopeFingerprint) {
 			issue = { ...issue, body: buildConsolidatedIssueBody([], {
 				channel, markerLabel, scopeFingerprint: issue.scopeFingerprint,
+				markResolved: resolvedAction === "mark_resolved",
 				previousBody: issue.body,
 				summary: extractConsolidatedIssueSummary(issue.body) ?? "",
 				...(options.headSha ? { headSha: options.headSha } : {}),
@@ -2441,7 +2442,8 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			}) };
 		}
 
-		const closeBody = resolvedAction === "mark_resolved" ? managedIssueBodyWithResolvedPrefix(issue.body) : issue.body;
+		const closeBody = resolvedAction === "mark_resolved" && !(categorization && issue.scopeFingerprint)
+			? assertManagedIssueBodyBudget(managedIssueBodyWithResolvedPrefix(issue.body)) : issue.body;
 		const lifecycleMsg = [
 			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 			"",
@@ -3544,6 +3546,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 		if (categorization && issue.scopeFingerprint) {
 			issue = { ...issue, body: buildConsolidatedIssueBody([], {
 				channel, markerLabel, scopeFingerprint: issue.scopeFingerprint,
+				markResolved: resolvedAction === "mark_resolved",
 				previousBody: issue.body,
 				summary: extractConsolidatedIssueSummary(issue.body) ?? "",
 				...(options.headSha ? { headSha: options.headSha } : {}),
@@ -3551,7 +3554,8 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 			}) };
 		}
 
-		const closeBody = resolvedAction === "mark_resolved" ? managedIssueBodyWithResolvedPrefix(issue.body) : issue.body;
+		const closeBody = resolvedAction === "mark_resolved" && !(categorization && issue.scopeFingerprint)
+			? assertManagedIssueBodyBudget(managedIssueBodyWithResolvedPrefix(issue.body)) : issue.body;
 		const lifecycleMsg = [
 			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 			"",
@@ -4607,7 +4611,7 @@ function managedIssueBodyWithResolvedPrefix(body: string): string {
 	const markers = markerEnd > 0 ? body.slice(0, markerEnd + 1) : "";
 	const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
 	const originalBody = markerEnd > 0 ? body.slice(markerEnd + 1) : body;
-	return assertManagedIssueBodyBudget(markers + resolvedPrefix + originalBody);
+	return markers + resolvedPrefix + originalBody;
 }
 
 function truncateManagedIssueDiagnostic(value: string, maxChars: number): string {
@@ -4632,6 +4636,7 @@ function buildConsolidatedIssueBody(
 		readonly previousBody?: string;
 		readonly omitResolvedMeta?: boolean;
 		readonly compactResolved?: boolean;
+		readonly markResolved?: boolean;
 	},
 ): string {
 	const cat = options.categorization;
@@ -4727,7 +4732,8 @@ function buildConsolidatedIssueBody(
 		sections.push("</details>");
 	}
 
-	const body = normalizeMarkdownBody(sections.join("\n"));
+	const rendered = normalizeMarkdownBody(sections.join("\n"));
+	const body = options.markResolved ? managedIssueBodyWithResolvedPrefix(rendered) : rendered;
 	if (body.length <= MANAGED_ISSUE_BODY_MAX_CHARS) return body;
 	if (!options.omitResolvedMeta) {
 		return buildConsolidatedIssueBody(problems, { ...options, omitResolvedMeta: true });
@@ -5509,6 +5515,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		if (categorization && issue.scopeFingerprint) {
 			issue = { ...issue, body: buildConsolidatedIssueBody([], {
 				channel, markerLabel, scopeFingerprint: issue.scopeFingerprint,
+				markResolved: resolvedAction === "mark_resolved",
 				previousBody: issue.body,
 				summary: extractConsolidatedIssueSummary(issue.body) ?? "",
 				...(options.headSha ? { headSha: options.headSha } : {}),
@@ -5516,7 +5523,8 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			}) };
 		}
 
-		const closeBody = resolvedAction === "mark_resolved" ? managedIssueBodyWithResolvedPrefix(issue.body) : issue.body;
+		const closeBody = resolvedAction === "mark_resolved" && !(categorization && issue.scopeFingerprint)
+			? assertManagedIssueBodyBudget(managedIssueBodyWithResolvedPrefix(issue.body)) : issue.body;
 		const lifecycleMsg = [
 			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 			"",

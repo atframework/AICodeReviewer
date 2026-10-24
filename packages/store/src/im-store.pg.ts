@@ -54,21 +54,27 @@ export async function findImReviewRequestPg(
   checkImReviewRequestQueryBudget(options);
   const client = await store.pool.connect();
   let aborted = false;
+  let transactionOpen = false;
   const onAbort = (): void => {
     aborted = true;
-    client.connection.stream.destroy();
+    // pg marks an intentional disconnect before aborting the in-flight query.
+    void client.end();
   };
   options.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     checkImReviewRequestQueryBudget(options);
+    await client.query("BEGIN");
+    transactionOpen = true;
     if (options.deadlineAt !== undefined) {
       const remaining = Math.max(1, options.deadlineAt - Date.now());
-      await client.query("SELECT set_config('statement_timeout', $1, false)", [String(remaining)]);
+      await client.query("SELECT set_config('statement_timeout', $1, true)", [String(remaining)]);
     }
     checkImReviewRequestQueryBudget(options);
     const rows = await drizzlePg(client).select().from(imReviewRequests)
       .where(and(eq(imReviewRequests.namespace, namespace), eq(imReviewRequests.requestId, requestId)));
     checkImReviewRequestQueryBudget(options);
+    await client.query("COMMIT");
+    transactionOpen = false;
     return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
   } catch (error) {
     if (aborted) options.signal?.throwIfAborted();
@@ -76,6 +82,14 @@ export async function findImReviewRequestPg(
     throw error;
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
+    if (transactionOpen && !aborted) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // A connection whose transaction cannot be cleaned up must not be reused.
+        aborted = true;
+      }
+    }
     client.release(aborted);
   }
 }

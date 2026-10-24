@@ -27,6 +27,31 @@ afterEach(async () => {
 });
 
 suite("im store conformance [postgres]", () => {
+  it.each([false, true])("preserves pooled session settings after a request lookup (blocked=%s)", async blocked => {
+    const { findImReviewRequest } = await import("../src/im-store.js");
+    const lookup = await createStoreDb({ kind: "postgres", url: PG_URL!, schema, poolSize: 1 });
+    const lock = await store.pool.connect();
+    try {
+      const client = await lookup.pool.connect();
+      await client.query("SET statement_timeout = '30s'");
+      const before = await client.query("SELECT pg_backend_pid() AS pid, current_setting('statement_timeout') AS timeout");
+      client.release();
+      if (blocked) {
+        await lock.query("BEGIN");
+        await lock.query("LOCK TABLE im_review_requests IN ACCESS EXCLUSIVE MODE");
+      }
+      const result = findImReviewRequest(lookup, "deadline", "missing", { deadlineAt: Date.now() + 200 });
+      if (blocked) await expect(result).rejects.toThrow();
+      else expect(await result).toBeUndefined();
+      const after = await lookup.pool.query("SELECT pg_backend_pid() AS pid, current_setting('statement_timeout') AS timeout");
+      expect(after.rows).toEqual(before.rows);
+    } finally {
+      if (blocked) await lock.query("ROLLBACK");
+      lock.release();
+      await closeStoreDb(lookup);
+    }
+  });
+
   it("bounds a blocked admission statement below one second and rolls back the inbox", async () => {
     const { acceptImDelivery } = await import("../src/im-store.js");
     const lock = await store.pool.connect();

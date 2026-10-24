@@ -23,6 +23,7 @@ function fingerprints(body: string, kind: "open" | "resolved"): string[] {
 
 interface StoredIssue { number: number; iid: number; title: string; body: string; state: string }
 type RunOptions = {
+  summary?: string;
   issueMode?: "consolidated" | "per_commit";
   resolvedAction?: "close" | "mark_resolved" | "none";
   reviewedFiles?: readonly string[];
@@ -76,13 +77,13 @@ describe.each(["github", "gitea", "gitlab"] as const)("%s consolidated issue rec
     };
     const run = (headSha: string, problems: readonly ReviewProblem[], resolutionAnalyzer: ProblemResolutionAnalyzer,
       overrides: RunOptions = {}) => {
-      const { reviewedFiles = ["recurring.ts", "remaining.ts", "fixed.ts", "new.ts"], ...settings } = overrides;
+      const { reviewedFiles = ["recurring.ts", "remaining.ts", "fixed.ts", "new.ts"], summary = `Summary at ${headSha}`, ...settings } = overrides;
       const options = { owner: "org", repo: "repo", channelName: "findings", targetKind: "push", headSha,
         assignCommitter: false, fetch, resolutionAnalyzer, ...settings };
       const dispatcher = provider === "gitlab" ? createGitlabProblemIssueDispatcher({ ...options, projectId: "org/repo" })
         : provider === "gitea" ? createGiteaProblemIssueDispatcher({ ...options, baseUrl: "https://gitea.example" })
         : createGithubProblemIssueDispatcher(options);
-      return dispatcher.reconcileProblems(problems, `Summary at ${headSha}`, { reviewedFiles });
+      return dispatcher.reconcileProblems(problems, summary, { reviewedFiles });
     };
     const seed = async () => {
       await run("original", originalProblems, async () => new Set());
@@ -190,6 +191,54 @@ describe.each(["github", "gitea", "gitlab"] as const)("%s consolidated issue rec
     expect(h.issues.get(17)!.state).toBe("closed");
     expect(h.issues.get(17)!.body).toContain("✅ **Resolved**");
     expect(h.issues.get(17)!.body.length).toBeLessThanOrEqual(65_536);
+  });
+
+  it.each(["metadata", "details", "legacy"] as const)("budgets the resolved prefix before omitting resolved %s", async degradation => {
+    const problems = [{ ...originalProblems[0]!, message: "d".repeat(400) }];
+    const analyzer: ProblemResolutionAnalyzer = async () => new Set(["recurring"]);
+    const calibration = harness();
+    await calibration.run("original", problems, analyzer, { summary: "Summary" });
+    await calibration.run("fixed", [], analyzer);
+    const complete = calibration.issues.get(17)!.body;
+    const metadata = /<!-- aicr:problem-meta=[^>]+-->\n/u.exec(complete)![0];
+    const extra = degradation === "metadata" ? 0 : metadata.length + (degradation === "legacy" ? 200 : -40);
+    const summary = "Summary" + "x".repeat(65_536 - complete.length + extra);
+
+    const h = harness();
+    if (degradation !== "legacy") {
+      await h.run("original", problems, analyzer, { summary });
+      expect(h.issues.get(17)!.body.length).toBeLessThanOrEqual(65_536);
+    } else {
+      await h.run("original", problems, analyzer, { summary: "Summary" });
+      // Older GitLab/Gitea releases could persist bodies above the shared budget.
+      h.issues.get(17)!.body = h.issues.get(17)!.body.replace("Summary", summary);
+      expect(h.issues.get(17)!.body.length).toBeGreaterThan(65_536);
+    }
+    h.writes.length = 0;
+    await h.run("fixed", [], analyzer, { resolvedAction: "mark_resolved" });
+    const closed = h.issues.get(17)!;
+    expect(closed.state).toBe("closed");
+    expect(closed.body.length).toBeLessThanOrEqual(65_536);
+    expect(closed.body).toContain("✅ **Resolved**");
+    expect(closed.body.includes(summary)).toBe(true);
+    expect(fingerprints(closed.body, "open")).toEqual([]);
+    expect(fingerprints(closed.body, "resolved")).toEqual(["recurring"]);
+    expect(/<!-- aicr:problem-meta=([^>]*)-->/u.exec(closed.body)?.[1]?.trim() ?? "").toBe("");
+    if (degradation === "metadata") expect(closed.body).toContain("d".repeat(400));
+    else expect(closed.body).not.toContain("d".repeat(400));
+    expect(h.writes.filter(write => write.number === 17 && write.method !== "POST")).toHaveLength(1);
+  });
+
+  it("rejects an oversized resolved body before lifecycle comments or updates", async () => {
+    const h = harness();
+    await h.run("original", originalProblems, async () => new Set());
+    h.issues.get(17)!.body = h.issues.get(17)!.body.replace("Summary at original", "x".repeat(65_536));
+    h.writes.length = 0;
+    await expect(h.run("fixed", [], async candidates => new Set(candidates.map(p => p.fingerprint!)), {
+      resolvedAction: "mark_resolved",
+    })).rejects.toThrow("65536");
+    expect(h.issues.get(17)!.state).toBe("open");
+    expect(h.writes).toHaveLength(0);
   });
 
   it("fails closed when required fingerprints alone exceed the body budget", async () => {

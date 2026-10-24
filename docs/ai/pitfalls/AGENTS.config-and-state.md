@@ -259,6 +259,16 @@ Sources: `packages/server/src/model-catalog-service.ts`, `bootstrap.ts`,
 Sources: `packages/store/src/schema.ts`, `database.ts`, store tests, architecture
 §3.11, and the auto-commit backends under `packages/core/src/`.
 
+- Deadline-bound IM lookups must leave pooled PostgreSQL session settings intact.
+  Use transaction-local `statement_timeout`, commit or roll back before release,
+  and discard aborted connections or failed cleanup. Cancel via `client.end()`;
+  directly destroying its socket also emits an unhandled client error.
+  Session-level `set_config`
+  leaks the short callback deadline into unrelated queries. See
+  `findImReviewRequestPg` and the same-backend-PID success/timeout regressions in
+  `im-store-pg.test.ts`; [PostgreSQL SET](https://www.postgresql.org/docs/current/sql-set.html)
+  defines the transaction-local lifetime.
+
 - In IM delivery transactions, resolve an active target before incrementing
   command rate-limit buckets. A merged request consumes no new-request quota;
   a rejected new request rolls back its target reservation, inbox row and
