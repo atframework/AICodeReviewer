@@ -328,9 +328,13 @@ export class TgrepIndexManager {
       ],
       { stdio: ["ignore", "pipe", "ignore"] },
     );
-    const consumer = this.spawnProcess("tar", ["-x", "-C", checkoutDir], {
-      stdio: ["pipe", "ignore", "ignore"],
-    });
+    // GNU tar can close stdin at the end markers before Git finishes writing
+    // padding. Read the Git-generated archive through EOF.
+    const consumer = this.spawnProcess(
+      "tar",
+      ["-x", "--ignore-zeros", "-C", checkoutDir],
+      { stdio: ["pipe", "ignore", "ignore"] },
+    );
     const jobs = [
       waitForCommand(producer, "git archive"),
       waitForCommand(consumer, "tar extraction"),

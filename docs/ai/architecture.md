@@ -1666,6 +1666,7 @@ M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI
 - 运行镜像在 amd64/arm64 内置固定版本的 `microsoft/tgrep`。Git 评审从普通 clone
   用 `git archive` 提取评审 revision，再用 `tgrep index` 构建磁盘索引。检索语料以
   Git archive 为准，受 `export-ignore` 等 Git 属性及 tgrep 文件资格限制。
+  解包读取到管道 EOF，再检查 Git 与 tar 的退出状态，避免将归档结束块后的填充误判为失败。
   P4、SVN 与 dry-run 走各自的 VCS 上下文路径。
 - 默认缓存位于 `<instanceRoot>/.tgrep-cache/`，可将 `search.tgrep.data_dir` 指向
   其他服务端本地目录。按仓库与 revision 复用未过 TTL 的快照。新 revision 或 TTL

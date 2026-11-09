@@ -53,6 +53,11 @@ Sources: `packages/server/src/review-orchestrator.ts`,
 
 ## Sandbox process and secret boundaries
 
+- GNU tar can close its input at the archive end markers before `git archive`
+  finishes writing padding. For the tgrep checkout, use `--ignore-zeros` to
+  drain the single Git-generated stream to EOF and require both child exits
+  to succeed. The delayed-padding regression is in `tgrep-index.test.ts`.
+
 Sources: `packages/sandbox/src/types.ts`, `native.ts`, `docker.ts`,
 `process-tree.ts`, and sandbox tests.
 

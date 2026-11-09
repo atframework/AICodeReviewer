@@ -131,6 +131,57 @@ describe("TgrepIndexManager", () => {
     ).toBe("fixture");
   });
 
+  it.each([0, 2])(
+    "drains delayed Git archive padding before handling exit %i",
+    async (exitCode) => {
+      const archivePath = join(root, "fixture.tar");
+      const { stdout } = await exec(
+        "git",
+        ["archive", "--format=tar", revision],
+        { cwd: sourceRoot, encoding: "buffer" },
+      );
+      await writeFile(archivePath, stdout);
+      const producer = `
+      process.stdout.write(require("node:fs").readFileSync(process.argv[1]));
+      setTimeout(() => {
+        process.exitCode = Number(process.argv[2]);
+        process.stdout.end(Buffer.alloc(10_240));
+      }, 250);
+    `;
+      const manager = new TgrepIndexManager({
+        config: resolveSearchTgrepConfig(undefined),
+        spawnProcess: ((
+          command: string,
+          args: string[],
+          options: SpawnOptions,
+        ) =>
+          command === "git"
+            ? spawn(
+                process.execPath,
+                ["-e", producer, archivePath, String(exitCode)],
+                options,
+              )
+            : spawnIndexer(command, args, options)) as typeof spawn,
+        logger: () => {},
+      });
+
+      const input = prepareInput();
+      const handle = await manager.prepare(input);
+      if (exitCode === 0) {
+        expect(handle.state).toBe("ready");
+        expect(await readFile(join(handle.checkoutDir, "app.ts"), "utf8")).toBe(
+          "first.revision\n",
+        );
+      } else {
+        expect(handle).toMatchObject({
+          state: "degraded",
+          detail: "git archive failed (exit 2)",
+        });
+        expect(await readdir(manager.cacheRootFor(input))).toEqual([]);
+      }
+    },
+  );
+
   it("reuses fresh snapshots, separates concurrent revisions and renews on TTL", async () => {
     const spawnProcess = vi.fn(spawnIndexer);
     const manager = new TgrepIndexManager({

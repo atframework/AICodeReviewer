@@ -78,8 +78,8 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 
 ## 路线图：搜索索引与工具链维护（M41 之后）
 
-- 在生产签收环境验证 Kilo 的真实 MCP 调用、Docker/Podman 内的索引命中和连续
-  revision 评审。用 `tgrep --stats` 确认查询使用索引，避免把扫描误判为通过。
+- 在生产签收环境验证 Kilo 的真实 MCP 调用、真实仓库首次归档、Docker/Podman
+  内的索引命中和连续 revision 评审。用 `tgrep --stats` 确认查询使用索引。
 - 记录大仓库冷启动索引耗时、并发快照数量和磁盘峰值，再评估跨 revision 复用。
   缓存行为见[架构 §3.17](architecture.md#317-tgrep-代码搜索缓存)。
 - 单独评估 TypeScript 7 的编译与 ESLint 生态迁移，覆盖运行时包和文档站。
