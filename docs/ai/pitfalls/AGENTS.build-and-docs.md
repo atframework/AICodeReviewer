@@ -142,6 +142,11 @@ Sources: `.markdownlint-cli2.yaml`, `docs/site/package.json`, its scripts,
 - Astro dependency patches are independent, idempotent and source-shape guarded.
   Resolve transitive dependencies from their owner; one satisfied patch must not
   skip later patches. Reproduce failures in the real build before adding patches.
+- An Astro check install prompt can hide a transitive import failure. Import
+  `@astrojs/check` from the site to see the cause. Keep astro2tsx's WASM runtime
+  matched to its emnapi core with the package-scoped extension in
+  `pnpm-workspace.yaml`. Rolldown has its own WASM peer set. Recheck the extension
+  when upgrading astro2tsx and run both site gates after the frozen install.
 - Config-reference validation reads TS source, not stale dist. Preserve wrapper,
   preprocess/lazy/rejected-field handling, explicit allowlists, and escaped table
   pipes. An ancestor summary cannot silently cover newly undocumented fields.

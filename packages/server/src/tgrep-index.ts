@@ -1,604 +1,491 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFile,
+  link,
+  lstat,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
-  rename,
+  realpath,
   rm,
+  stat,
+  utimes,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { join, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 
-import type { ResolvedSearchTgrepConfig } from "@aicr/core";
-import type { WorkspaceLayout } from "@aicr/core";
-
-/**
- * tgrep code-search cache manager (architecture §3.17).
- *
- * Why a workspace-level checkout: the per-run source tree (`runs/<id>/source`)
- * only contains changed files and is deleted after every run, so an index
- * anchored there would be both incomplete and short-lived. Instead each
- * workspace owns one persistent cache under `<instanceRoot>/.tgrep-cache/`:
- *
- * - `checkout/` — a full working tree of the reviewed head, refreshed via
- *   `git archive <rev> | tar -x` whenever the head revision changes (and on
- *   TTL expiry). tgrep's own watcher then refreshes the index incrementally.
- * - `index/`    — the tgrep on-disk trigram index (`--index-path`).
- * - `meta.json` — schema version, head revision, timestamps, server pid.
- *
- * A long-lived `tgrep serve` (poll mode) per workspace keeps the index warm
- * across runs. The checkout is mounted read-only into container sandboxes so
- * every agent CLI (and the native-llm `aicr.search_code` tool) searches the
- * same per-repository index. All failures degrade to "unavailable" — the
- * review still runs with plain `rg` / `aicr.fetch_more_context`.
- *
- * Cleanup: a periodic sweep deletes caches unused for `cleanup_after_days`;
- * orphaned servers from a previous AICR process are reaped via the recorded
- * pid (tgrep's own `serve.lock` prevents two servers on one index).
- */
+import type { ResolvedSearchTgrepConfig, WorkspaceLayout } from "@aicr/core";
 
 export const TGREP_CACHE_DIR_NAME = ".tgrep-cache";
-
-/** Slug for external `search.tgrep.data_dir` caches (one directory per workspace). */
-export function tgrepCacheSlug(workspaceId: string): string {
-  const safe = workspaceId.replace(/[^A-Za-z0-9._-]+/gu, "_").replace(/^[._]+|[._]+$/gu, "");
-  const hash = createHash("sha256").update(workspaceId).digest("hex").slice(0, 8);
-  return `${safe.slice(0, 80) || "workspace"}-${hash}`;
-}
-const META_FILE = "meta.json";
-const CHECKOUT_DIR = "checkout";
-const INDEX_DIR = "index";
-/** tgrep status polling while the initial index build completes. */
-const INDEX_READY_TIMEOUT_MS = 120_000;
-const SERVE_POLL_INTERVAL_SECONDS = 2;
+export const TGREP_SANDBOX_MOUNT_PATH = "/workspace/tgrep-cache";
+const SANDBOX_CHECKOUT = `${TGREP_SANDBOX_MOUNT_PATH}/checkout`;
+const SANDBOX_INDEX = `${TGREP_SANDBOX_MOUNT_PATH}/index`;
+const READY_FILE = "ready.json";
+const SNAPSHOT_PREFIX = "aicr-tgrep-";
 
 export interface TgrepSearchHandle {
   readonly enabled: boolean;
   readonly state: "ready" | "degraded";
-  /** Cache root holding `checkout/` and `index/` (host path). */
   readonly cacheRoot: string;
-  /** Full checkout of the reviewed head (host path). */
   readonly checkoutDir: string;
-  /** tgrep index directory (host path). */
   readonly indexDir: string;
+  readonly sandboxIndexDir?: string;
   readonly detail?: string;
+  readonly release?: () => void;
 }
 
 export interface TgrepPrepareInput {
   readonly workspaceId: string;
   readonly layout: WorkspaceLayout;
-  /** Git clone cache (object store) holding the reviewed revision. */
+  /** The ordinary --no-checkout clone used by the Git adapter. */
   readonly sourceRoot: string;
   readonly revision: string;
+  readonly signal?: AbortSignal | undefined;
 }
 
-interface CacheMeta {
-  readonly schemaVersion: 1;
-  readonly workspaceId: string;
-  readonly revision?: string;
-  readonly lastUsedAt: string;
-  readonly lastIndexedAt?: string;
-  readonly serverPid?: number;
-}
-
-interface ActiveServer {
-  readonly child: ChildProcess;
-  readonly startedAt: number;
+interface SnapshotMeta {
+  readonly identity: string;
+  readonly revision: string;
+  readonly builtAt: number;
 }
 
 export interface TgrepIndexManagerOptions {
   readonly config: ResolvedSearchTgrepConfig;
   readonly spawnProcess?: typeof spawn;
-  readonly isProcessAlive?: (pid: number) => boolean;
   readonly now?: () => number;
   readonly logger?: (record: {
-    level: "info" | "warn";
+    level: "warn";
     msg: string;
     [key: string]: unknown;
   }) => void;
 }
 
-function defaultIsProcessAlive(pid: number): boolean {
+async function readJson(path: string): Promise<unknown> {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    return JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch {
+    return undefined;
   }
 }
 
+async function directories(path: string): Promise<string[]> {
+  try {
+    return (await readdir(path, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function snapshotPaths(cacheRoot: string) {
+  return {
+    cacheRoot,
+    checkoutDir: join(cacheRoot, "checkout"),
+    indexDir: join(cacheRoot, "index"),
+    sandboxIndexDir: join(cacheRoot, "sandbox-index"),
+  };
+}
+
+function waitForCommand(child: ChildProcess, command: string): Promise<void> {
+  return new Promise((resolveCommand, reject) => {
+    child.once("error", () => reject(new Error(`${command} could not run`)));
+    child.once("close", (code) => {
+      if (code === 0) resolveCommand();
+      else reject(new Error(`${command} failed (exit ${code})`));
+    });
+  });
+}
+
+/**
+ * Share immutable Git snapshots between reviews of the same source and head.
+ * A review holds its snapshot through follow-ups and sandbox teardown. Cache
+ * storage is local to the server, like the Git clone and run directories.
+ */
 export class TgrepIndexManager {
   private readonly config: ResolvedSearchTgrepConfig;
   private readonly spawnProcess: typeof spawn;
-  private readonly isProcessAlive: (pid: number) => boolean;
   private readonly now: () => number;
   private readonly log: NonNullable<TgrepIndexManagerOptions["logger"]>;
-  private readonly servers = new Map<string, ActiveServer>();
+  private readonly leases = new Map<string, number>();
   private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(options: TgrepIndexManagerOptions) {
     this.config = options.config;
     this.spawnProcess = options.spawnProcess ?? spawn;
-    this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
     this.now = options.now ?? Date.now;
     this.log =
-      options.logger ??
-      ((record) => console[record.level](JSON.stringify(record)));
+      options.logger ?? ((record) => console.warn(JSON.stringify(record)));
   }
 
-  cacheRootFor(input: { workspaceId: string; layout: WorkspaceLayout }): string {
-    return this.config.dataDir !== undefined
-      ? join(this.config.dataDir, tgrepCacheSlug(input.workspaceId))
-      : join(input.layout.instanceRoot, TGREP_CACHE_DIR_NAME);
+  cacheRootFor(input: {
+    workspaceId: string;
+    layout: WorkspaceLayout;
+  }): string {
+    if (this.config.dataDir === undefined)
+      return join(input.layout.instanceRoot, TGREP_CACHE_DIR_NAME);
+    const safeId = input.workspaceId.replace(/[^A-Za-z0-9_-]+/gu, "_");
+    const hash = createHash("sha256")
+      .update(resolve(input.layout.instanceRoot))
+      .digest("hex")
+      .slice(0, 16);
+    return join(this.config.dataDir, `${safeId.slice(0, 80)}-${hash}`);
   }
 
-  /** Prepare (or refresh) the workspace index; never throws for env failures. */
   async prepare(input: TgrepPrepareInput): Promise<TgrepSearchHandle> {
     const cacheRoot = this.cacheRootFor(input);
-    const base = {
+    const degraded = {
+      ...snapshotPaths(cacheRoot),
       enabled: this.config.enabled,
-      cacheRoot,
-      checkoutDir: join(cacheRoot, CHECKOUT_DIR),
-      indexDir: join(cacheRoot, INDEX_DIR),
+      state: "degraded" as const,
     };
-    if (!this.config.enabled)
-      return { ...base, state: "degraded", detail: "disabled" };
-    return this.serialize(input.workspaceId, async () => {
+    if (!this.config.enabled) return { ...degraded, detail: "disabled" };
+
+    return this.serialize(cacheRoot, async () => {
       try {
-        return await this.prepareLocked(input, cacheRoot, base);
+        input.signal?.throwIfAborted();
+        await mkdir(cacheRoot, { recursive: true });
+        if (!(await lstat(cacheRoot)).isDirectory())
+          throw new Error("tgrep cache must be a directory, without symlinks");
+        const identity = await realpath(input.sourceRoot);
+        let snapshot = await this.findSnapshot(
+          cacheRoot,
+          identity,
+          input.revision,
+        );
+        if (snapshot === undefined) {
+          snapshot = await this.buildSnapshot(cacheRoot, identity, input);
+        }
+        const now = new Date(this.now());
+        await utimes(join(snapshot, READY_FILE), now, now);
+        return {
+          ...snapshotPaths(snapshot),
+          enabled: true,
+          state: "ready",
+          release: this.lease(snapshot),
+        };
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
         this.log({
           level: "warn",
           msg: "tgrep index unavailable; review falls back to plain search",
           workspaceId: input.workspaceId,
-          error: error instanceof Error ? error.message : String(error),
+          error: detail,
         });
-        return {
-          ...base,
-          state: "degraded" as const,
-          detail: error instanceof Error ? error.message : String(error),
-        };
+        return { ...degraded, detail };
       }
     });
   }
 
-  private async prepareLocked(
-    input: TgrepPrepareInput,
+  private async findSnapshot(
     cacheRoot: string,
-    base: {
-      enabled: boolean;
-      cacheRoot: string;
-      checkoutDir: string;
-      indexDir: string;
-    },
-  ): Promise<TgrepSearchHandle> {
-    await mkdir(cacheRoot, { recursive: true });
-    const meta = await this.readMeta(cacheRoot);
-    const expired =
-      meta?.lastIndexedAt !== undefined &&
-      this.now() - Date.parse(meta.lastIndexedAt) > this.config.indexTtlMs;
-    const revisionChanged = meta?.revision !== input.revision;
-
-    // Reap a server orphaned by a previous AICR process before touching the
-    // index; tgrep refuses to start on a live serve.lock.
-    if (meta?.serverPid !== undefined && !this.isProcessAlive(meta.serverPid)) {
-      await this.stopRecordedServer(cacheRoot, meta.serverPid);
-    }
-
-    if (revisionChanged || expired || meta === undefined) {
-      await this.refreshCheckout(
-        input.sourceRoot,
-        input.revision,
-        base.checkoutDir,
-      );
-      // A rebuilt checkout invalidates the running server's view; restart so
-      // startup reconciliation re-reads changed files promptly.
-      await this.stopServer(input.workspaceId);
-    }
-
-    let server = this.servers.get(input.workspaceId);
-    if (server && !this.isProcessAlive(server.child.pid ?? -1)) {
-      this.servers.delete(input.workspaceId);
-      server = undefined;
-    }
-    if (!server) {
-      server = await this.startServer(
-        input.workspaceId,
-        base.checkoutDir,
-        base.indexDir,
-      );
-      this.servers.set(input.workspaceId, server);
-      await this.waitForIndex(
-        input.workspaceId,
-        base.checkoutDir,
-        base.indexDir,
-      );
-    }
-
-    const timestamp = new Date(this.now()).toISOString();
-    const nextMeta: CacheMeta = {
-      schemaVersion: 1,
-      workspaceId: input.workspaceId,
-      revision: input.revision,
-      lastUsedAt: timestamp,
-      lastIndexedAt:
-        revisionChanged || expired || meta === undefined
-          ? timestamp
-          : (meta.lastIndexedAt ?? timestamp),
-      ...(server.child.pid !== undefined
-        ? { serverPid: server.child.pid }
-        : {}),
-    };
-    await this.writeMeta(cacheRoot, nextMeta);
-    return { ...base, state: "ready" };
-  }
-
-  /** Periodic cleanup: reap dead servers and expire external-root caches. */
-  async sweep(): Promise<void> {
-    for (const [workspaceId, server] of [...this.servers]) {
-      if (!this.isProcessAlive(server.child.pid ?? -1))
-        this.servers.delete(workspaceId);
-    }
-    if (this.config.dataDir === undefined) return;
-    let entries;
-    try {
-      entries = await readdir(this.config.dataDir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory()) await this.sweepCacheRoot(join(this.config.dataDir, entry.name));
-    }
-  }
-
-  /** Remove one workspace cache after the workspace itself was deleted. */
-  async removeCache(input: { workspaceId: string; layout: WorkspaceLayout }): Promise<void> {
-    const cacheRoot = this.cacheRootFor(input);
-    const meta = await this.readMeta(cacheRoot);
-    if (meta?.serverPid !== undefined && this.isProcessAlive(meta.serverPid)) {
-      try {
-        process.kill(meta.serverPid, "SIGTERM");
-      } catch {
-        // Already gone.
-      }
-    }
-    await rm(cacheRoot, { recursive: true, force: true });
-  }
-
-  /** Sweep every cache root under a workspaces root (startup housekeeping). */
-  async sweepWorkspacesRoot(workspacesRoot: string): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(workspacesRoot, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      await this.sweepInstanceRoot(join(workspacesRoot, entry.name));
-    }
-  }
-
-  private async sweepInstanceRoot(root: string): Promise<void> {
-    // Layouts differ (legacy `<root>/<id>` vs isolated `<root>/instances/<id>`);
-    // walk shallowly and only touch directories that actually hold a cache.
-    const candidates = [root, join(root, "instances")];
-    for (const candidate of candidates) {
-      let entries;
-      try {
-        entries = await readdir(candidate, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const dir = join(candidate, entry.name);
-        if (entry.name === TGREP_CACHE_DIR_NAME) {
-          await this.sweepCacheRoot(dir);
-        } else if (entry.name !== "instances") {
-          await this.sweepCacheRoot(join(dir, TGREP_CACHE_DIR_NAME));
-        }
-      }
-    }
-  }
-
-  private async sweepCacheRoot(cacheRoot: string): Promise<void> {
-    const meta = await this.readMeta(cacheRoot);
-    if (!meta) return;
-    const lastUsed = Date.parse(meta.lastUsedAt);
-    if (
-      !Number.isFinite(lastUsed) ||
-      this.now() - lastUsed < this.config.cleanupAfterMs
-    )
-      return;
-    if (meta.serverPid !== undefined && this.isProcessAlive(meta.serverPid))
-      return;
-    if ([...this.servers.keys()].includes(meta.workspaceId)) return;
-    await rm(cacheRoot, { recursive: true, force: true }).catch(() => {});
-    this.log({
-      level: "info",
-      msg: "tgrep cache expired and removed",
-      workspaceId: meta.workspaceId,
-      cacheRoot,
-    });
-  }
-
-  async dispose(): Promise<void> {
-    for (const workspaceId of [...this.servers.keys()]) {
-      await this.stopServer(workspaceId);
-    }
-  }
-
-  private serialize<T>(
-    workspaceId: string,
-    task: () => Promise<T>,
-  ): Promise<T> {
-    const previous = this.locks.get(workspaceId) ?? Promise.resolve();
-    const next = previous.then(task, task);
-    this.locks.set(workspaceId, next);
-    void next
-      .finally(() => {
-        if (this.locks.get(workspaceId) === next)
-          this.locks.delete(workspaceId);
-      })
-      .catch(() => {});
-    return next as Promise<T>;
-  }
-
-  /** Full checkout of `revision` from the clone cache into `checkoutDir`. */
-  private async refreshCheckout(
-    sourceRoot: string,
+    identity: string,
     revision: string,
-    checkoutDir: string,
-  ): Promise<void> {
-    const staging = `${checkoutDir}.staging`;
-    await rm(staging, { recursive: true, force: true });
-    await mkdir(staging, { recursive: true });
+  ): Promise<string | undefined> {
+    let latest: { path: string; builtAt: number } | undefined;
+    for (const name of await directories(cacheRoot)) {
+      if (!name.startsWith(SNAPSHOT_PREFIX)) continue;
+      const path = join(cacheRoot, name);
+      const meta = (await readJson(join(path, READY_FILE))) as
+        SnapshotMeta | undefined;
+      if (
+        meta?.identity === identity &&
+        meta.revision === revision &&
+        this.now() - meta.builtAt < this.config.indexTtlMs &&
+        (!latest || meta.builtAt > latest.builtAt)
+      ) {
+        const { indexDir, sandboxIndexDir, checkoutDir } = snapshotPaths(path);
+        const available = await Promise.all(
+          [
+            checkoutDir,
+            join(indexDir, "meta.json"),
+            join(sandboxIndexDir, "meta.json"),
+          ].map((item) => stat(item).catch(() => undefined)),
+        );
+        if (available.every(Boolean)) latest = { path, builtAt: meta.builtAt };
+      }
+    }
+    return latest?.path;
+  }
+
+  private async buildSnapshot(
+    cacheRoot: string,
+    identity: string,
+    input: TgrepPrepareInput,
+  ): Promise<string> {
+    const timeout = AbortSignal.timeout(this.config.buildTimeoutMs);
+    const signal = input.signal
+      ? AbortSignal.any([input.signal, timeout])
+      : timeout;
+    await this.run("tgrep", ["--version"], signal);
+    // tgrep records the absolute checkout root, so build at its final path.
+    // ready.json is written last. Readers ignore incomplete generations.
+    const snapshot = await mkdtemp(join(cacheRoot, SNAPSHOT_PREFIX));
+    const { checkoutDir, indexDir, sandboxIndexDir } = snapshotPaths(snapshot);
     try {
-      await this.runCommand(
-        "git",
-        ["--git-dir", sourceRoot, "archive", revision],
-        staging,
+      await mkdir(checkoutDir);
+      await this.archive(input.sourceRoot, input.revision, checkoutDir, signal);
+      await this.run(
+        "tgrep",
+        [
+          "index",
+          "--no-ignore",
+          "--hidden",
+          "--index-path",
+          indexDir,
+          checkoutDir,
+        ],
+        signal,
       );
-      await rm(checkoutDir, { recursive: true, force: true });
-      await rename(staging, checkoutDir);
+      await this.createSandboxIndex(indexDir, sandboxIndexDir);
+      signal.throwIfAborted();
+      const meta: SnapshotMeta = {
+        identity,
+        revision: input.revision,
+        builtAt: this.now(),
+      };
+      await writeFile(join(snapshot, READY_FILE), JSON.stringify(meta));
+      return snapshot;
     } catch (error) {
-      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      await rm(snapshot, { recursive: true, force: true }).catch(() => {});
       throw error;
     }
   }
 
-  /** `git archive <rev>` piped into `tar -x` inside the staging directory. */
-  private runCommand(
-    command: string,
-    args: readonly string[],
-    extractDir: string,
-  ): Promise<void> {
-    return new Promise((resolvePromise, rejectPromise) => {
-      const producer = this.spawnProcess(command, [...args], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const consumer = this.spawnProcess("tar", ["-x", "-C", extractDir], {
-        stdio: ["pipe", "ignore", "pipe"],
-      });
-      let stderr = "";
-      producer.stderr?.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      consumer.stderr?.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      producer.stdout?.pipe(consumer.stdin!);
-      const timer = setTimeout(() => {
-        producer.kill("SIGKILL");
-        consumer.kill("SIGKILL");
-        rejectPromise(new Error("git archive checkout timed out"));
-      }, this.config.buildTimeoutMs);
-      let producerDone = false;
-      let consumerDone = false;
-      let failed = false;
-      const fail = (message: string): void => {
-        if (failed) return;
-        failed = true;
-        clearTimeout(timer);
-        producer.kill("SIGKILL");
-        consumer.kill("SIGKILL");
-        rejectPromise(new Error(message));
-      };
-      const maybeFinish = (): void => {
-        if (producerDone && consumerDone && !failed) {
-          clearTimeout(timer);
-          resolvePromise();
-        }
-      };
-      producer.on("error", () =>
-        fail(`cannot execute ${command}; tgrep indexing requires git`),
-      );
-      consumer.on("error", () =>
-        fail("cannot execute tar; tgrep checkout extraction requires tar"),
-      );
-      producer.on("exit", (code) => {
-        if (code !== 0) {
-          fail(
-            `git archive failed (${stderr.trim().split("\n")[0] ?? `exit ${code}`})`,
-          );
-          return;
-        }
-        producerDone = true;
-        maybeFinish();
-      });
-      consumer.on("exit", (code) => {
-        if (code !== 0) {
-          fail(
-            `tar extraction failed (${stderr.trim().split("\n")[0] ?? `exit ${code}`})`,
-          );
-          return;
-        }
-        consumerDone = true;
-        maybeFinish();
-      });
-    });
-  }
-
-  private async startServer(
-    workspaceId: string,
-    checkoutDir: string,
+  private async createSandboxIndex(
     indexDir: string,
-  ): Promise<ActiveServer> {
-    await mkdir(indexDir, { recursive: true });
-    const child = this.spawnProcess(
-      "tgrep",
-      [
-        "serve",
-        checkoutDir,
-        "--index-path",
-        indexDir,
-        "--watch-mode",
-        "poll",
-        "--poll-interval",
-        String(SERVE_POLL_INTERVAL_SECONDS),
-      ],
-      { stdio: "ignore", detached: true },
-    );
-    child.unref();
-    child.on("error", () => {
-      this.servers.delete(workspaceId);
-    });
-    if (child.pid === undefined) {
-      throw new Error(
-        "tgrep serve did not start (is the tgrep binary installed in the image?)",
-      );
-    }
-    this.log({
-      level: "info",
-      msg: "tgrep server started",
-      workspaceId,
-      pid: child.pid,
-      checkoutDir,
-      indexDir,
-    });
-    return { child, startedAt: this.now() };
-  }
-
-  private async stopServer(workspaceId: string): Promise<void> {
-    const server = this.servers.get(workspaceId);
-    this.servers.delete(workspaceId);
-    const pid = server?.child.pid;
-    if (pid === undefined || !this.isProcessAlive(pid)) return;
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Already gone.
-    }
-  }
-
-  private async stopRecordedServer(
-    cacheRoot: string,
-    pid: number,
+    sandboxIndexDir: string,
   ): Promise<void> {
-    // The recorded process is dead; only tgrep's lock needs clearing. tgrep
-    // removes a stale serve.lock itself on startup, so nothing to do here
-    // beyond logging the reap for observability.
-    this.log({
-      level: "info",
-      msg: "reaped orphaned tgrep server record",
-      cacheRoot,
-      pid,
-    });
-  }
-
-  private async waitForIndex(
-    workspaceId: string,
-    checkoutDir: string,
-    indexDir: string,
-  ): Promise<void> {
-    const deadline = this.now() + INDEX_READY_TIMEOUT_MS;
-    for (;;) {
-      const status = await this.runTgrepStatus(checkoutDir, indexDir);
-      if (status !== undefined && /Indexing:\s+complete/u.test(status)) return;
-      if (this.now() >= deadline) {
-        this.log({
-          level: "warn",
-          msg: "tgrep initial index still building; searches will scan until complete",
-          workspaceId,
-        });
-        return;
+    // tgrep v1.2.7 resolves IndexMeta.root_path before using an on-disk index.
+    // Share the immutable posting files and give the sandbox its own metadata.
+    const meta = (await readJson(join(indexDir, "meta.json"))) as
+      { root_path?: unknown; complete?: unknown } | undefined;
+    if (typeof meta?.root_path !== "string" || meta.complete !== true)
+      throw new Error("tgrep did not publish a complete index");
+    await mkdir(sandboxIndexDir);
+    for (const name of [
+      "files.bin",
+      "files-extra.bin",
+      "index.bin",
+      "lookup.bin",
+    ]) {
+      const source = join(indexDir, name);
+      const target = join(sandboxIndexDir, name);
+      try {
+        await link(source, target);
+      } catch (error) {
+        if (
+          !["EPERM", "EACCES", "ENOTSUP", "EXDEV"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        )
+          throw error;
+        await copyFile(source, target);
       }
-      await delay(2_000);
+    }
+    await writeFile(
+      join(sandboxIndexDir, "meta.json"),
+      JSON.stringify({ ...meta, root_path: SANDBOX_CHECKOUT }),
+    );
+  }
+
+  private async run(
+    command: string,
+    args: string[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    await waitForCommand(
+      this.spawnProcess(command, args, {
+        signal,
+        killSignal: "SIGKILL",
+        stdio: "ignore",
+      }),
+      `${command} ${args[0]}`,
+    );
+  }
+
+  private async archive(
+    sourceRoot: string,
+    revision: string,
+    checkoutDir: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    const producer = this.spawnProcess(
+      "git",
+      [
+        "-C",
+        sourceRoot,
+        "archive",
+        "--format=tar",
+        "--end-of-options",
+        revision,
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const consumer = this.spawnProcess("tar", ["-x", "-C", checkoutDir], {
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const jobs = [
+      waitForCommand(producer, "git archive"),
+      waitForCommand(consumer, "tar extraction"),
+      pipeline(producer.stdout!, consumer.stdin!, { signal }),
+    ];
+    try {
+      await Promise.all(jobs);
+    } catch (error) {
+      producer.kill("SIGKILL");
+      consumer.kill("SIGKILL");
+      await Promise.allSettled(jobs);
+      throw error;
     }
   }
 
-  private runTgrepStatus(
-    checkoutDir: string,
-    indexDir: string,
-  ): Promise<string | undefined> {
-    return new Promise((resolvePromise) => {
-      const child = this.spawnProcess(
-        "tgrep",
-        ["status", checkoutDir, "--index-path", indexDir],
-        { stdio: ["ignore", "pipe", "ignore"] },
-      );
-      let stdout = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGKILL");
-        resolvePromise(undefined);
-      }, 15_000);
-      child.stdout?.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
-      child.on("error", () => {
-        clearTimeout(timer);
-        resolvePromise(undefined);
-      });
-      child.on("exit", (code) => {
-        clearTimeout(timer);
-        resolvePromise(code === 0 ? stdout : undefined);
-      });
+  private lease(snapshot: string): () => void {
+    this.leases.set(snapshot, (this.leases.get(snapshot) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = this.leases.get(snapshot) ?? 1;
+      if (count === 1) this.leases.delete(snapshot);
+      else this.leases.set(snapshot, count - 1);
+    };
+  }
+
+  async sweep(): Promise<void> {
+    if (this.config.dataDir === undefined) return;
+    for (const name of await directories(this.config.dataDir)) {
+      await this.sweepCacheRoot(join(this.config.dataDir, name));
+    }
+  }
+
+  async sweepWorkspacesRoot(workspacesRoot: string): Promise<void> {
+    for (const name of await directories(workspacesRoot)) {
+      const path = join(workspacesRoot, name);
+      if (name === TGREP_CACHE_DIR_NAME) await this.sweepCacheRoot(path);
+      else if (
+        ![
+          "source",
+          "agent",
+          "runs",
+          "tmp",
+          "context-repos",
+          "templates",
+          ".metadata",
+        ].includes(name)
+      )
+        await this.sweepWorkspacesRoot(path);
+    }
+  }
+
+  private async sweepCacheRoot(cacheRoot: string): Promise<void> {
+    await this.serialize(cacheRoot, async () => {
+      const snapshots: { path: string; lastUsed: number; identity?: string }[] =
+        [];
+      for (const name of await directories(cacheRoot)) {
+        if (!name.startsWith(SNAPSHOT_PREFIX)) continue;
+        const path = join(cacheRoot, name);
+        const readyPath = join(path, READY_FILE);
+        const [ready, meta] = await Promise.all([
+          stat(readyPath).catch(() => undefined),
+          readJson(readyPath) as Promise<SnapshotMeta | undefined>,
+        ]);
+        const lastUsed = ready ?? (await stat(path).catch(() => undefined));
+        if (lastUsed)
+          snapshots.push({
+            path,
+            lastUsed: lastUsed.mtimeMs,
+            ...(typeof meta?.identity === "string"
+              ? { identity: meta.identity }
+              : {}),
+          });
+      }
+      const retained = new Set<string>();
+      for (const snapshot of snapshots.sort(
+        (a, b) => b.lastUsed - a.lastUsed,
+      )) {
+        const superseded =
+          snapshot.identity !== undefined && retained.has(snapshot.identity);
+        if (snapshot.identity !== undefined) retained.add(snapshot.identity);
+        if (
+          !this.leases.has(snapshot.path) &&
+          (superseded ||
+            this.now() - snapshot.lastUsed >= this.config.cleanupAfterMs)
+        ) {
+          await rm(snapshot.path, { recursive: true, force: true });
+        }
+      }
+      // Retire the old daemon-based layout after its retention period. Never
+      // signal a PID from disk, which may have been reused by another process.
+      const legacyFile = join(cacheRoot, "meta.json");
+      const legacy = (await readJson(legacyFile)) as
+        { schemaVersion?: number; lastUsedAt?: string } | undefined;
+      if (
+        legacy?.schemaVersion === 1 &&
+        legacy.lastUsedAt &&
+        this.now() - Date.parse(legacy.lastUsedAt) >= this.config.cleanupAfterMs
+      ) {
+        await rm(join(cacheRoot, "checkout"), { recursive: true, force: true });
+        await rm(join(cacheRoot, "index"), { recursive: true, force: true });
+        await rm(legacyFile, { force: true });
+      }
     });
   }
 
-  private async readMeta(cacheRoot: string): Promise<CacheMeta | undefined> {
+  private async serialize<T>(
+    cacheRoot: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.locks.get(cacheRoot) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    this.locks.set(cacheRoot, next);
     try {
-      return JSON.parse(
-        await readFile(join(cacheRoot, META_FILE), "utf8"),
-      ) as CacheMeta;
-    } catch {
-      return undefined;
+      return await next;
+    } finally {
+      if (this.locks.get(cacheRoot) === next) this.locks.delete(cacheRoot);
     }
-  }
-
-  private async writeMeta(cacheRoot: string, meta: CacheMeta): Promise<void> {
-    const target = join(cacheRoot, META_FILE);
-    const staging = `${target}.tmp`;
-    await writeFile(staging, JSON.stringify(meta, null, 2), "utf8");
-    await rename(staging, target);
   }
 }
 
-/**
- * Task-context guidance injected into every review with a ready index.
- * `sandboxCheckoutDir` is the read-only mount path visible to the agent
- * (container sandboxes); native sandboxes use the host checkout path.
- */
-export function buildTgrepGuidance(
+export function tgrepSearchPaths(
   handle: TgrepSearchHandle,
-  sandboxCacheRoot?: string,
+  container: boolean,
+) {
+  return container
+    ? { checkoutDir: SANDBOX_CHECKOUT, indexDir: SANDBOX_INDEX }
+    : { checkoutDir: handle.checkoutDir, indexDir: handle.indexDir };
+}
+
+/** Advertise only the search surfaces usable by this review route. */
+export function buildTgrepGuidance(
+  handle: TgrepSearchHandle | undefined,
+  route: "host-tools" | "native" | "container",
 ): string {
-  if (!handle.enabled || handle.state !== "ready") {
-    return "Code search: the tgrep index is unavailable for this run; use `rg` on materialized files and `aicr.fetch_more_context` for specific paths.";
+  if (
+    handle?.state !== "ready" ||
+    (route === "container" && handle.sandboxIndexDir === undefined)
+  ) {
+    return "Indexed search is unavailable for this run. Use read-only search on materialized files if you have shell access, or request specific paths with aicr.fetch_more_context.";
   }
-  const checkoutDir = sandboxCacheRoot
-    ? `${sandboxCacheRoot}/checkout`
-    : handle.checkoutDir;
-  const indexDir = sandboxCacheRoot
-    ? `${sandboxCacheRoot}/index`
-    : handle.indexDir;
+  const { checkoutDir, indexDir } = tgrepSearchPaths(
+    handle,
+    route === "container",
+  );
   return [
-    "Code search: this repository has a persistent per-workspace tgrep trigram index covering the full reviewed head (not only the changed files).",
-    `- Search via the aicr.search_code tool (pattern, optional path_glob/case_insensitive/max_results), or shell: tgrep --index-path ${indexDir} -- "<pattern>" ${checkoutDir}`,
-    `- The indexed full checkout is at ${checkoutDir} (read-only reference; the changed files you report on still live in the run's source directory).`,
-    "Prefer the index for repository-wide or repeated searches; the index refreshes asynchronously, so verify the exact current line with aicr.fetch_more_context or rg before reporting a problem.",
+    "Indexed search is available for this Git revision. Use aicr.search_code to locate related source. Its results are excerpts, so read the relevant current source before reporting.",
+    ...(route === "host-tools"
+      ? [
+          "Submit aicr.search_code as a JSON tool call and wait for its results in the next pass.",
+        ]
+      : [
+          `Read-only Git snapshot at ${JSON.stringify(checkoutDir)}. If tgrep is installed in this sandbox, use tgrep --hidden --index-path ${JSON.stringify(indexDir)} -- "<pattern>" ${JSON.stringify(checkoutDir)}.`,
+          "If the sandbox cannot execute indexed search, submit aicr.search_code using the JSON tool-call format and wait for the host result in the next pass.",
+        ]),
   ].join("\n");
 }

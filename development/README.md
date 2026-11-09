@@ -225,7 +225,7 @@ curl -sf <部署环境入口URL>/healthz
 ### 7.3 镜像源配置（国内部署必填）
 
 构建镜像时默认使用 `debian:trixie-slim` + 官方 `node:lts-trixie-slim`
-userspace（当前为 Node 24 LTS），两个阶段共享同一 Debian 13 基线。
+userspace（跟随官方 LTS 标签），两个阶段共享同一 Debian 13 基线。
 国内环境建议切换 Debian apt、Kubernetes apt、npm、PyPI/pip
 和 Docker static 下载源；如果目标机已经统一配置容器 registry mirror，通常
 不必单独设置 `NODE_IMAGE`，只有需要覆盖默认拉取策略时再显式指定。
@@ -254,7 +254,7 @@ Perforce 官方 APT 仓库只发布 Ubuntu 代号源（已验证最新为 noble�
 | `GH_RELEASE_PREFIX`           | GitHub release 静态工具下载 URL 前缀  | （空，直连 github.com）                                        | ghproxy 风格前缀或内部缓存；只影响新增的固定版本静态 CLI 工具      |
 | `DOCKER_DOWNLOAD_MIRROR`      | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64`       | `https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64` |
 
-> **关于 `BASE_IMAGE`**：默认使用 `debian:trixie-slim`，与 `node:lts-trixie-slim` 共享同一发行版基线（Node 24 LTS userspace 可直接拷贝）。官方 Perforce 包仓库只提供 Ubuntu 代号 APT 源（已验证最新为 noble），其 `p4-cli` 面向旧版 glibc 构建，可在 trixie 的 glibc 2.41 上正常运行；`p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Debian trixie 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
+> **关于 `BASE_IMAGE`**：默认使用 `debian:trixie-slim`，与 `node:lts-trixie-slim` 共享同一发行版基线（Node LTS userspace 可直接拷贝）。官方 Perforce 包仓库只提供 Ubuntu 代号 APT 源（已验证最新为 noble），其 `p4-cli` 面向旧版 glibc 构建，可在 trixie 的 glibc 2.41 上正常运行；`p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Debian trixie 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
 >
 > **关于 `NODE_IMAGE`**：如果目标机已经在 Podman/Docker 侧统一配置了容器 registry mirror，保持默认 `node:lts-trixie-slim` 即可，不必在每次部署时额外导出 `NODE_IMAGE`；只有需要按任务覆盖拉取源时再显式设置。
 >

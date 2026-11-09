@@ -70,6 +70,15 @@ describe("deploy assets", () => {
     expect(script).toContain("--build-arg \"KUBERNETES_APT_REPO_BASE=${KUBERNETES_APT_REPO_BASE}\"");
   });
 
+  it("downloads and extracts the versioned Difftastic asset for each Linux target", () => {
+    const dockerfile = readRepoFile("deploy/Dockerfile");
+    expect(dockerfile).toContain("difft_target=x86_64-unknown-linux-musl");
+    expect(dockerfile).toContain("difft_target=aarch64-unknown-linux-gnu");
+    expect(dockerfile).toContain('difft_archive="difft-${DIFFTASTIC_VERSION}-${difft_target}.tar.gz"');
+    expect(dockerfile).toContain('gh_dl Wilfred/difftastic "${DIFFTASTIC_VERSION}" "${difft_archive}"');
+    expect(dockerfile).toContain('tar xzf "${difft_archive}" -C difft-pkg');
+  });
+
   it("creates the node user without assuming uid or gid 1000 are free", () => {
     const dockerfile = readRepoFile("deploy/Dockerfile");
 

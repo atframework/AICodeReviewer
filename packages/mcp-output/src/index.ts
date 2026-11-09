@@ -41,7 +41,7 @@ export const AICR_OUTPUT_TOOL_DESCRIPTIONS: Readonly<
   "aicr.try_blame":
     "Request best-effort VCS attribution for a bounded file range. This returns attribution metadata, not source content; do not infer authorship from prose.",
   "aicr.search_code":
-    "Search the repository with the tgrep trigram index (faster than scanning for repeated or repo-wide searches). Returns matched lines with file and line numbers; use path_glob to narrow scope. The index refreshes asynchronously — verify the exact current line with aicr.fetch_more_context before reporting a problem.",
+    "Search the reviewed Git snapshot. Set literal for exact text, and path_glob to narrow the search. Returns a bounded list of repository-relative file and line matches or an unavailable message. Read the relevant current source before reporting a problem.",
 };
 
 export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";

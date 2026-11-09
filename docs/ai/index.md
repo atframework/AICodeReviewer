@@ -78,15 +78,11 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 
 ## 路线图：搜索索引与工具链维护（M41 之后）
 
-tgrep 索引与工具链升级已落地（[M41](milestones/M41.md)，约定见
-[架构 §3.17](architecture.md)）。后续待办：
-
-- 真实环境验收：Kilo 生产签收需覆盖 `aicr.search_code` 实际调用、容器沙箱
-  `/workspace/tgrep-cache` 只读挂载内搜索、head 变化后的索引刷新时序；
-  本地单元测试（mock 进程）不替代真实 tgrep 二进制与端到端证据。
-- 大仓库性能观测：首次 `git archive` 全量解包 + 索引构建在大仓库上的耗时
-  与磁盘占用需实测；必要时引入增量 checkout（按 diff 更新）替代全量解包。
-- 独立迁移任务：zod 3→4、typescript 6→7 大版本升级（含 @aicr/docs-site）。
+- 在生产签收环境验证 Kilo 的真实 MCP 调用、Docker/Podman 内的索引命中和连续
+  revision 评审。用 `tgrep --stats` 确认查询使用索引，避免把扫描误判为通过。
+- 记录大仓库冷启动索引耗时、并发快照数量和磁盘峰值，再评估跨 revision 复用。
+  缓存行为见[架构 §3.17](architecture.md#317-tgrep-代码搜索缓存)。
+- 单独评估 TypeScript 7 的编译与 ESLint 生态迁移，覆盖运行时包和文档站。
 
 ## 前瞻扩展（未纳入当前交付）
 

@@ -536,6 +536,18 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `agent.web_search.searxng.language` | string | — | SearXNG language filter |
 | `agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG safe-search level |
 
+## `search.tgrep`
+
+These server settings apply to indexed Git reviews. See [MCP tools](/en/integrations/mcp-tools/) for query options.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `search.tgrep.enabled` | boolean | `true` | Enable indexed code search when tgrep is installed. |
+| `search.tgrep.data_dir` | string | `<instanceRoot>/.tgrep-cache` | Optional server-local cache root. Relative paths resolve from the configuration base directory. |
+| `search.tgrep.index_ttl_seconds` | int > 0 | `86400` | Maximum age for reusing a snapshot. The next review of that revision builds a fresh snapshot. |
+| `search.tgrep.cleanup_after_days` | int > 0 | `7` | Idle retention for the most recently used snapshot per repository. Active reviews keep their snapshots. |
+| `search.tgrep.build_timeout_seconds` | int > 0 | `600` | Time limit for one Git archive and tgrep index build. Reviews continue with VCS context when indexing fails. |
+
 ## `review`
 
 | Field | Type | Default | Description |

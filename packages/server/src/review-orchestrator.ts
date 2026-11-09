@@ -78,6 +78,7 @@ import {
   type ModelSpec,
 } from "@aicr/llm";
 import {
+  AICR_OUTPUT_TOOL_DESCRIPTIONS,
   AicrOutputCollector,
   createAicrOutputToolRegistry,
   executeTgrepSearch,
@@ -91,6 +92,7 @@ import {
 } from "@aicr/mcp-output";
 import {
   buildTgrepGuidance,
+  tgrepSearchPaths,
   type TgrepPrepareInput,
   type TgrepSearchHandle,
 } from "./tgrep-index.js";
@@ -852,6 +854,7 @@ function buildJsonToolContract(): string {
     "Use aicr.try_blame only when VCS-verified line attribution is needed; it returns best-effort blame/annotate metadata and never returns source content. Do not guess authors from names, summaries, or diff text.",
     "Use aicr.get_review_context with {} to recover scope, or aicr.get_review_commits with detail ids/files/diffs/summary to query the current review. Authors and repositories are opt-in (include_authors/include_repositories). Follow next_cursor with the same projection; native MCP pending requests require ending this pass for host follow-up. Verify historical patches against the final head.",
     "When running inside an agent sandbox, inspect already materialized files with read-only shell commands (rg, fd, bat --paging=never --style=plain, jq, yq) before concluding that source code is inaccessible.",
+    "If indexed search is available, aicr.search_code accepts pattern, literal, path_glob, case_insensitive, and max_results. When submitting a search as a JSON tool call, wait for the next pass before drawing conclusions from the results.",
     "If a needed file is not materialized or the MCP tool returns a pending/empty context response, stop making a final no-problem claim; request the concrete file through aicr.fetch_more_context so AICR can pull it from VCS and rerun the final pass.",
     "Never ask the user to provide diff or source context; request it through aicr.fetch_more_context with a concrete path and reason.",
     "Do not speculate. If you have not read the surrounding code, fetch it first. Every reported problem must be backed by code you have actually read.",
@@ -1058,9 +1061,6 @@ function resolveNativeMcpOutputServerScript(): string {
  * start and the agent silently loses its native MCP surface (falling back to the
  * stdout JSON contract), so point it at the real module-relative script instead.
  */
-/** Read-only mount path of the indexed full checkout in container sandboxes. */
-export const TGREP_SANDBOX_MOUNT_PATH = "/workspace/tgrep-cache";
-
 function adaptMcpServersForSandbox(
   servers: readonly RuntimeBundleMcpServer[] | undefined,
   sandbox: SandboxBackend,
@@ -1098,6 +1098,11 @@ function adaptMcpServersForSandbox(
         config.command = command;
       }
     }
+    const searchPaths =
+      tgrepHandle?.state === "ready" &&
+      (sandbox.kind === "native" || tgrepHandle.sandboxIndexDir !== undefined)
+        ? tgrepSearchPaths(tgrepHandle, sandbox.kind !== "native")
+        : undefined;
     return {
       name: server.name,
       config: {
@@ -1106,16 +1111,10 @@ function adaptMcpServersForSandbox(
           ...(config.environment as
             Readonly<Record<string, string>> | undefined),
           AICR_OUTPUT_STATE_PATH: outputStatePath,
-          ...(tgrepHandle?.state === "ready"
+          ...(searchPaths
             ? {
-                AICR_TGREP_INDEX_DIR:
-                  sandbox.kind === "native"
-                    ? tgrepHandle.indexDir
-                    : `${TGREP_SANDBOX_MOUNT_PATH}/index`,
-                AICR_TGREP_SOURCE_DIR:
-                  sandbox.kind === "native"
-                    ? tgrepHandle.checkoutDir
-                    : `${TGREP_SANDBOX_MOUNT_PATH}/checkout`,
+                AICR_TGREP_INDEX_DIR: searchPaths.indexDir,
+                AICR_TGREP_SOURCE_DIR: searchPaths.checkoutDir,
               }
             : {}),
         },
@@ -2086,15 +2085,16 @@ async function runAgentReviewInDirs(
         readOnly: true,
       }),
     );
-    // Read-only tgrep cache (full checkout + index). Container sandboxes only;
-    // native sandboxes address the host paths directly. The tgrep server runs
-    // on the host; sandboxed clients read the shared on-disk index.
-    if (tgrepHandle?.state === "ready" && sandbox.kind !== "native") {
-      extraMounts.push({
-        hostPath: tgrepHandle.cacheRoot,
-        containerPath: TGREP_SANDBOX_MOUNT_PATH,
-        readOnly: true,
-      });
+    if (
+      tgrepHandle?.state === "ready" &&
+      tgrepHandle.sandboxIndexDir !== undefined &&
+      sandbox.kind !== "native"
+    ) {
+      const paths = tgrepSearchPaths(tgrepHandle, true);
+      extraMounts.push(
+        { hostPath: tgrepHandle.checkoutDir, containerPath: paths.checkoutDir, readOnly: true },
+        { hostPath: tgrepHandle.sandboxIndexDir, containerPath: paths.indexDir, readOnly: true },
+      );
     }
     const materializedFs = await sandbox.materializeFs({
       sourceDir: sourceRoot,
@@ -2781,36 +2781,13 @@ function extractJsonPayload(content: string): unknown {
 }
 
 const KILO_MCP_TOOL_NAME_RE = /^(?:[a-z0-9_-]+)_aicr[_]([a-z_]+)$/iu;
-const KILO_MCP_TOOL_MAP: Readonly<Record<string, AicrOutputToolName>> = {
-  report_problem: "aicr.report_problem",
-  publish_summary: "aicr.publish_summary",
-  skip: "aicr.skip",
-  fetch_more_context: "aicr.fetch_more_context",
-  try_blame: "aicr.try_blame",
-  get_review_commits: "aicr.get_review_commits",
-  get_review_context: "aicr.get_review_context",
-};
 
 function normalizeToolName(value: unknown): AicrOutputToolName {
-  if (
-    value === "aicr.report_problem" ||
-    value === "aicr.publish_summary" ||
-    value === "aicr.skip" ||
-    value === "aicr.fetch_more_context" ||
-    value === "aicr.try_blame" ||
-    value === "aicr.get_review_commits" ||
-    value === "aicr.get_review_context"
-  ) {
-    return value;
-  }
-
   if (typeof value === "string") {
-    const kiloMatch = KILO_MCP_TOOL_NAME_RE.exec(value);
-    if (kiloMatch) {
-      const mapped = KILO_MCP_TOOL_MAP[kiloMatch[1]!.toLowerCase()];
-      if (mapped) {
-        return mapped;
-      }
+    const suffix = KILO_MCP_TOOL_NAME_RE.exec(value)?.[1];
+    const normalized = suffix === undefined ? value : `aicr.${suffix.toLowerCase()}`;
+    if (Object.hasOwn(AICR_OUTPUT_TOOL_DESCRIPTIONS, normalized)) {
+      return normalized as AicrOutputToolName;
     }
   }
 
@@ -3950,6 +3927,7 @@ async function executeReviewOrchestration(
   activeRunDirs.add(runDirs.root);
   let ownsRunRoot = false;
   let runSandbox: SandboxBackend | undefined;
+  let releaseTgrep: (() => void) | undefined;
   try {
     await reapStaleRunDirs(dirname(runDirs.root));
     if (containmentRoot) {
@@ -4000,11 +3978,13 @@ async function executeReviewOrchestration(
       containmentRoot,
       runtimeDirs,
       liveRun,
+      (handle) => { releaseTgrep = handle.release; },
     );
   } finally {
     try {
       await runSandbox?.teardown();
     } finally {
+      releaseTgrep?.();
       activeRunDirs.delete(runDirs.root);
       // Verify again before recursive cleanup; an escaping junction must never
       // redirect cleanup to an unrelated workspace, even if teardown failed.
@@ -4037,7 +4017,8 @@ async function executeReviewInRunDirs(
   runDirs: RunDirs,
   containmentRoot: string | undefined,
   runtimeDirs: WorkspaceLayout | undefined,
-  liveRun?: LiveRunHandle,
+  liveRun: LiveRunHandle | undefined,
+  onTgrepHandle: (handle: TgrepSearchHandle) => void,
 ): Promise<ReviewOrchestrationResult> {
   const runId = context.runId ?? basename(runDirs.root);
 
@@ -4214,9 +4195,7 @@ async function executeReviewInRunDirs(
     options.sandbox,
   );
 
-  // tgrep index (architecture §3.17): one persistent cache per workspace,
-  // refreshed on head-revision change / TTL. Only git reviews have a clone
-  // cache to archive from; P4/SVN and dry runs skip indexing.
+  // Only Git reviews can build a revision snapshot from the local clone.
   let tgrepHandle: TgrepSearchHandle | undefined;
   if (
     options.tgrepSearch &&
@@ -4231,7 +4210,9 @@ async function executeReviewInRunDirs(
         layout: runtimeDirs,
         sourceRoot,
         revision: range.headRevision,
+        signal: context.signal,
       });
+      if (tgrepHandle) onTgrepHandle(tgrepHandle);
     } catch (error) {
       console.warn(
         JSON.stringify({
@@ -4243,14 +4224,12 @@ async function executeReviewInRunDirs(
       );
     }
   }
-  const tgrepGuidance = tgrepHandle
-    ? buildTgrepGuidance(
-        tgrepHandle,
-        options.sandbox && options.sandbox.kind !== "native"
-          ? TGREP_SANDBOX_MOUNT_PATH
-          : undefined,
-      )
-    : undefined;
+  const tgrepGuidance = buildTgrepGuidance(
+    tgrepHandle,
+    options.sandbox && options.agentAdapter
+      ? options.sandbox.kind === "native" ? "native" : "container"
+      : "host-tools",
+  );
   let diff: ParsedDiff | undefined;
   if (vcs.diff) {
     try {
@@ -4438,7 +4417,7 @@ async function executeReviewInRunDirs(
         contextReposSection,
       )) +
     (policyContext.length ? `\n\n${policyContext.join("\n\n")}` : "") +
-    (tgrepGuidance ? `\n\n${tgrepGuidance}` : "");
+    `\n\n${tgrepGuidance}`;
 
   let compressed = false;
   let originalTokenEstimate: number | undefined;
@@ -4473,7 +4452,8 @@ async function executeReviewInRunDirs(
           "",
           compressionResult.compactDiff,
           ...(contextReposSection ? ["", contextReposSection] : []),
-          ...(tgrepGuidance ? ["", tgrepGuidance] : []),
+          "",
+          tgrepGuidance,
           "",
           buildJsonToolContract(),
         ];

@@ -22,7 +22,17 @@ AICR 向评审 agent 暴露一个小而稳定的 MCP 工具集。agent 调用这
 
 `aicr.fetch_more_context` 和 `aicr.try_blame` 是只读上下文工具。orchestrator 通过配置的 VCS 适配器回放它们，并带获取到的内容/归因跑一次最终 follow-up pass。
 
-`aicr.search_code` 在 git 评审且镜像内置 tgrep 时可用：服务端为每个 workspace 维护持久索引缓存（`<instanceRoot>/.tgrep-cache/`），head 变化或超过 `search.tgrep.index_ttl_seconds` 时刷新，超过 `cleanup_after_days` 未使用则清除。索引是异步刷新的快照；报告问题前必须用 `aicr.fetch_more_context` 或 `rg` 核验匹配行的当前内容。索引不可用时工具返回降级提示，agent 改用 `rg`。
+Git 评审在 tgrep 可用时可以调用 `aicr.search_code`。每个仓库独立缓存评审 revision
+的快照，默认位于 `<instanceRoot>/.tgrep-cache/`。新 revision 或超过
+`search.tgrep.index_ttl_seconds` 时构建新快照。每小时清理已释放的旧快照，最近使用的
+快照保留至 `cleanup_after_days` 到期。外部 Agent 使用 MCP，内置 LLM 在后续评审
+轮次收到结果。自定义镜像缺少 tgrep 时，外部 Agent 也可以提交 JSON 工具调用，
+由宿主执行搜索并在后续轮次返回结果。
+
+用 `literal: true` 匹配字面文本，用 `path_glob` 缩小范围。上限按整个查询计算，
+默认 50 条，最多 200 条及 64 KiB。报告问题前读取评审 revision 对应的源码。
+索引不可用或结果不完整时，用 `aicr.fetch_more_context` 获取具体文件，
+有 shell 权限时也可搜索已物化的文件。
 
 ## `aicr.get_review_commits`
 

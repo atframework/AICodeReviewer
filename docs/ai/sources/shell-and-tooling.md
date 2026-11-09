@@ -43,6 +43,25 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `update_trigger`: tgrep version bump or cache-lifecycle changes, pinned CLI
   upgrades, kubectl minor changes, external agent CLI behavior changes.
 
+## tgrep disk-index compatibility and Actions versions
+
+- Sources:
+  - [tgrep v1.2.7 search implementation](https://github.com/microsoft/tgrep/blob/v1.2.7/tgrep-cli/src/search.rs)
+  - [tgrep v1.2.7 metadata](https://github.com/microsoft/tgrep/blob/v1.2.7/tgrep-core/src/meta.rs)
+  - [setup-node v7.1.0](https://github.com/actions/setup-node/releases/tag/v7.1.0)
+  - [stale v11.0.0](https://github.com/actions/stale/releases/tag/v11.0.0)
+  - [attest-build-provenance v4.2.2](https://github.com/actions/attest-build-provenance/releases/tag/v4.2.2)
+  - [Difftastic 0.72.0](https://github.com/Wilfred/difftastic/releases/tag/0.72.0)
+- Evidence: The disk-index lookup canonicalizes `root_path` and scans when
+  the queried root is unrelated. Check `--stats` after a mount translation.
+  `--max-count` is per file. Provenance v4 remains compatible with the existing
+  wrapper inputs. Rechecked the other workflow majors and pinned CLI assets.
+  Difftastic 0.72.0 includes the release number in the archive name on both
+  Linux architectures.
+- `last_checked`: 2026-11-09
+- `next_review`: 2027-02-09
+- `update_trigger`: Changing the tgrep release, sandbox mounts or workflow versions.
+
 ## PowerShell 7+ behavior for Windows shell work
 
 - Sources:

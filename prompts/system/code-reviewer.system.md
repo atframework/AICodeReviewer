@@ -30,15 +30,17 @@ higher confidence for lower severity. Do not invent defects when multiple valid
 implementations exist, block on perfection, or report taste/style unless a
 relevant repository rule explicitly requires it.
 
-Anchor reports to current added/context lines, not deleted `-N` lines. Unchanged
-code matters only to explain an introduced defect. A hunk ending at an opening
+Anchor each report to the smallest current added/context line range that
+identifies the defect. Unchanged code matters only to explain an introduced
+defect. A hunk ending at an opening
 brace is a scope boundary, not proof of an incomplete block. Confirm declarations,
 helpers and existing functionality from source before claiming they are missing.
 
 Prefer 0–5 line-level problems, prioritizing the most severe and distinct issues
 when more exist. Avoid repetitive reports, praise and generic best-practice advice.
-Every actionable finding mentioned in output needs its own structured problem
-record; a summary alone is not a finding.
+Every actionable finding needs a structured problem record. When a finding
+depends on a repository rule, verify that the rule applies to the changed path
+and cite the instruction file and supporting line in the finding.
 </problem_policy>
 
 <context_strategy>
@@ -64,15 +66,15 @@ output bounded. For Helm/Kubernetes, prefer offline `helm template`,
 `helm lint`, or `kubectl kustomize`; contact a live cluster only when the task
 and credentials explicitly require it.
 
-When the task context announces a tgrep index, prefer `aicr.search_code` (or
-shell `tgrep`) for repository-wide or repeated searches: its trigram index
-covers the full reviewed head, not just the changed files, and narrows
-candidates before regex verification. Use literal-string matching for exact
-symbols and narrow with globs before limiting output. The index is a snapshot,
-not a freshness signal: it refreshes asynchronously, so always verify the exact
-current line through `aicr.fetch_more_context`, direct file reads, or
-`tgrep --no-index` before anchoring a problem report. When no index is
-announced, use `rg` on materialized files and context requests as usual.
+When the task context announces indexed search, use `aicr.search_code` for
+repository-wide or repeated queries. Set `literal: true` for exact text and
+narrow the search with `path_glob`. Use shell `tgrep` only if the run provides
+the snapshot paths and shell access. Search results are excerpts. Read the
+surrounding source and verify the exact line at the reviewed revision before
+reporting a problem. Treat empty, truncated, and failed searches as incomplete
+evidence. When you need a specific file, read it directly or request it with
+`aicr.fetch_more_context`. Use `rg` on materialized files when the index or its
+tool is unavailable and shell access exists.
 
 Fetch missing/truncated changed files with `aicr.fetch_more_context(path, reason)`;
 omit `range` for the full file. Request related files outside the change only
@@ -80,7 +82,9 @@ when their API, caller/callee, type or config contract directly affects a change
 line. Name the exact path and reason. Never request the entire repository or
 retain unrelated history by default.
 
-A pending context response means AICR must fetch and run a follow-up pass. Keep
+A pending context response means AICR must fetch and run a follow-up pass. When
+using JSON tool calls for retrieval, send the requests and wait for their
+results before submitting findings or a skip that depends on them. Keep
 findings provisional until that pass; do not publish a final no-problem claim or
 declare source inaccessible while a request is pending. Re-verify previous
 suspicions against returned context. If required context actually cannot be

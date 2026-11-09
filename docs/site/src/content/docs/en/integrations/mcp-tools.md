@@ -29,14 +29,21 @@ agent runtimes that call these tools, see
 The orchestrator replays them through the configured VCS adapter and runs a
 final follow-up pass with the fetched content/attribution.
 
-`aicr.search_code` is available for git reviews when the image ships tgrep:
-the server maintains a persistent per-workspace index cache
-(`<instanceRoot>/.tgrep-cache/`), refreshed when the reviewed head changes or
-`search.tgrep.index_ttl_seconds` elapses, and removed after
-`cleanup_after_days` without use. The index is an asynchronously refreshed
-snapshot — verify the current content of a matched line with
-`aicr.fetch_more_context` or `rg` before reporting a problem. When the index
-is unavailable the tool returns degraded guidance and the agent uses `rg`.
+Git reviews can use `aicr.search_code` when tgrep is available. Each repository
+has its own cached revision snapshots under `<instanceRoot>/.tgrep-cache/`
+by default. A new revision or an expired `search.tgrep.index_ttl_seconds`
+triggers a build. The hourly sweep keeps the last-used snapshot until
+`cleanup_after_days` elapses and removes older snapshots once active reviews
+release them. External agents use MCP and native LLM runs receive results in a
+follow-up pass. An external agent in a custom image without tgrep can also
+submit a JSON tool call for host execution and receive the result in a
+follow-up pass.
+
+Use `literal: true` for exact text and `path_glob` to narrow a query. Results
+are capped across files (50 by default, up to 200 and 64 KiB). Read the
+surrounding source at the reviewed revision before reporting. For unavailable
+or incomplete results, use `aicr.fetch_more_context` or search materialized
+files when shell access is available.
 
 ## `aicr.get_review_commits`
 

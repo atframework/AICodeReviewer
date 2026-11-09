@@ -932,18 +932,16 @@ agent:
 # Code search index (tgrep)
 # ---------------------------------------------------------------------------
 # Optional; omit the whole section to keep defaults. The review image ships the
-# tgrep binary; each git workspace gets a persistent index cache under
-# <instanceRoot>/.tgrep-cache/ (full head checkout + trigram index), refreshed
-# when the reviewed head changes or the TTL expires, and removed after
-# cleanup_after_days without use. Agents search it via the aicr.search_code
-# tool or the tgrep CLI; native-llm uses the same tool in-process. Indexing
-# failures never fail a review (agents fall back to rg / fetch_more_context).
+# tgrep binary. Each Git repository caches revision snapshots under
+# <instanceRoot>/.tgrep-cache/. A new revision or expired TTL builds a new
+# snapshot. Reviews keep using their original snapshot until they finish.
+# Agents use aicr.search_code, with VCS context or materialized file reads
+# available if indexing fails.
 # search:
 #   tgrep:
 #     enabled: true
-#     # data_dir: /app/data/tgrep-cache  # external cache root (one slugged dir
-#     #   per workspace) instead of <instanceRoot>/.tgrep-cache
-#     index_ttl_seconds: 86400   # force a rebuild after 24h even without use
+#     # data_dir: /app/data/tgrep-cache  # optional server-local cache root
+#     index_ttl_seconds: 86400   # rebuild on next use after 24h
 #     cleanup_after_days: 7      # delete caches unused for 7 days
 #     build_timeout_seconds: 600 # bound one checkout/index build
 

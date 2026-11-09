@@ -13,10 +13,10 @@ user-invocable: false
 - Inside the review image, `tgrep` provides trigram-indexed search for repeated
   or repository-wide queries (`tgrep -- "pattern" <root>`; put `--` before the
   pattern, use `-F` for literals, `-g`/`-t` to narrow, `-l` to list files
-  first). The index is a snapshot, not a freshness signal: use `--no-index`
-  (or re-read the file) when current bytes matter. AICR-managed review agents
-  use the `aicr.search_code` tool and per-workspace caches instead of building
-  their own indexes (architecture §3.17).
+  first). Use `--no-index` or re-read the file when current bytes matter.
+  AICR-managed review agents search leased Git snapshots via
+  `aicr.search_code`. Read the relevant source before reporting and use VCS
+  context if the snapshot cannot supply a needed file (architecture §3.17).
 - Outside the shipped review image, probe with `Get-Command` on Windows or
   `command -v` on POSIX. WSL and developer hosts have their own tool baselines.
 - Keep commands non-interactive, output bounded, and formats machine-readable.

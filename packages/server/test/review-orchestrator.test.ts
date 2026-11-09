@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import type { AgentAdapter } from "@aicr/agents";
 import { createKiloAdapter } from "@aicr/agents";
-import { createReviewEvent } from "@aicr/core";
+import { computeWorkspaceLayout, createReviewEvent } from "@aicr/core";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 import type { ReviewProblem } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnOptions } from "@aicr/sandbox";
@@ -101,6 +101,56 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it.each(["aicr.search_code", "aicr-output_aicr_search_code", "pi_aicr_search_code"])(
+    "returns %s results in a follow-up before final output", async (toolName) => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-native-search-"));
+    const release = vi.fn();
+    let passes = 0;
+    try {
+      const layout = computeWorkspaceLayout(root, {
+        definitionId: "ws", instanceId: "instance", workPath: "repo",
+      }, "isolated_v2");
+      const result = await runReviewOrchestration(
+        { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}",
+          sourceRootResolver: () => layout.sourceRoot,
+          runtimeDirsResolver: () => layout,
+          vcs: {
+            ...createVcs(layout.sourceRoot),
+            async fetchScoped(range, workspace) {
+              await writeWorkspaceFile(workspace.sourceDir!, "src/app.ts", "const ok = true;\n");
+              return { workspaceId: workspace.id, rootDir: workspace.sourceDir!, fetchedFiles: [...range.files] };
+            },
+          },
+          tgrepSearch: async () => ({
+            enabled: true, state: "ready", cacheRoot: root,
+            checkoutDir: join(root, "missing-checkout"), indexDir: join(root, "missing-index"),
+            release,
+          }),
+          model,
+          llm: { async complete(input) {
+            expect(release).not.toHaveBeenCalled();
+            const prompt = JSON.stringify(input.messages);
+            expect(prompt).toContain("Indexed search is available");
+            expect(prompt).not.toContain("missing-checkout");
+            if (passes++ > 0) expect(prompt).toContain("tgrep is unavailable");
+            const content = passes === 1
+              ? { toolCalls: [{ name: toolName, input: { pattern: "ok", literal: true } }] }
+              : { toolCalls: [{ name: "aicr.skip", input: { reason: "lgtm" } }] };
+            return { providerId: "test", modelId: "test", content: JSON.stringify(content), raw: {} };
+          } },
+        },
+      );
+      expect(result.status).toBe("skipped");
+      expect(passes).toBe(2);
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("operator termination aborts an active LLM request and prevents publication", async () => {
     await mkdir("build/tmp", { recursive: true });
     const root = await mkdtemp(join(process.cwd(), "build/tmp/review-cancel-"));
@@ -4404,15 +4454,35 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
-  it("passes aicr-output MCP config with a pinned AICR_OUTPUT_STATE_PATH to adapters", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-mcp-spawn-"));
+  it.each(["native", "docker"] as const)("passes %s search paths and leases to the MCP adapter", async (kind) => {
+    await mkdir("build/tmp", { recursive: true });
+    const tempDir = await mkdtemp(join(process.cwd(), "build/tmp/review-mcp-spawn-"));
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const layout = computeWorkspaceLayout(tempDir, {
+        definitionId: "ws", instanceId: "instance", workPath: "repo",
+      }, "isolated_v2");
+      const release = vi.fn();
+      const tgrepSearch = vi.fn(async () => ({
+        enabled: true, state: "ready" as const, cacheRoot: join(tempDir, "snapshot"),
+        checkoutDir: join(tempDir, "snapshot", "checkout"),
+        indexDir: join(tempDir, "snapshot", "index"),
+        sandboxIndexDir: join(tempDir, "snapshot", "sandbox-index"),
+        release,
+      }));
       let capturedMcpServers: readonly { name: string; config: Record<string, unknown> }[] | undefined;
       const sandbox: SandboxBackend = {
-        kind: "native",
+        kind,
         async materializeFs(layout) {
+          if (kind === "docker") {
+            expect(layout.extraMounts).toEqual([
+              { hostPath: join(tempDir, "snapshot", "checkout"), containerPath: "/workspace/tgrep-cache/checkout", readOnly: true },
+              { hostPath: join(tempDir, "snapshot", "sandbox-index"), containerPath: "/workspace/tgrep-cache/index", readOnly: true },
+            ]);
+          } else {
+            expect(layout.extraMounts).toBeUndefined();
+          }
           await mkdir(layout.agentDir, { recursive: true });
           await mkdir(layout.tmpDir, { recursive: true });
           return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
@@ -4426,7 +4496,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
             durationMs: 5,
           };
         },
-        async teardown() {},
+        async teardown() { expect(release).not.toHaveBeenCalled(); },
       };
       const agentAdapter: AgentAdapter = {
         kind: "claude-code",
@@ -4450,10 +4520,18 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         {
           baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
           sourceRootResolver: () => tempDir,
-          vcs: createVcs(tempDir),
+          runtimeDirsResolver: () => layout,
+          vcs: {
+            ...createVcs(tempDir),
+            async fetchScoped(range, ws) {
+              await writeWorkspaceFile(ws.sourceDir!, "src/app.ts", "const ok = true;\n");
+              return { workspaceId: ws.id, rootDir: ws.sourceDir!, fetchedFiles: [...range.files] };
+            },
+          },
+          tgrepSearch,
           llm: { async complete() { throw new Error("direct llm must not be called"); } },
           model,
-          sandbox,
+          sandboxFactory: () => sandbox,
           agentAdapter,
         },
       );
@@ -4463,6 +4541,12 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       expect(aicrServer).toBeDefined();
       const environment = aicrServer?.config.environment as Record<string, string> | undefined;
       expect(environment?.AICR_OUTPUT_STATE_PATH).toContain(".aicr-output-state.json");
+      expect(environment).toMatchObject({
+        AICR_TGREP_INDEX_DIR: kind === "docker" ? "/workspace/tgrep-cache/index" : join(tempDir, "snapshot", "index"),
+        AICR_TGREP_SOURCE_DIR: kind === "docker" ? "/workspace/tgrep-cache/checkout" : join(tempDir, "snapshot", "checkout"),
+      });
+      expect(tgrepSearch).toHaveBeenCalledWith(expect.objectContaining({ revision: "head" }));
+      expect(release).toHaveBeenCalledTimes(1);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

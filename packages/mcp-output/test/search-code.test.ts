@@ -1,3 +1,4 @@
+import { spawn, type SpawnOptions } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,12 +21,14 @@ describe("aicr.search_code input validation", () => {
         pattern: "TODO",
         path_glob: "*.rs",
         case_insensitive: true,
+        literal: true,
         max_results: 10,
       }),
     ).toEqual({
       pattern: "TODO",
       path_glob: "*.rs",
       case_insensitive: true,
+      literal: true,
       max_results: 10,
     });
   });
@@ -87,6 +90,68 @@ describe("searchCodeHandlerFromEnv", () => {
 });
 
 describe("executeTgrepSearch", () => {
+  function runSearch(script: string, maxResults = 50, timeoutMs?: number) {
+    return executeTgrepSearch(
+      {
+        pattern: "--flag.*",
+        literal: true,
+        path_glob: "*.ts",
+        max_results: maxResults,
+      },
+      {
+        indexDir: "fixture-index",
+        sourceDir: process.cwd(),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        spawnProcess: ((
+          _command: string,
+          args: string[],
+          options: SpawnOptions,
+        ) => {
+          expect(args.slice(-3)).toEqual(["--", "--flag.*", "."]);
+          expect(args).toContain("--fixed-strings");
+          expect(args).toContain("--line-number");
+          expect(args).toContain("*.ts");
+          return spawn(process.execPath, ["-e", script], options);
+        }) as typeof spawn,
+      },
+    );
+  }
+
+  it("limits matches across files and returns partial results with a marker", async () => {
+    const result = await runSearch(
+      'process.stdout.write("./a.ts:1:first\\n./b.ts:1:second\\n./c.ts:1:third\\n")',
+      2,
+    );
+    expect(result).toContain("./a.ts:1:first\n./b.ts:1:second");
+    expect(result).not.toContain("third");
+    expect(result).toContain("truncated");
+  });
+
+  it("preserves exactly the requested number of matches without a truncation marker", async () => {
+    const result = await runSearch(
+      'process.stdout.write("./a.ts:1:first\\n")',
+      1,
+    );
+    expect(result).toBe("./a.ts:1:first");
+  });
+
+  it("caps bytes while preserving valid UTF-8", async () => {
+    const result = await runSearch(
+      'process.stdout.write("./a.ts:1:" + "查".repeat(70_000))',
+    );
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(64 * 1024);
+    expect(result).toContain("truncated");
+    expect(result).not.toContain("�");
+  });
+
+  it("distinguishes an empty result, a child error, and a deadline", async () => {
+    expect(await runSearch("process.exit(1)")).toBe("(no matches)");
+    expect(await runSearch("process.exit(2)")).toContain("failed (exit 2)");
+    expect(await runSearch("setInterval(() => {}, 1000)", 50, 10)).toContain(
+      "timed out",
+    );
+  });
+
   it("degrades gracefully when the binary is missing", async () => {
     const result = await executeTgrepSearch(
       { pattern: "x" },

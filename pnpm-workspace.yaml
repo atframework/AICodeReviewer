@@ -6,6 +6,13 @@ overrides:
   # needs no compile step; 12.x required prebuild-install downloads that break
   # behind restricted egress. Pin cross-package so manifests stay in sync.
   better-sqlite3: 13.0.3
+packageExtensions:
+  # astro2tsx pins emnapi core but omits the matching runtime dependency.
+  # Keep its WASM peer separate from the Rolldown binding's emnapi 2 beta.
+  # https://github.com/withastro/astro/issues/18642
+  "@astrojs/astro2tsx@0.1.3":
+    dependencies:
+      "@emnapi/runtime": "1.11.3"
 onlyBuiltDependencies:
   - sharp
 ignoredBuiltDependencies:

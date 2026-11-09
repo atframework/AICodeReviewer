@@ -6641,11 +6641,15 @@ async function bootstrapServerAppCore(
   );
   concurrencyTimer.unref();
 
-  // tgrep per-workspace search caches (architecture §3.17). One manager owns
-  // all long-lived `tgrep serve` processes; hourly sweep expires caches that
-  // have not been used past `search.tgrep.cleanup_after_days`.
+  // Sweep unused Git search snapshots (architecture §3.17).
+  const tgrepConfig = resolveSearchTgrepConfig(config.search);
   const tgrepIndexManager = new TgrepIndexManager({
-    config: resolveSearchTgrepConfig(config.search),
+    config: {
+      ...tgrepConfig,
+      ...(tgrepConfig.dataDir !== undefined
+        ? { dataDir: resolve(baseDir, tgrepConfig.dataDir) }
+        : {}),
+    },
   });
   const tgrepSweep = async (): Promise<void> => {
     try {
@@ -6694,7 +6698,6 @@ async function bootstrapServerAppCore(
     clearInterval(concurrencyTimer);
     clearInterval(queuedTimeoutTimer);
     clearInterval(tgrepSweepTimer);
-    void tgrepIndexManager.dispose();
     if (imReviewTimer) clearInterval(imReviewTimer);
     for (const run of adminReviews.values())
       run.controller.abort(new ReviewCancelledError());

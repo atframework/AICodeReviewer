@@ -58,8 +58,7 @@ plain `docker run`, point your own probe at `http://localhost:8080/healthz`.
 ## Runtime image baseline
 
 The image intentionally uses `debian:trixie-slim` as the distro base and copies
-the Node LTS userspace from the official `node:lts-trixie-slim` image (currently
-Node 24), so the build and runtime stages share one Debian trixie baseline. AICR
+the Node LTS userspace from the official `node:lts-trixie-slim` image, so the build and runtime stages share one Debian trixie baseline. AICR
 still installs the **official Perforce APT package (`p4-cli`)**: Perforce only
 publishes Ubuntu codename repos (newest verified: noble), and that build runs
 unchanged on trixie's newer glibc. The Perforce package needs glibc and the
@@ -111,7 +110,7 @@ a different version.
 | Build arg | Default | Purpose |
 | --- | --- | --- |
 | `BASE_IMAGE` | `debian:trixie-slim` | Distro base for build and runtime stages |
-| `NODE_IMAGE` | `node:lts-trixie-slim` | Official Node LTS image used as the Node userspace source (currently Node 24). Omit/leave default when the host already rewrites registry pulls through a global mirror |
+| `NODE_IMAGE` | `node:lts-trixie-slim` | Official Node LTS image used as the Node userspace source. Omit/leave default when the host already rewrites registry pulls through a global mirror |
 | `APT_MIRROR` | *(empty)* | Debian apt main archive root, e.g. `http://mirrors.ustc.edu.cn/debian`; security entries are derived by appending `-security` |
 | `PERFORCE_APT_DISTRO` | `noble` | Ubuntu codename for the Perforce APT repo (Perforce only publishes Ubuntu dists; the noble build runs on trixie) |
 | `NPM_REGISTRY` | `https://registry.npmjs.org` | npm/pnpm registry |

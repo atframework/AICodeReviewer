@@ -258,8 +258,9 @@ const contextRangeShape = z.object({
 
 const searchCodeShape = {
   pattern: z.string().min(1).max(500),
-  path_glob: z.string().min(1).optional(),
+  path_glob: z.string().min(1).max(500).optional(),
   case_insensitive: z.boolean().optional(),
+  literal: z.boolean().optional(),
   max_results: z.number().int().min(1).max(200).optional(),
 };
 

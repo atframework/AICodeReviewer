@@ -54,7 +54,7 @@ docker run -d \
 ## 运行时镜像基线
 
 镜像有意采用 `debian:trixie-slim` 作为发行版基线，并从官方 `node:lts-trixie-slim` 镜像拷贝
-Node LTS 用户态（当前为 Node 24），构建与运行两个阶段共享同一 Debian trixie 基线。AICR 仍安装
+Node LTS 用户态，构建与运行两个阶段共享同一 Debian trixie 基线。AICR 仍安装
 **官方 Perforce APT 包（`p4-cli`）**：Perforce 只发布 Ubuntu 代号仓库（已验证最新为 noble），
 该构建可直接运行在 trixie 更新版 glibc 上。Perforce 包需要 glibc 和 Debian 系的包布局 —
 Alpine 风格的基线满足不了这一点。
@@ -100,7 +100,7 @@ Debian 包提供的是 `fdfind` 和 `batcat`。镜像添加了兼容性符号链
 | 构建参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `BASE_IMAGE` | `debian:trixie-slim` | 构建与运行时阶段的发行版基线 |
-| `NODE_IMAGE` | `node:lts-trixie-slim` | 作为 Node 用户态来源的官方 Node LTS 镜像（当前为 Node 24）。当宿主已经通过全局镜像源重写 registry 拉取时，可省略/保持默认 |
+| `NODE_IMAGE` | `node:lts-trixie-slim` | 作为 Node 用户态来源的官方 Node LTS 镜像。当宿主已经通过全局镜像源重写 registry 拉取时，可省略/保持默认 |
 | `APT_MIRROR` | *(空)* | Debian apt 主档案镜像根，例如 `http://mirrors.ustc.edu.cn/debian`；security 条目自动追加 `-security` 后缀 |
 | `PERFORCE_APT_DISTRO` | `noble` | Perforce APT 仓库的 Ubuntu 代号（Perforce 只发布 Ubuntu 源，noble 构建可在 trixie 上运行） |
 | `NPM_REGISTRY` | `https://registry.npmjs.org` | npm/pnpm registry |

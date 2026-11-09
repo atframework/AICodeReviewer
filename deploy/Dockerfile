@@ -5,7 +5,7 @@
 # Configurable build args (for domestic/China deployment):
 #   BASE_IMAGE   — Distro base image for build/runtime stages (default: debian:trixie-slim)
 #   NODE_IMAGE   — Official Node.js image used as the Node LTS userspace source
-#                  (default: node:lts-trixie-slim, currently Node 24)
+#                  (default: node:lts-trixie-slim, a rolling Node LTS tag)
 #   APT_MIRROR   — Debian apt mirror root for the main archive; security
 #                  entries are derived by appending "-security"
 #                  (e.g. http://mirrors.ustc.edu.cn/debian)
@@ -370,9 +370,10 @@ RUN set -eux; \
   install -m 0755 doggo-pkg/doggo /usr/local/bin/doggo; \
   gh_dl 01mf02/jaq "${JAQ_VERSION}" "${jaq_asset}"; \
   install -m 0755 "${jaq_asset}" /usr/local/bin/jaq; \
-  gh_dl Wilfred/difftastic "${DIFFTASTIC_VERSION}" "difft-${difft_target}.tar.gz"; \
+  difft_archive="difft-${DIFFTASTIC_VERSION}-${difft_target}.tar.gz"; \
+  gh_dl Wilfred/difftastic "${DIFFTASTIC_VERSION}" "${difft_archive}"; \
   mkdir -p difft-pkg; \
-  tar xzf "difft-${difft_target}.tar.gz" -C difft-pkg; \
+  tar xzf "${difft_archive}" -C difft-pkg; \
   install -m 0755 difft-pkg/difft /usr/local/bin/difft; \
   gh_dl ouch-org/ouch "${OUCH_VERSION}" "ouch-${tarch}-unknown-linux-musl.tar.gz"; \
   tar xzf "ouch-${tarch}-unknown-linux-musl.tar.gz"; \

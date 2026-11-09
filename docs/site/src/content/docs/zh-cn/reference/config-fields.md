@@ -499,6 +499,18 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 | `agent.web_search.searxng.language` | string | — | SearXNG 语言过滤 |
 | `agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG 安全搜索级别 |
 
+## `search.tgrep`
+
+这些服务端设置用于 Git 评审的索引搜索。查询参数见 [MCP 工具](/zh-cn/integrations/mcp-tools/)。
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `search.tgrep.enabled` | boolean | `true` | 安装 tgrep 时启用索引搜索。 |
+| `search.tgrep.data_dir` | string | `<instanceRoot>/.tgrep-cache` | 可选的服务端本地缓存根目录。相对路径以配置基准目录为准。 |
+| `search.tgrep.index_ttl_seconds` | int > 0 | `86400` | 快照可复用的最长时间。到期后下一次评审该 revision 时重新构建。 |
+| `search.tgrep.cleanup_after_days` | int > 0 | `7` | 每个仓库最近使用的快照可闲置保留的天数。在途评审继续持有原快照。 |
+| `search.tgrep.build_timeout_seconds` | int > 0 | `600` | 一次 Git 归档与 tgrep 索引构建的时限。索引失败时用 VCS 上下文继续评审。 |
+
 ## `review`
 
 | 字段 | 类型 | 默认值 | 描述 |

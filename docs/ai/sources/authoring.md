@@ -37,12 +37,13 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - Sources:
   - <https://www.augmentcode.com/blog/how-we-built-high-quality-ai-code-review-agent>
   - <https://code.claude.com/docs/en/best-practices>
+  - <https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts>
   - <https://www.anthropic.com/engineering/writing-tools-for-agents>
-  - <https://developers.openai.com/blog/custom-code-review-rules-for-codex>
-  - <https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/pr_reviewer_prompts.toml>
-- Evidence: Prioritize concrete defects and precise tool contracts; injected diffs and targeted context reduce unnecessary retrieval. Empty findings are valid. See the current repository prompt rationale rather than copying a vendor prompt.
-- `last_checked`: 2026-08-08
-- `next_review`: 2026-11-08
+  - <https://github.com/openai/codex/blob/main/codex-rs/prompts/templates/review/rubric.md>
+  - <https://github.com/The-PR-Agent/pr-agent/blob/main/pr_agent/settings/pr_reviewer_prompts.toml>
+- Evidence: Prioritize concrete defects, small line ranges, targeted context and precise tool contracts. Verify applicable repository rules and cite their source when they support a finding. Empty findings are valid.
+- `last_checked`: 2026-11-09
+- `next_review`: 2027-02-09
 - `update_trigger`: Re-check before changing the default review system prompt, `buildJsonToolContract()`, MCP tool descriptions, or the review eval fixtures.
 
 ## Karpathy-inspired coding-agent behavior

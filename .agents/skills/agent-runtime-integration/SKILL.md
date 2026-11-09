@@ -58,9 +58,10 @@ verify host VCS execution and follow-up replay as well as tool discovery.
 For tgrep search (architecture §3.17), keep the three surfaces in sync:
 `packages/server/src/tgrep-index.ts` (per-workspace cache lifecycle),
 `packages/mcp-output/src/search-code.ts` (shared bounded execution), and the
-review prompt's search guidance; sandbox path translation (read-only
-`/workspace/tgrep-cache` mount, `AICR_TGREP_*` env) lives in the orchestrator's
-sandbox adaptation, and search failures must always degrade to `rg`.
+review prompt's search guidance. Keep the snapshot leased through all follow-up
+passes and teardown. Container index metadata must name the sandbox-visible
+checkout, or tgrep silently scans instead. Verify actual indexed queries with
+`--stats`. Search failures fall back to materialized shell reads or VCS context.
 For live usage, exercise split stdout records before exit and final accounting
 after exit; previews must not be added twice. Run applicable final gates from
 [the baseline](../../../docs/ai/AGENTS.repository-baseline.md).

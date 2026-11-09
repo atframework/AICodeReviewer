@@ -23,6 +23,8 @@ export interface SearchCodeInput {
   /** Optional glob restricting matched files (e.g. "*.rs"). */
   readonly path_glob?: string;
   readonly case_insensitive?: boolean;
+  /** Treat the pattern as literal text. */
+  readonly literal?: boolean;
   /** Maximum matches returned; default 50, hard cap 200. */
   readonly max_results?: number;
 }
@@ -40,9 +42,10 @@ export const searchCodeInputSchema = {
   type: "object",
   required: ["pattern"],
   properties: {
-    pattern: { type: "string" },
-    path_glob: { type: "string" },
+    pattern: { type: "string", minLength: 1, maxLength: 500 },
+    path_glob: { type: "string", minLength: 1, maxLength: 500 },
     case_insensitive: { type: "boolean" },
+    literal: { type: "boolean" },
     max_results: { type: "integer", minimum: 1, maximum: 200 },
   },
 } as const;
@@ -62,10 +65,12 @@ export function parseSearchCodeInput(input: unknown): SearchCodeInput {
   }
   if (
     raw.path_glob !== undefined &&
-    (typeof raw.path_glob !== "string" || raw.path_glob.length === 0)
+    (typeof raw.path_glob !== "string" ||
+      raw.path_glob.length === 0 ||
+      raw.path_glob.length > 500)
   ) {
     throw new TypeError(
-      "aicr.search_code path_glob must be a non-empty string.",
+      "aicr.search_code path_glob must be a string of 1..500 characters.",
     );
   }
   if (
@@ -73,6 +78,9 @@ export function parseSearchCodeInput(input: unknown): SearchCodeInput {
     typeof raw.case_insensitive !== "boolean"
   ) {
     throw new TypeError("aicr.search_code case_insensitive must be a boolean.");
+  }
+  if (raw.literal !== undefined && typeof raw.literal !== "boolean") {
+    throw new TypeError("aicr.search_code literal must be a boolean.");
   }
   let maxResults: number | undefined;
   if (raw.max_results !== undefined) {
@@ -93,6 +101,7 @@ export function parseSearchCodeInput(input: unknown): SearchCodeInput {
     ...(typeof raw.case_insensitive === "boolean"
       ? { case_insensitive: raw.case_insensitive }
       : {}),
+    ...(typeof raw.literal === "boolean" ? { literal: raw.literal } : {}),
     ...(maxResults !== undefined ? { max_results: maxResults } : {}),
   };
 }
@@ -101,13 +110,8 @@ export function parseSearchCodeInput(input: unknown): SearchCodeInput {
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-function capOutput(text: string): string {
-  if (Buffer.byteLength(text, "utf8") <= MAX_OUTPUT_BYTES) return text;
-  const truncated = Buffer.from(text, "utf8")
-    .subarray(0, MAX_OUTPUT_BYTES)
-    .toString("utf8");
-  return `${truncated}\n… output truncated at ${MAX_OUTPUT_BYTES} bytes; narrow the pattern or path_glob.`;
-}
+const TRUNCATION_HINT =
+  "\n… Search output truncated. Narrow the pattern or path_glob.";
 
 /**
  * Execute one bounded tgrep query. Returns the raw matches, a "(no matches)"
@@ -118,21 +122,30 @@ export async function executeTgrepSearch(
   input: SearchCodeInput,
   options: SearchCodeOptions,
 ): Promise<string> {
+  const maxResults = input.max_results ?? 50;
   const args = [
     "--index-path",
     options.indexDir,
-    "--heading",
+    "--no-heading",
+    "--line-number",
+    "--with-filename",
+    "--path-separator",
+    "/",
+    "--hidden",
     "--max-count",
-    String(Math.min(input.max_results ?? 50, 200)),
+    String(maxResults + 1),
+    ...(input.literal ? ["--fixed-strings"] : []),
     ...(input.case_insensitive ? ["--ignore-case"] : []),
     ...(input.path_glob ? ["--glob", input.path_glob] : []),
     "--",
     input.pattern,
-    options.sourceDir,
+    ".",
   ];
   return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let lines = 0;
+    let truncated = false;
     let settled = false;
     const finish = (text: string): void => {
       if (!settled) {
@@ -143,7 +156,8 @@ export async function executeTgrepSearch(
     let child;
     try {
       child = (options.spawnProcess ?? spawn)("tgrep", args, {
-        stdio: ["ignore", "pipe", "pipe"],
+        cwd: options.sourceDir,
+        stdio: ["ignore", "pipe", "ignore"],
       });
     } catch {
       finish(
@@ -157,14 +171,28 @@ export async function executeTgrepSearch(
         "tgrep search timed out; narrow the pattern or use `rg` on the materialized files.",
       );
     }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
-      if (Buffer.byteLength(stdout, "utf8") > MAX_OUTPUT_BYTES * 2) {
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (settled || truncated) return;
+      let end = Math.min(
+        chunk.length,
+        MAX_OUTPUT_BYTES - Buffer.byteLength(TRUNCATION_HINT) - bytes,
+      );
+      for (let offset = 0; offset < end;) {
+        if (lines === maxResults) {
+          end = offset;
+          break;
+        }
+        const newline = chunk.indexOf(10, offset);
+        if (newline < 0 || newline >= end) break;
+        lines += 1;
+        offset = newline + 1;
+      }
+      chunks.push(chunk.subarray(0, end));
+      bytes += end;
+      if (end < chunk.length) {
+        truncated = true;
         child.kill("SIGKILL");
       }
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
     });
     child.on("error", () => {
       clearTimeout(timer);
@@ -172,10 +200,17 @@ export async function executeTgrepSearch(
         "tgrep is unavailable in this environment; use `rg` on the materialized files instead.",
       );
     });
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       clearTimeout(timer);
+      const stdout = new TextDecoder()
+        .decode(Buffer.concat(chunks), { stream: truncated })
+        .trimEnd();
+      if (truncated) {
+        finish(stdout + TRUNCATION_HINT);
+        return;
+      }
       if (code === 0) {
-        finish(stdout.trim().length > 0 ? capOutput(stdout) : "(no matches)");
+        finish(stdout || "(no matches)");
         return;
       }
       if (code === 1 && stdout.trim().length === 0) {
@@ -183,7 +218,7 @@ export async function executeTgrepSearch(
         return;
       }
       finish(
-        `tgrep search failed (${stderr.trim().split("\n")[0] ?? `exit ${code}`}); use \`rg\` on the materialized files instead.`,
+        `tgrep search failed (exit ${code}). Use read-only shell search or aicr.fetch_more_context.`,
       );
     });
   });
