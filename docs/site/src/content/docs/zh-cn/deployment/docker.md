@@ -107,7 +107,7 @@ Debian 包提供的是 `fdfind` 和 `batcat`。镜像添加了兼容性符号链
 | `NPM_STRICT_SSL` | `true` | 使用 HTTP 镜像时设为 `false` |
 | `PIP_INDEX_URL` | `https://pypi.org/simple` | pip simple index URL |
 | `KUBERNETES_APT_REPO_BASE` | `https://pkgs.k8s.io/core:/stable:` | kubectl APT 仓库基址（必须以 `core:/stable:` 结尾） |
-| `KUBERNETES_APT_REPO_VERSION` | `v1.36` | kubectl 对应的 Kubernetes 小版本仓库 |
+| `KUBERNETES_APT_REPO_VERSION` | `v1.37` | kubectl 对应的 Kubernetes 小版本仓库 |
 | `HELM_APT_REPO` | `https://packages.buildkite.com/helm-linux/helm-debian/any/` | Helm Debian 包仓库 |
 | `HELM_APT_KEY_URL` | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | Helm 仓库签名密钥 |
 | `YQ_VERSION` | `v4.53.2` | Mike Farah `yq` 发布版本 |

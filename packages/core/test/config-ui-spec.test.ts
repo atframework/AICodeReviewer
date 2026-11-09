@@ -92,6 +92,7 @@ const AUDIT_PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["outputs.", "channels"],
   ["prompts.", "prompts"],
   ["review.", "review"],
+  ["search.", "review"],
   ["agent.", "agent"],
   ["compression.", "agent"],
   ["workspaces.", "workspaces"],

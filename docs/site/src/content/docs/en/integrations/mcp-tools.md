@@ -23,10 +23,20 @@ agent runtimes that call these tools, see
 | `aicr.try_blame` | Request VCS-verified, best-effort line attribution without file content |
 | `aicr.get_review_commits` | Query reviewed commits/revisions, files, patches and optional author/repository metadata |
 | `aicr.get_review_context` | Recover the current review endpoints, repository/branch identities and effective file scope |
+| `aicr.search_code` | Search code through the per-repository tgrep index (regex, narrowed by glob/case/limit) |
 
 `aicr.fetch_more_context` and `aicr.try_blame` are read-only context tools.
 The orchestrator replays them through the configured VCS adapter and runs a
 final follow-up pass with the fetched content/attribution.
+
+`aicr.search_code` is available for git reviews when the image ships tgrep:
+the server maintains a persistent per-workspace index cache
+(`<instanceRoot>/.tgrep-cache/`), refreshed when the reviewed head changes or
+`search.tgrep.index_ttl_seconds` elapses, and removed after
+`cleanup_after_days` without use. The index is an asynchronously refreshed
+snapshot — verify the current content of a matched line with
+`aicr.fetch_more_context` or `rg` before reporting a problem. When the index
+is unavailable the tool returns degraded guidance and the agent uses `rg`.
 
 ## `aicr.get_review_commits`
 

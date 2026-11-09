@@ -20,8 +20,8 @@
     "generate:brand-assets": "node scripts/generate-brand-assets.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.7",
-    "astro": "^7.4.2",
+    "@astrojs/starlight": "^0.42.10",
+    "astro": "^7.4.7",
     "sharp": "^0.35.5"
   },
   "devDependencies": {

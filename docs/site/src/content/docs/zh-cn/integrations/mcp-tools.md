@@ -18,8 +18,11 @@ AICR 向评审 agent 暴露一个小而稳定的 MCP 工具集。agent 调用这
 | `aicr.try_blame` | 请求 VCS 校验的、尽力而为的行级归因（不返回文件内容） |
 | `aicr.get_review_commits` | 查询评审涉及的 commit/revision、文件、补丁及可选作者/仓库信息 |
 | `aicr.get_review_context` | 恢复当前评审的端点、仓库/分支身份和实际文件范围 |
+| `aicr.search_code` | 用每仓库独立的 tgrep 索引做代码搜索（正则，可按 glob/大小写/条数收窄） |
 
 `aicr.fetch_more_context` 和 `aicr.try_blame` 是只读上下文工具。orchestrator 通过配置的 VCS 适配器回放它们，并带获取到的内容/归因跑一次最终 follow-up pass。
+
+`aicr.search_code` 在 git 评审且镜像内置 tgrep 时可用：服务端为每个 workspace 维护持久索引缓存（`<instanceRoot>/.tgrep-cache/`），head 变化或超过 `search.tgrep.index_ttl_seconds` 时刷新，超过 `cleanup_after_days` 未使用则清除。索引是异步刷新的快照；报告问题前必须用 `aicr.fetch_more_context` 或 `rg` 核验匹配行的当前内容。索引不可用时工具返回降级提示，agent 改用 `rg`。
 
 ## `aicr.get_review_commits`
 

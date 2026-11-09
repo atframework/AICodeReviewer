@@ -706,6 +706,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - `aicr.try_blame`
   - `aicr.get_review_commits`
   - `aicr.get_review_context`
+  - `aicr.search_code`（tgrep 索引搜索，见 §3.17）
 - 审查元数据查询由 `packages/server/src/review-data.ts` 接入 VCS；原生 MCP 将请求记入
   `reviewDataRequests`，宿主查询后回填，JSON/stream 回退共用相同 handler。
   `get_review_commits` 的 ids/files/diffs/summary 四种投影支持分页及作者、仓库信息开关；
@@ -1659,6 +1660,40 @@ secret 授权来自原始文件引用及仅文件可写的 config_sources.secret
 P4/P5 本地验收见 M19，P6 管理 UI 验收见 M20，P7/P8 集成与同版本跨进程验收见
 M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI 排空和两平台
 真实服务最终证据见 [M24](milestones/M24.md)。
+
+### 3.17 tgrep 代码搜索缓存
+
+目标：让内置（native-llm）与外部 Agent CLI 在代码分析时都能利用仓库级索引，
+避免每次评审从零扫描大仓库；索引必须每仓库独立、可刷新、会过期，不留存无效索引。
+
+- 镜像内置 `microsoft/tgrep` 静态二进制（`TGREP_VERSION` 固定版本，amd64/arm64，
+  走 `GH_RELEASE_PREFIX` 镜像前缀）。不采用上游 `install-agent.sh` 的 MCP 集成
+  （仅 Codex/pi 受益且引入 Python 运行时）；统一走 AICR 自控的索引管理 +
+  prompt/工具引导，所有 adapter 行为一致。
+- 服务端 `packages/server/src/tgrep-index.ts` 管理每 workspace 一个持久缓存，
+  位于 `<instanceRoot>/.tgrep-cache/`：`checkout/`（评审 head 的完整工作树）、
+  `index/`（tgrep 磁盘索引）、`meta.json`（schema 版本、revision、lastUsedAt、serverPid）。
+  索引不放在 per-run 稀疏物化目录（`runs/<id>/source` 只含变更文件且运行后删除），
+  也不写进 git clone 缓存。
+- 刷新/过期机制：head revision 变化或超过 `search.tgrep.index_ttl_seconds`
+  （默认 86400s）时重建 checkout（`git archive <rev> | tar -x`，原子换名）并重启
+  `tgrep serve`（poll 模式）让启动 reconciliation 重读变化文件；每 run 更新
+  lastUsedAt；每小时 sweep 删除超过 `search.tgrep.cleanup_after_days`（默认 7 天）
+  未使用且 server 已死的缓存；进程关闭时回收本进程启动的 serve。
+- 仅 git 评审接入（P4/SVN 没有可 archive 的 clone 缓存，直接跳过）；dry-run 不建索引。
+- Agent 使用面：容器沙箱把整个缓存根只读挂载到 `/workspace/tgrep-cache`
+  （checkout 与 index 随沙箱路径翻译）；native 沙箱直接用宿主路径。
+  task context 注入搜索引导；系统提示词约定“索引是快照不是新鲜度信号，
+  报告前用 `aicr.fetch_more_context` / `rg` / `--no-index` 核验当前行”。
+- `aicr.search_code` 工具（`packages/mcp-output/src/search-code.ts`）对两条路径
+  一致：外部 agent 经 MCP server 同步执行（env `AICR_TGREP_INDEX_DIR` /
+  `AICR_TGREP_SOURCE_DIR` 由 sandbox 适配层注入），native-llm 经 orchestrator
+  宿主侧执行并作为 context 响应进入 follow-up。有界输出（64KiB/200 条），
+  环境失败降级为 `rg` 引导，绝不让搜索失败中断评审。
+- 配置：可选顶层 `search.tgrep`（enabled/data_dir/index_ttl_seconds/
+  cleanup_after_days/build_timeout_seconds），与 `im` 一样缺省时不进入规范化文档，
+  快照 hash 保持位一致；代码默认值在 `resolveSearchTgrepConfig`。`data_dir` 保留给
+  外部索引安置场景，当前 workspace 缓存固定在 instanceRoot 下。
 
 ## 4. 默认评审 Prompt 规范
 

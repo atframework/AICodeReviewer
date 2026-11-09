@@ -85,6 +85,7 @@ describe("AICR MCP Streamable HTTP server", () => {
 				"aicr.publish_summary",
 				"aicr.skip",
 				"aicr.fetch_more_context",
+				"aicr.search_code",
 				"aicr.try_blame",
 			]);
 

@@ -55,9 +55,11 @@ describe("deploy assets", () => {
     const script = readRepoFile("deploy/deploy.sh");
 
     expect(dockerfile).toContain("ARG KUBERNETES_APT_REPO_BASE=https://pkgs.k8s.io/core:/stable:");
-    expect(dockerfile).toContain("ARG KUBERNETES_APT_REPO_VERSION=v1.36");
+    expect(dockerfile).toContain("ARG KUBERNETES_APT_REPO_VERSION=v1.37");
     expect(dockerfile).toContain("ARG HELM_APT_REPO=https://packages.buildkite.com/helm-linux/helm-debian/any/");
-    expect(dockerfile).toContain("ARG YQ_VERSION=v4.53.2");
+    expect(dockerfile).toContain("ARG YQ_VERSION=v4.54.3");
+    expect(dockerfile).toContain("ARG TGREP_VERSION=v1.2.7");
+    expect(dockerfile).toContain("install -m 0755 tgrep-pkg/tgrep /usr/local/bin/tgrep;");
     expect(dockerfile).toContain("  kubectl \\");
     expect(dockerfile).toContain("  helm \\");
     expect(dockerfile).toContain("  podman \\");

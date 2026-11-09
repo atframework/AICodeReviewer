@@ -19,7 +19,7 @@
 #   PIP_TRUSTED_HOST — Optional pip trusted-host for HTTP/private mirrors
 #   KUBERNETES_APT_REPO_BASE — kubectl APT repo base ending in core:/stable:
 #                  (e.g. https://mirrors.tencent.com/kubernetes_new/core:/stable:)
-#   KUBERNETES_APT_REPO_VERSION — Kubernetes minor repo for kubectl (default: v1.36)
+#   KUBERNETES_APT_REPO_VERSION — Kubernetes minor repo for kubectl (default: v1.37)
 #   HELM_APT_REPO / HELM_APT_KEY_URL — Helm Debian package repo and signing key
 #   YQ_VERSION / YQ_DOWNLOAD_BASE — Mike Farah yq release version and download base
 #   GH_RELEASE_PREFIX — Optional URL prefix for GitHub release downloads of the
@@ -27,7 +27,8 @@
 #                  ghproxy-style mirrors or an internal cache; default: direct)
 #   *_VERSION    — Pinned upstream versions for the static CLI tools installed
 #                  from GitHub releases (dust, xh, doggo, jaq, difftastic, ouch,
-#                  procs, watchexec, tailspin, erdtree)
+#                  procs, watchexec, tailspin, erdtree, tgrep). Version bumps are
+#                  verified against upstream releases before changing.
 # =============================================================================
 
 ARG NODE_IMAGE=node:lts-trixie-slim
@@ -146,22 +147,23 @@ ARG PERFORCE_APT_DISTRO=noble
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_TRUSTED_HOST=
 ARG KUBERNETES_APT_REPO_BASE=https://pkgs.k8s.io/core:/stable:
-ARG KUBERNETES_APT_REPO_VERSION=v1.36
+ARG KUBERNETES_APT_REPO_VERSION=v1.37
 ARG HELM_APT_REPO=https://packages.buildkite.com/helm-linux/helm-debian/any/
 ARG HELM_APT_KEY_URL=https://packages.buildkite.com/helm-linux/helm-debian/gpgkey
-ARG YQ_VERSION=v4.53.2
+ARG YQ_VERSION=v4.54.3
 ARG YQ_DOWNLOAD_BASE=https://github.com/mikefarah/yq/releases/download
 ARG GH_RELEASE_PREFIX=
-ARG DUST_VERSION=v1.2.5
-ARG XH_VERSION=v0.26.2
-ARG DOGGO_VERSION=v1.4.0
-ARG JAQ_VERSION=v3.1.1
-ARG DIFFTASTIC_VERSION=0.70.0
-ARG OUCH_VERSION=0.8.2
+ARG DUST_VERSION=v1.2.7
+ARG XH_VERSION=v0.26.3
+ARG DOGGO_VERSION=v1.4.2
+ARG JAQ_VERSION=v3.1.2
+ARG DIFFTASTIC_VERSION=0.72.0
+ARG OUCH_VERSION=0.8.3
 ARG PROCS_VERSION=v0.14.12
-ARG WATCHEXEC_VERSION=v2.7.0
+ARG WATCHEXEC_VERSION=v2.8.0
 ARG TAILSPIN_VERSION=7.0.0
 ARG ERDTREE_VERSION=v3.1.2
+ARG TGREP_VERSION=v1.2.7
 ENV NODE_ENV=production
 ENV npm_config_registry=${NPM_REGISTRY}
 ENV npm_config_strict_ssl=${NPM_STRICT_SSL}
@@ -338,10 +340,11 @@ RUN set -eux; \
 
 # Modern CLI tools installed from pinned upstream GitHub release static
 # binaries: either unpackaged in Debian trixie (doggo, jaq, difftastic, ouch,
-# watchexec, erdtree) or deliberately newer than the trixie apt build (dust,
-# xh, procs, tailspin). Pinned versions keep builds reproducible; bump the
-# *_VERSION args above to upgrade. Upstream only publishes amd64/arm64 Linux
-# artifacts, so other architectures skip this layer.
+# watchexec, erdtree, tgrep) or deliberately newer than the trixie apt build
+# (dust, xh, procs, tailspin). Pinned versions keep builds reproducible; bump
+# the *_VERSION args above to upgrade (verify upstream release asset names
+# first). Upstream only publishes amd64/arm64 Linux artifacts, so other
+# architectures skip this layer.
 # GH_RELEASE_PREFIX optionally prefixes every release URL for ghproxy-style
 # mirrors or internal caches on networks that cannot reach github.com directly
 # (the deploy.sh build-proxy autodetect also covers these downloads).
@@ -390,6 +393,10 @@ RUN set -eux; \
   mkdir -p erd-pkg; \
   tar xzf "erd-${ERDTREE_VERSION}-${tarch}-unknown-linux-musl.tar.gz" -C erd-pkg; \
   install -m 0755 erd-pkg/erd /usr/local/bin/erd; \
+  gh_dl microsoft/tgrep "${TGREP_VERSION}" "tgrep-${TGREP_VERSION}-${tarch}-unknown-linux-musl.tar.gz"; \
+  mkdir -p tgrep-pkg; \
+  tar xzf "tgrep-${TGREP_VERSION}-${tarch}-unknown-linux-musl.tar.gz" -C tgrep-pkg; \
+  install -m 0755 tgrep-pkg/tgrep /usr/local/bin/tgrep; \
   cd /; \
   rm -rf /tmp/mtcli
 

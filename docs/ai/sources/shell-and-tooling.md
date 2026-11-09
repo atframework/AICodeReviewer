@@ -16,6 +16,33 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `next_review`: 2026-12-03
 - `update_trigger`: Re-check when bumping the pinned `*_VERSION` args in `deploy/Dockerfile`, when the distro base changes, or when adding/removing a tool in the runtime image baseline.
 
+## tgrep integration and 2026-11 toolchain bump
+
+- Sources:
+  - <https://github.com/microsoft/tgrep> README + AGENTS.md at `v1.2.7` (index
+    freshness semantics, `--index-path`/`--no-index`, serve poll/watch, agent
+    tool definition sketch, install.sh asset layout)
+  - GitHub Releases API `repos/<owner>/<repo>/releases/latest` re-checked on
+    2026-11-05 for every pinned static CLI in `deploy/Dockerfile`
+  - <https://dl.k8s.io/release/stable.txt> = v1.37.2; `pkgs.k8s.io` key probes
+    confirmed v1.37 and v1.38 repos exist (v1.39+ absent)
+  - npm registry `view <pkg> version` on 2026-11-05: @kilocode/cli 7.8.27,
+    @oh-my-pi/pi-coding-agent 18.18.3, bun 1.4.4
+- Evidence: tgrep search resolves server → on-disk index → filesystem scan;
+  `Indexing: complete` is readiness, not freshness. Asset names verified per
+  release before each `*_VERSION` bump (dust v1.2.7, xh v0.26.3, doggo v1.4.2,
+  jaq v3.1.2, difftastic 0.72.0, ouch 0.8.3, watchexec v2.8.0, yq v4.54.3,
+  tgrep v1.2.7; procs/tailspin/erdtree unchanged). AICR integration is
+  image binary + server-managed per-workspace cache + `aicr.search_code`,
+  not upstream install-agent.sh. GitHub Actions majors verified current
+  (checkout v7, setup-node v6, pnpm/action-setup v6, docker/* v4/v6/v7,
+  stale v10, attest-build-provenance v3). zod 4 and typescript 7 majors
+  deliberately deferred.
+- `last_checked`: 2026-11-05
+- `next_review`: 2027-02-05
+- `update_trigger`: tgrep version bump or cache-lifecycle changes, pinned CLI
+  upgrades, kubectl minor changes, external agent CLI behavior changes.
+
 ## PowerShell 7+ behavior for Windows shell work
 
 - Sources:

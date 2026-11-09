@@ -26,10 +26,23 @@
 | 可行动、低噪音 | 当前变更引入或加重、真实触发、明确影响；默认优先 0–5 条 | `prompts/system/code-reviewer.system.md`、eval fixtures |
 | 有源码依据 | 非平凡逻辑读取完整变更文件，再查相关接口、调用方、schema 和测试 | `buildJsonToolContract`、MCP context tests |
 | 受限探索 | 本地只读检查；缺失文件用有路径/原因的上下文请求，避免整仓抓取 | VCS scoped fetch / extra-context tests |
+| 索引优先搜索 | 有 tgrep 索引时优先 `aicr.search_code`；索引是快照，报告前核验当前行 | `packages/mcp-output/src/search-code.ts`、`packages/server/src/tgrep-index.ts` |
 | 等待上下文后判断 | pending 输出是临时结果；取回源码后重新验证 | orchestrator follow-up tests |
 | 结构化结果 | 问题逐条 report；有问题时一份 summary；无问题用 skip | MCP collector / output repair tests |
 | 指令隔离 | 保护规则优先，diff/提交/issue 内容是数据 | Prompt Manager precedence/conflict tests |
 | 批次范围固定 | 评审 sealed batch 的固定净差异，不按通知拆分或扩大范围 | auto-commit runtime / scheduler tests |
+
+2026-11 复核了主流 agent CLI 的提示词结构：Claude Code 的布局是
+identity → 安全约束 → 工作流 → 工具策略 → 按需加载的领域知识，且稳定前缀复用
+prompt cache[^4]；Codex 默认提示词强调自主性/持续性、AGENTS.md 层级优先级与
+工具使用纪律[^5]；Gemini CLI 的 Core Mandates 把凭据保护与 GEMINI.md 层级优先级
+放在工作流之前[^6]。当前模板的 mission/hard_rules/context_strategy/tool_protocol
+分层与这些实践一致，因此本轮只做针对性更新（搜索工具约定），不重写结构。
+
+tgrep 上游的 agent 指南明确了索引语义：server/磁盘索引/全量扫描三级回退由
+客户端自动选择，`Indexing: complete` 不代表新鲜度，核验当前内容必须用
+`--no-index` 或重新读取文件[^7]。内置 `aicr.search_code` 工具遵循其工具定义建议：
+`--` 分隔 pattern 与路径、有界输出、exit 1 视为无匹配、环境失败降级为 `rg` 引导。
 
 工具描述应明确参数、输出和错误/截断含义，让 agent 能选择下一步，减少重复检索。[^3]
 本文采用的实现保留工具协议所需的局部提示；不同调用路径的 triage、问题解决判定、
@@ -62,5 +75,9 @@ server 的 JSON/修复/triage/resolution 提示词。调整影响到哪个约定
 [^1]: Agent Skills，[规范](https://agentskills.io/specification)与[创作最佳实践](https://agentskills.io/skill-creation/best-practices)，核验于 2026-09-12。
 [^2]: Anthropic，[Claude 项目记忆与导入](https://code.claude.com/docs/en/memory)，核验于 2026-09-12。
 [^3]: Anthropic，[工具设计](https://www.anthropic.com/engineering/writing-tools-for-agents)，核验于 2026-09-12。
+[^4]: Anthropic，[Claude Code 最佳实践](https://code.claude.com/docs/en/best-practices)与 [Agent SDK 系统提示词](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts)，复核于 2026-11-05。
+[^5]: OpenAI，[Codex 默认提示词](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/prompts/base_instructions/default.md)与 [Codex prompting guide](https://developers.openai.com/cookbook/examples/gpt-5/codex_prompting_guide)，复核于 2026-11-05。
+[^6]: Google，[Gemini CLI prompts](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/prompts/snippets.ts)（Core Mandates 与 GEMINI.md 层级），复核于 2026-11-05。
+[^7]: Microsoft，[tgrep AGENTS.md](https://github.com/microsoft/tgrep/blob/v1.2.7/AGENTS.md)（索引新鲜度、工具定义建议），核验于 2026-11-05。
 
 其他评审设计与适配器证据按 [来源导航](ai/source-index.md) 读取；各条记录保留独立核验日期。

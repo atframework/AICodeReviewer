@@ -25,6 +25,15 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   verify package-local resolution before changing manifests (`redis-queue.ts`).
   Unsupported Node can kill test workers before assertions. Compare expected
   test files with collected results rather than trusting partial green output.
+- pnpm store mismatch on Windows developer hosts: `ERR_PNPM_UNEXPECTED_STORE`
+  means `node_modules` was installed by a different pnpm major than the one now
+  running (root `packageManager: pnpm@10.20.0` also makes pnpm ≥11 auto-switch
+  versions mid-invocation, so `npx pnpm@11` still executes 10). Fix by
+  reinstalling with the repo-pinned pnpm (`CI=true pnpm install` relinks to the
+  current store); do not edit global store-dir config to chase the old path.
+  `pnpm update -r` only upgrades inside declared semver ranges; pinned exact
+  versions (e.g. `@slack/socket-mode`) and caret floors behind the latest
+  (e.g. `^0.300.0` vs 0.301.0) need a manifest edit first.
 - Check TypeScript/ESLint/Astro peers together. When the newest releases have
   incompatible peer ranges, record and validate a compatible exception rather
   than forcing an unsupported pair. TypeScript 6 runtime projects should declare

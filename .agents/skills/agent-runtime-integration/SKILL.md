@@ -55,6 +55,12 @@ work or move required runtime safety/output rules behind them.
 
 For MCP schema changes, update server/client tests and prompt guidance together;
 verify host VCS execution and follow-up replay as well as tool discovery.
+For tgrep search (architecture §3.17), keep the three surfaces in sync:
+`packages/server/src/tgrep-index.ts` (per-workspace cache lifecycle),
+`packages/mcp-output/src/search-code.ts` (shared bounded execution), and the
+review prompt's search guidance; sandbox path translation (read-only
+`/workspace/tgrep-cache` mount, `AICR_TGREP_*` env) lives in the orchestrator's
+sandbox adaptation, and search failures must always degrade to `rg`.
 For live usage, exercise split stdout records before exit and final accounting
 after exit; previews must not be added twice. Run applicable final gates from
 [the baseline](../../../docs/ai/AGENTS.repository-baseline.md).

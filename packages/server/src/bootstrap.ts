@@ -16,11 +16,16 @@ import {
   reviewMemoryScope,
   createConfigStoreFromDatabaseConfig,
   resolveConfigSecretSealing,
+  resolveSearchTgrepConfig,
   type AppConfig,
   type ConfigStore,
   type ReviewEvent,
 } from "@aicr/core";
-import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "@aicr/core";
+import {
+  createQueueWorker,
+  type QueueJobHandler,
+  type QueueWorker,
+} from "@aicr/core";
 import { createAgentAdapter, type AgentAdapter } from "@aicr/agents";
 import {
   createChatClientFromModelSpec,
@@ -126,27 +131,53 @@ import {
 
 import type { VcsWebhookConfig } from "./webhook-common.js";
 import { RoutingReceiptResolver } from "./routing-resolver.js";
-import { createWorkspaceRuntime, type WorkspaceRuntime } from "./workspace-runtime.js";
+import {
+  createWorkspaceRuntime,
+  type WorkspaceRuntime,
+} from "./workspace-runtime.js";
 import type { P4TriggerConfig } from "./p4-webhook.js";
 import type { SvnTriggerConfig } from "./svn-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
-import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
+import type {
+  IssueTriageRuntimeOptions,
+  WorkspaceIssueTriagePolicy,
+} from "./issue-triage.js";
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
 import { createAuthorIdentityGuesser } from "./author-identity.js";
-import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
-import { persistFailedRunToStore, persistRejectedAutoCommitRun, persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
-import { type AutoCommitStore, type StreamKeyInput, resolveAutoCommitPolicy } from "@aicr/core";
-import { createAutoCommitStoreFromConfig } from "@aicr/core";
-import { resolvePullRequestSchedule, resolvePullRequestTargetBranches } from "@aicr/core";
-import { AutoCommitRuntime, createAutoCommitBatchExecutor, reviewEventForBatch } from "./auto-commit-runtime.js";
+import type {
+  ServerAppOptions,
+  ServerReviewOrchestrationOptions,
+} from "./index.js";
 import {
-  AutoCommitScheduler,
-} from "./auto-commit-scheduler.js";
+  persistFailedRunToStore,
+  persistRejectedAutoCommitRun,
+  persistReviewRunToStore,
+  resolveTriggerRetryConfig,
+} from "./index.js";
+import {
+  type AutoCommitStore,
+  type StreamKeyInput,
+  resolveAutoCommitPolicy,
+} from "@aicr/core";
+import { createAutoCommitStoreFromConfig } from "@aicr/core";
+import {
+  resolvePullRequestSchedule,
+  resolvePullRequestTargetBranches,
+} from "@aicr/core";
+import {
+  AutoCommitRuntime,
+  createAutoCommitBatchExecutor,
+  reviewEventForBatch,
+} from "./auto-commit-runtime.js";
+import { AutoCommitScheduler } from "./auto-commit-scheduler.js";
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { ReviewDeferralManager } from "./deferral-manager.js";
 import { createRuntimeQueue } from "./runtime-queue.js";
-import { cleanupExpiredSessions, resolveAdminAuthConfig } from "./admin-auth.js";
+import {
+  cleanupExpiredSessions,
+  resolveAdminAuthConfig,
+} from "./admin-auth.js";
 import {
   createGithubAppTokenService,
   resolveGithubAppTriggerAuth,
@@ -169,6 +200,7 @@ import {
 } from "./model-catalog-service.js";
 import type { ObservabilityApiOptions } from "./observability-api.js";
 import { createHistoryMaintenance } from "./history-maintenance.js";
+import { TgrepIndexManager } from "./tgrep-index.js";
 import { createLiveRunRegistry, type LiveRunRegistry } from "./live-runs.js";
 import type {
   ReviewDispatchResult,
@@ -178,8 +210,14 @@ import type {
   ReviewOutputPublisherResolver,
   ReviewSummaryPublishOptions,
 } from "./review-orchestrator.js";
-import { runReviewOrchestration, summarizeReviewOrchestrationForWebhook } from "./review-orchestrator.js";
-import { createImCancelCommandHandler, createReviewCancellationService } from "./review-cancellation.js";
+import {
+  runReviewOrchestration,
+  summarizeReviewOrchestrationForWebhook,
+} from "./review-orchestrator.js";
+import {
+  createImCancelCommandHandler,
+  createReviewCancellationService,
+} from "./review-cancellation.js";
 import { randomUUID } from "node:crypto";
 import { adminReReviewEvent } from "./admin-review.js";
 import { ReviewCancelledError } from "./live-runs.js";
@@ -188,19 +226,36 @@ import {
   type RuntimeConfigGeneration,
   admissionUnavailableReason,
 } from "./runtime-config.js";
-import { ImConnectionRegistry, imConnectionRegistryFor, SocialImReadinessService } from "./im/connections.js";
+import {
+  ImConnectionRegistry,
+  imConnectionRegistryFor,
+  SocialImReadinessService,
+} from "./im/connections.js";
 import { currentImRequestAuthorized } from "./im/social-command-service.js";
 import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { ImLongConnectionService } from "./im/long-connection-service.js";
 import { SlackSocketModeService } from "./im/slack-socket-mode.js";
-import { issueCardAction, resolveFeishuCardActionTarget, resolveWecomCardActionTarget } from "./im/action-service.js";
-import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix } from "./im/command-service.js";
+import {
+  issueCardAction,
+  resolveFeishuCardActionTarget,
+  resolveWecomCardActionTarget,
+} from "./im/action-service.js";
+import {
+  IM_HELP_TEXT,
+  invalidImCommandReply,
+  parseImCommand,
+  processImCommand,
+  stripImMentionPrefix,
+} from "./im/command-service.js";
 import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
 import { ImQueryService } from "./im/query-service.js";
 import { ImReplyService } from "./im/reply-service.js";
 import { ManualReviewService } from "./im/manual-review-service.js";
 import { createImReviewExecutor } from "./im/review-execution.js";
-import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
+import {
+  MemberDirectoryService,
+  type MemberDirectoryView,
+} from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
   resolveAnalysisSelection,
@@ -225,7 +280,8 @@ export interface BootstrapServerOptions {
    * operate on the legacy-converted pre-defaults document. CLI loaders pass
    * this from `loadConfigDocumentFile`.
    */
-  readonly configDocument?: { readonly document: AppConfigInput; readonly digest: string } | undefined;
+  readonly configDocument?:
+    { readonly document: AppConfigInput; readonly digest: string } | undefined;
 }
 
 interface ActiveProjectIdentity {
@@ -243,28 +299,46 @@ function resolveEnv(name: string | undefined): string | undefined {
  * Created once per process; undefined when no key is configured �?every
  * consumer fails closed only when a literal actually crosses its boundary.
  */
-const configSecretSealing = resolveConfigSecretSealing((name) => process.env[name]);
+const configSecretSealing = resolveConfigSecretSealing(
+  (name) => process.env[name],
+);
 
 /**
  * Resolves a secret config field: the literal value wins, then the `*_env`
  * reference. Database-sourced literals arrive already unsealed (the runtime
  * config manager opens them when the generation is built).
  */
-function resolveSecretField(record: Record<string, unknown>, literalField: string, envField: string): string | undefined {
+function resolveSecretField(
+  record: Record<string, unknown>,
+  literalField: string,
+  envField: string,
+): string | undefined {
   const literal = record[literalField];
   if (typeof literal === "string" && literal.length > 0) return literal;
   const envName = record[envField];
-  return typeof envName === "string" && envName.length > 0 ? resolveEnv(envName) : undefined;
+  return typeof envName === "string" && envName.length > 0
+    ? resolveEnv(envName)
+    : undefined;
 }
 
-function toRedisModelCatalogBackendOptions(config: AppConfig): RedisModelCatalogBackendOptions {
+function toRedisModelCatalogBackendOptions(
+  config: AppConfig,
+): RedisModelCatalogBackendOptions {
   if (config.storage.cache.kind !== "redis") {
-    throw new TypeError("llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'.");
+    throw new TypeError(
+      "llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'.",
+    );
   }
 
-  const redisConfig = (config.storage.cache.redis ?? {}) as Record<string, unknown>;
-  const urlEnv = typeof redisConfig.url_env === "string" ? redisConfig.url_env : undefined;
-  const url = resolveEnv(urlEnv) ?? (typeof redisConfig.url === "string" ? redisConfig.url : undefined);
+  const redisConfig = (config.storage.cache.redis ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const urlEnv =
+    typeof redisConfig.url_env === "string" ? redisConfig.url_env : undefined;
+  const url =
+    resolveEnv(urlEnv) ??
+    (typeof redisConfig.url === "string" ? redisConfig.url : undefined);
   if (!url) {
     throw new TypeError(
       "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env to resolve to a Redis URL.",
@@ -273,11 +347,17 @@ function toRedisModelCatalogBackendOptions(config: AppConfig): RedisModelCatalog
 
   return {
     url,
-    keyPrefix: typeof redisConfig.key_prefix === "string" ? redisConfig.key_prefix : "aicr:",
+    keyPrefix:
+      typeof redisConfig.key_prefix === "string"
+        ? redisConfig.key_prefix
+        : "aicr:",
   };
 }
 
-function extractPullNumber(payload: unknown, event: ReviewEvent): number | undefined {
+function extractPullNumber(
+  payload: unknown,
+  event: ReviewEvent,
+): number | undefined {
   if (!isPlainObject(payload)) {
     return undefined;
   }
@@ -287,10 +367,15 @@ function extractPullNumber(payload: unknown, event: ReviewEvent): number | undef
     // MR hooks put the project-local IID in object_attributes; Note Hooks
     // carry the referenced MR at the payload root. Global id/note iid are
     // never valid substitutes for the merge request's project-local number.
-    const mergeRequest = isPlainObject(payload.merge_request) ? payload.merge_request :
-      payload.object_kind === "merge_request" ? payload.object_attributes : undefined;
+    const mergeRequest = isPlainObject(payload.merge_request)
+      ? payload.merge_request
+      : payload.object_kind === "merge_request"
+        ? payload.object_attributes
+        : undefined;
     const iid = isPlainObject(mergeRequest) ? mergeRequest.iid : undefined;
-    return typeof iid === "number" && Number.isSafeInteger(iid) && iid > 0 ? iid : undefined;
+    return typeof iid === "number" && Number.isSafeInteger(iid) && iid > 0
+      ? iid
+      : undefined;
   }
 
   const pullRequest = payload.pull_request;
@@ -304,63 +389,114 @@ function extractPullNumber(payload: unknown, event: ReviewEvent): number | undef
 type LlmModelChain = AppConfig["llm"]["model_chain"][string];
 
 function resolveModelChainNames(config: AppConfig, workspaceId?: string) {
-  const workspace = workspaceId ? config.workspaces.instances[workspaceId] : undefined;
-  const modelChain = workspace?.model_chain ?? config.workspaces.defaults.model_chain
-    ?? config.llm.default_model_chain ?? "default";
-  const triageModelChain = workspace?.triage_model_chain ?? config.workspaces.defaults.triage_model_chain
-    ?? config.llm.triage_model_chain ?? modelChain;
+  const workspace = workspaceId
+    ? config.workspaces.instances[workspaceId]
+    : undefined;
+  const modelChain =
+    workspace?.model_chain ??
+    config.workspaces.defaults.model_chain ??
+    config.llm.default_model_chain ??
+    "default";
+  const triageModelChain =
+    workspace?.triage_model_chain ??
+    config.workspaces.defaults.triage_model_chain ??
+    config.llm.triage_model_chain ??
+    modelChain;
   return { modelChain, triageModelChain };
 }
 
 /** Identity analysis inherits the global default, independently of review/triage routes. */
-export function resolveAuthorModelChainName(config: AppConfig, workspaceId?: string): string {
-  return (workspaceId ? config.workspaces.instances[workspaceId]?.author_resolution_model_chain : undefined)
-    ?? config.workspaces.defaults.author_resolution_model_chain
-    ?? config.llm.author_resolution_model_chain ?? config.llm.default_model_chain;
+export function resolveAuthorModelChainName(
+  config: AppConfig,
+  workspaceId?: string,
+): string {
+  return (
+    (workspaceId
+      ? config.workspaces.instances[workspaceId]?.author_resolution_model_chain
+      : undefined) ??
+    config.workspaces.defaults.author_resolution_model_chain ??
+    config.llm.author_resolution_model_chain ??
+    config.llm.default_model_chain
+  );
 }
 
-function createConfiguredAuthorGuesser(config: AppConfig, workspaceId?: string, runtime: {
-  readonly enrich?: (model: ModelSpec) => ModelSpec;
-  readonly billingScope?: string;
-  readonly dailyBudgetTracker?: DailyBudgetTracker;
-  readonly beforeRequest?: (model: ModelSpec) => Promise<void>;
-  readonly onCost?: (cost: number) => void;
-} = {}): ChannelAuthorGuesser {
-  const chain = resolveModelChain(config, resolveAuthorModelChainName(config, workspaceId));
+function createConfiguredAuthorGuesser(
+  config: AppConfig,
+  workspaceId?: string,
+  runtime: {
+    readonly enrich?: (model: ModelSpec) => ModelSpec;
+    readonly billingScope?: string;
+    readonly dailyBudgetTracker?: DailyBudgetTracker;
+    readonly beforeRequest?: (model: ModelSpec) => Promise<void>;
+    readonly onCost?: (cost: number) => void;
+  } = {},
+): ChannelAuthorGuesser {
+  const chain = resolveModelChain(
+    config,
+    resolveAuthorModelChainName(config, workspaceId),
+  );
   const enrich = runtime.enrich ?? ((model: ModelSpec) => model);
   const model = enrich(resolveModelSpecFromChain(config.llm.providers, chain));
-  const specs = chain.map(entry => enrich(resolveModelSpecFromChain(config.llm.providers, [entry])));
+  const specs = chain.map((entry) =>
+    enrich(resolveModelSpecFromChain(config.llm.providers, [entry])),
+  );
   const retry = toGatewayRetry(config.llm.retry);
   const budget = toGatewayBudget(config.llm.budget);
-  const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
+  const perProviderOverrides = toGatewayPerProviderOverrides(
+    config.llm.per_provider_overrides,
+  );
   const gateway = createResilientChatClient({
     // Preserve entry overrides and frozen catalog fields on every fallback.
-    clientFactory: candidate => {
-      const resolved = specs.find(spec => spec.providerId === candidate.providerId && spec.modelId === candidate.modelId) ?? candidate;
+    clientFactory: (candidate) => {
+      const resolved =
+        specs.find(
+          (spec) =>
+            spec.providerId === candidate.providerId &&
+            spec.modelId === candidate.modelId,
+        ) ?? candidate;
       const client = createLlmClientFromModelSpec(resolved);
-      return { complete: input => client.complete({ ...input, model: resolved }) };
+      return {
+        complete: (input) => client.complete({ ...input, model: resolved }),
+      };
     },
-    modelPricing: Object.fromEntries(specs.map(spec => [spec.providerId + "/" + spec.modelId, extractModelPricing(spec)])),
-    providers: toGatewayProviders(config.llm.providers), fallbackChain: toGatewayFallbackChain(chain),
-    ...(retry ? { retry } : {}), ...(budget ? { budget } : {}),
+    modelPricing: Object.fromEntries(
+      specs.map((spec) => [
+        spec.providerId + "/" + spec.modelId,
+        extractModelPricing(spec),
+      ]),
+    ),
+    providers: toGatewayProviders(config.llm.providers),
+    fallbackChain: toGatewayFallbackChain(chain),
+    ...(retry ? { retry } : {}),
+    ...(budget ? { budget } : {}),
     ...(perProviderOverrides ? { perProviderOverrides } : {}),
     ...(runtime.billingScope ? { workspaceId: runtime.billingScope } : {}),
-    ...(runtime.dailyBudgetTracker ? { dailyBudgetTracker: runtime.dailyBudgetTracker } : {}),
+    ...(runtime.dailyBudgetTracker
+      ? { dailyBudgetTracker: runtime.dailyBudgetTracker }
+      : {}),
     ...(runtime.beforeRequest ? { beforeRequest: runtime.beforeRequest } : {}),
   });
-  return createAuthorIdentityGuesser({ model, llm: { async complete(input) {
-    const result = await gateway.complete(input);
-    runtime.onCost?.(result.estimatedCostUsd);
-    return result;
-  } } });
+  return createAuthorIdentityGuesser({
+    model,
+    llm: {
+      async complete(input) {
+        const result = await gateway.complete(input);
+        runtime.onCost?.(result.estimatedCostUsd);
+        return result;
+      },
+    },
+  });
 }
 
 function resolveModelChain(config: AppConfig, name: string): LlmModelChain {
   if (Object.hasOwn(config.llm.model_chain, name)) {
     return config.llm.model_chain[name]!;
   }
-  if (name === "default" && Object.keys(config.llm.model_chain).length === 0) return [];
-  throw new TypeError(`Model chain group "${name}" is not defined in llm.model_chain.`);
+  if (name === "default" && Object.keys(config.llm.model_chain).length === 0)
+    return [];
+  throw new TypeError(
+    `Model chain group "${name}" is not defined in llm.model_chain.`,
+  );
 }
 
 function resolveModelSpecFromChain(
@@ -383,7 +519,9 @@ function resolveModelSpecFromChain(
 
   if (!provider) {
     const missingProviderId = fallbackEntry?.provider ?? providerId;
-    throw new TypeError(`LLM provider "${missingProviderId}" not found in configuration.`);
+    throw new TypeError(
+      `LLM provider "${missingProviderId}" not found in configuration.`,
+    );
   }
 
   const modelId = fallbackEntry?.model ?? "gpt-4o-mini";
@@ -419,11 +557,15 @@ function resolveModelSpecFromChain(
     mergeRecord(draft, "extraParams", overrides.extra_params);
     mergeRecord(draft, "extraBody", overrides.extra_body);
     mergeRecord(draft, "extraHeaders", overrides.extra_headers);
-    if (overrides.reasoning_effort !== undefined) draft.reasoningEffort = overrides.reasoning_effort;
-    if (overrides.thinking_level !== undefined) draft.thinkingLevel = overrides.thinking_level;
-    if (overrides.thinking_budget_tokens !== undefined) draft.thinkingBudgetTokens = overrides.thinking_budget_tokens;
+    if (overrides.reasoning_effort !== undefined)
+      draft.reasoningEffort = overrides.reasoning_effort;
+    if (overrides.thinking_level !== undefined)
+      draft.thinkingLevel = overrides.thinking_level;
+    if (overrides.thinking_budget_tokens !== undefined)
+      draft.thinkingBudgetTokens = overrides.thinking_budget_tokens;
     if (overrides.thinking !== undefined) draft.thinking = overrides.thinking;
-    if (overrides.response_format !== undefined) draft.responseFormat = overrides.response_format;
+    if (overrides.response_format !== undefined)
+      draft.responseFormat = overrides.response_format;
     if (overrides.tool_choice !== undefined) {
       const choice = overrides.tool_choice;
       if (typeof choice === "string") {
@@ -432,17 +574,24 @@ function resolveModelSpecFromChain(
         // Accept the OpenAI {"function":{"name"}} shape and the flat
         // {"name"} shape; anything else cannot name a tool and is dropped.
         const fn = (choice as { function?: { name?: unknown } }).function;
-        const name = typeof fn?.name === "string" ? fn.name
-          : typeof (choice as { name?: unknown }).name === "string" ? (choice as { name: string }).name
-          : undefined;
+        const name =
+          typeof fn?.name === "string"
+            ? fn.name
+            : typeof (choice as { name?: unknown }).name === "string"
+              ? (choice as { name: string }).name
+              : undefined;
         if (name !== undefined) draft.toolChoice = { name };
       }
     }
-    if (overrides.parallel_tool_calls !== undefined) draft.parallelToolCalls = overrides.parallel_tool_calls;
+    if (overrides.parallel_tool_calls !== undefined)
+      draft.parallelToolCalls = overrides.parallel_tool_calls;
     if (overrides.seed !== undefined) draft.seed = overrides.seed;
-    if (overrides.logit_bias !== undefined) draft.logitBias = { ...draft.logitBias, ...overrides.logit_bias };
-    if (overrides.drop_params !== undefined) draft.dropParams = overrides.drop_params;
-    if (overrides.allowed_openai_params !== undefined) draft.allowedOpenaiParams = overrides.allowed_openai_params;
+    if (overrides.logit_bias !== undefined)
+      draft.logitBias = { ...draft.logitBias, ...overrides.logit_bias };
+    if (overrides.drop_params !== undefined)
+      draft.dropParams = overrides.drop_params;
+    if (overrides.allowed_openai_params !== undefined)
+      draft.allowedOpenaiParams = overrides.allowed_openai_params;
   }
   // exactOptionalPropertyTypes: never materialize explicit-undefined keys.
   const merged: Record<string, unknown> = { ...spec, ...draft };
@@ -463,17 +612,34 @@ function mergeRecord<K extends "extraParams" | "extraBody" | "extraHeaders">(
   draft[key] = { ...(base ?? {}), ...overrides };
 }
 
-export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string, workspaceId?: string): ModelSpec {
+export function resolveModelSpecFromConfig(
+  config: AppConfig,
+  providerId?: string,
+  workspaceId?: string,
+): ModelSpec {
   const { modelChain } = resolveModelChainNames(config, workspaceId);
-  return resolveModelSpecFromChain(config.llm.providers, resolveModelChain(config, modelChain), providerId);
+  return resolveModelSpecFromChain(
+    config.llm.providers,
+    resolveModelChain(config, modelChain),
+    providerId,
+  );
 }
 
-export function resolveIssueTriageModelSpecFromConfig(config: AppConfig, workspaceId?: string): ModelSpec {
+export function resolveIssueTriageModelSpecFromConfig(
+  config: AppConfig,
+  workspaceId?: string,
+): ModelSpec {
   const { triageModelChain } = resolveModelChainNames(config, workspaceId);
-  return resolveModelSpecFromChain(config.llm.providers, resolveModelChain(config, triageModelChain));
+  return resolveModelSpecFromChain(
+    config.llm.providers,
+    resolveModelChain(config, triageModelChain),
+  );
 }
 
-function readString(raw: Record<string, unknown>, ...keys: readonly string[]): string | undefined {
+function readString(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): string | undefined {
   for (const key of keys) {
     const value = raw[key];
     if (typeof value === "string" && value.length > 0) {
@@ -484,7 +650,10 @@ function readString(raw: Record<string, unknown>, ...keys: readonly string[]): s
   return undefined;
 }
 
-function readNumber(raw: Record<string, unknown>, ...keys: readonly string[]): number | undefined {
+function readNumber(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): number | undefined {
   for (const key of keys) {
     const value = raw[key];
     if (typeof value === "number" && Number.isFinite(value)) {
@@ -495,7 +664,10 @@ function readNumber(raw: Record<string, unknown>, ...keys: readonly string[]): n
   return undefined;
 }
 
-function readBoolean(raw: Record<string, unknown>, ...keys: readonly string[]): boolean | undefined {
+function readBoolean(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): boolean | undefined {
   for (const key of keys) {
     const value = raw[key];
     if (typeof value === "boolean") {
@@ -506,10 +678,16 @@ function readBoolean(raw: Record<string, unknown>, ...keys: readonly string[]): 
   return undefined;
 }
 
-function readStringArray(raw: Record<string, unknown>, ...keys: readonly string[]): readonly string[] | undefined {
+function readStringArray(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): readonly string[] | undefined {
   for (const key of keys) {
     const value = raw[key];
-    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    if (
+      Array.isArray(value) &&
+      value.every((entry) => typeof entry === "string")
+    ) {
       return value;
     }
   }
@@ -517,7 +695,10 @@ function readStringArray(raw: Record<string, unknown>, ...keys: readonly string[
   return undefined;
 }
 
-function readRecord(raw: Record<string, unknown>, ...keys: readonly string[]): Readonly<Record<string, unknown>> | undefined {
+function readRecord(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
   for (const key of keys) {
     const value = raw[key];
     if (isPlainObject(value)) {
@@ -528,25 +709,39 @@ function readRecord(raw: Record<string, unknown>, ...keys: readonly string[]): R
   return undefined;
 }
 
-function readStringRecord(raw: Record<string, unknown>, ...keys: readonly string[]): Readonly<Record<string, string>> | undefined {
+function readStringRecord(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): Readonly<Record<string, string>> | undefined {
   const value = readRecord(raw, ...keys);
-  if (!value || Object.values(value).some((entry) => typeof entry !== "string")) {
+  if (
+    !value ||
+    Object.values(value).some((entry) => typeof entry !== "string")
+  ) {
     return undefined;
   }
 
   return value as Readonly<Record<string, string>>;
 }
 
-function readNumberRecord(raw: Record<string, unknown>, ...keys: readonly string[]): Readonly<Record<string, number>> | undefined {
+function readNumberRecord(
+  raw: Record<string, unknown>,
+  ...keys: readonly string[]
+): Readonly<Record<string, number>> | undefined {
   const value = readRecord(raw, ...keys);
-  if (!value || Object.values(value).some((entry) => typeof entry !== "number")) {
+  if (
+    !value ||
+    Object.values(value).some((entry) => typeof entry !== "number")
+  ) {
     return undefined;
   }
 
   return value as Readonly<Record<string, number>>;
 }
 
-function readThinking(raw: Record<string, unknown>): ModelSpec["thinking"] | undefined {
+function readThinking(
+  raw: Record<string, unknown>,
+): ModelSpec["thinking"] | undefined {
   const value = readRecord(raw, "thinking");
   if (!value || typeof value.enabled !== "boolean") {
     return undefined;
@@ -554,14 +749,25 @@ function readThinking(raw: Record<string, unknown>): ModelSpec["thinking"] | und
 
   return {
     enabled: value.enabled,
-    ...(typeof value.budgetTokens === "number" ? { budgetTokens: value.budgetTokens } : {}),
-    ...(typeof value.budget_tokens === "number" ? { budgetTokens: value.budget_tokens } : {}),
+    ...(typeof value.budgetTokens === "number"
+      ? { budgetTokens: value.budgetTokens }
+      : {}),
+    ...(typeof value.budget_tokens === "number"
+      ? { budgetTokens: value.budget_tokens }
+      : {}),
   };
 }
 
-function readResponseFormat(raw: Record<string, unknown>): ModelSpec["responseFormat"] | undefined {
+function readResponseFormat(
+  raw: Record<string, unknown>,
+): ModelSpec["responseFormat"] | undefined {
   const value = readRecord(raw, "response_format", "responseFormat");
-  if (!value || (value.kind !== "json_schema" && value.kind !== "json_object" && value.kind !== "text")) {
+  if (
+    !value ||
+    (value.kind !== "json_schema" &&
+      value.kind !== "json_object" &&
+      value.kind !== "text")
+  ) {
     return undefined;
   }
 
@@ -571,7 +777,9 @@ function readResponseFormat(raw: Record<string, unknown>): ModelSpec["responseFo
   };
 }
 
-function readToolChoice(raw: Record<string, unknown>): ModelSpec["toolChoice"] | undefined {
+function readToolChoice(
+  raw: Record<string, unknown>,
+): ModelSpec["toolChoice"] | undefined {
   const value = raw.tool_choice ?? raw.toolChoice;
   if (value === "auto" || value === "none" || value === "required") {
     return value;
@@ -590,14 +798,18 @@ function readStringEnum<T extends string>(
   ...keys: readonly string[]
 ): T | undefined {
   const value = readString(raw, ...keys);
-  return value && values.has(value as T) ? value as T : undefined;
+  return value && values.has(value as T) ? (value as T) : undefined;
 }
 
 type MutableModelFields = {
   -readonly [K in keyof ModelSpec]?: ModelSpec[K];
 };
 
-function assignModelField(fields: MutableModelFields, key: keyof ModelSpec, value: unknown): void {
+function assignModelField(
+  fields: MutableModelFields,
+  key: keyof ModelSpec,
+  value: unknown,
+): void {
   if (value !== undefined) {
     (fields as Record<string, unknown>)[key] = value;
   }
@@ -686,32 +898,61 @@ const modelStatusValues = new Set<ModelStatusValue>([
   "shutdown",
 ]);
 
-function applyModelCatalogProviderFields(raw: Record<string, unknown>, fields: MutableModelFields): void {
-  for (const [snakeKey, modelKey] of Object.entries(MODEL_CATALOG_FIELD_KEY_MAP)) {
+function applyModelCatalogProviderFields(
+  raw: Record<string, unknown>,
+  fields: MutableModelFields,
+): void {
+  for (const [snakeKey, modelKey] of Object.entries(
+    MODEL_CATALOG_FIELD_KEY_MAP,
+  )) {
     if (modelCatalogNumberKeys.has(modelKey)) {
       assignModelField(fields, modelKey, readNumber(raw, snakeKey, modelKey));
     } else if (modelCatalogBooleanKeys.has(modelKey)) {
       assignModelField(fields, modelKey, readBoolean(raw, snakeKey, modelKey));
     } else if (modelCatalogStringArrayKeys.has(modelKey)) {
-      assignModelField(fields, modelKey, readStringArray(raw, snakeKey, modelKey));
+      assignModelField(
+        fields,
+        modelKey,
+        readStringArray(raw, snakeKey, modelKey),
+      );
     } else if (modelCatalogStringKeys.has(modelKey)) {
       assignModelField(fields, modelKey, readString(raw, snakeKey, modelKey));
     } else if (modelKey === "supportedReasoningEfforts") {
       const efforts = readStringArray(raw, snakeKey, modelKey);
-      if (efforts?.every((effort) => reasoningEffortValues.has(effort as ReasoningEffortValue))) {
-        fields.supportedReasoningEfforts = efforts as NonNullable<ModelSpec["supportedReasoningEfforts"]>;
+      if (
+        efforts?.every((effort) =>
+          reasoningEffortValues.has(effort as ReasoningEffortValue),
+        )
+      ) {
+        fields.supportedReasoningEfforts = efforts as NonNullable<
+          ModelSpec["supportedReasoningEfforts"]
+        >;
       }
     } else if (modelKey === "defaultReasoningEffort") {
-      assignModelField(fields, modelKey, readStringEnum(raw, reasoningEffortValues, snakeKey, modelKey));
+      assignModelField(
+        fields,
+        modelKey,
+        readStringEnum(raw, reasoningEffortValues, snakeKey, modelKey),
+      );
     } else if (modelKey === "modelStatus") {
-      assignModelField(fields, modelKey, readStringEnum(raw, modelStatusValues, snakeKey, modelKey));
+      assignModelField(
+        fields,
+        modelKey,
+        readStringEnum(raw, modelStatusValues, snakeKey, modelKey),
+      );
     } else if (modelKey === "modelLinks") {
-      assignModelField(fields, modelKey, readStringRecord(raw, snakeKey, modelKey));
+      assignModelField(
+        fields,
+        modelKey,
+        readStringRecord(raw, snakeKey, modelKey),
+      );
     }
   }
 }
 
-function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][number]): Partial<ModelSpec> {
+function resolveModelProviderFields(
+  provider: AppConfig["llm"]["providers"][number],
+): Partial<ModelSpec> {
   const raw = provider as Record<string, unknown>;
   const fields: MutableModelFields = {};
 
@@ -741,33 +982,66 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   if (vertexProject !== undefined) fields.vertexProject = vertexProject;
   const vertexLocation = readString(raw, "vertex_location", "vertexLocation");
   if (vertexLocation !== undefined) fields.vertexLocation = vertexLocation;
-  const googleCredentialsEnv = readString(raw, "google_application_credentials_env", "googleApplicationCredentialsEnv");
-  if (googleCredentialsEnv !== undefined) fields.googleApplicationCredentialsEnv = googleCredentialsEnv;
-  const googleCredentials = readString(raw, "google_application_credentials", "googleApplicationCredentials");
-  if (googleCredentials !== undefined) fields.googleApplicationCredentials = googleCredentials;
+  const googleCredentialsEnv = readString(
+    raw,
+    "google_application_credentials_env",
+    "googleApplicationCredentialsEnv",
+  );
+  if (googleCredentialsEnv !== undefined)
+    fields.googleApplicationCredentialsEnv = googleCredentialsEnv;
+  const googleCredentials = readString(
+    raw,
+    "google_application_credentials",
+    "googleApplicationCredentials",
+  );
+  if (googleCredentials !== undefined)
+    fields.googleApplicationCredentials = googleCredentials;
   const awsRegion = readString(raw, "aws_region", "awsRegion");
   if (awsRegion !== undefined) fields.awsRegion = awsRegion;
-  const awsAccessKeyEnv = readString(raw, "aws_access_key_env", "awsAccessKeyEnv");
+  const awsAccessKeyEnv = readString(
+    raw,
+    "aws_access_key_env",
+    "awsAccessKeyEnv",
+  );
   if (awsAccessKeyEnv !== undefined) fields.awsAccessKeyEnv = awsAccessKeyEnv;
-  const awsSecretKeyEnv = readString(raw, "aws_secret_key_env", "awsSecretKeyEnv");
+  const awsSecretKeyEnv = readString(
+    raw,
+    "aws_secret_key_env",
+    "awsSecretKeyEnv",
+  );
   if (awsSecretKeyEnv !== undefined) fields.awsSecretKeyEnv = awsSecretKeyEnv;
-  const awsSessionTokenEnv = readString(raw, "aws_session_token_env", "awsSessionTokenEnv");
-  if (awsSessionTokenEnv !== undefined) fields.awsSessionTokenEnv = awsSessionTokenEnv;
+  const awsSessionTokenEnv = readString(
+    raw,
+    "aws_session_token_env",
+    "awsSessionTokenEnv",
+  );
+  if (awsSessionTokenEnv !== undefined)
+    fields.awsSessionTokenEnv = awsSessionTokenEnv;
   const awsAccessKey = readString(raw, "aws_access_key", "awsAccessKey");
   if (awsAccessKey !== undefined) fields.awsAccessKey = awsAccessKey;
   const awsSecretKey = readString(raw, "aws_secret_key", "awsSecretKey");
   if (awsSecretKey !== undefined) fields.awsSecretKey = awsSecretKey;
-  const awsSessionToken = readString(raw, "aws_session_token", "awsSessionToken");
+  const awsSessionToken = readString(
+    raw,
+    "aws_session_token",
+    "awsSessionToken",
+  );
   if (awsSessionToken !== undefined) fields.awsSessionToken = awsSessionToken;
   const awsProfile = readString(raw, "aws_profile", "awsProfile");
   if (awsProfile !== undefined) fields.awsProfile = awsProfile;
-  const anthropicVersion = readString(raw, "anthropic_version", "anthropicVersion");
-  if (anthropicVersion !== undefined) fields.anthropicVersion = anthropicVersion;
+  const anthropicVersion = readString(
+    raw,
+    "anthropic_version",
+    "anthropicVersion",
+  );
+  if (anthropicVersion !== undefined)
+    fields.anthropicVersion = anthropicVersion;
   const anthropicBeta = readStringArray(raw, "anthropic_beta", "anthropicBeta");
   if (anthropicBeta !== undefined) fields.anthropicBeta = anthropicBeta;
 
   const cacheControl = readString(raw, "cache_control", "cacheControl");
-  if (cacheControl === "ephemeral" || cacheControl === "off") fields.cacheControl = cacheControl;
+  if (cacheControl === "ephemeral" || cacheControl === "off")
+    fields.cacheControl = cacheControl;
   const thinkingLevel = readString(raw, "thinking_level", "thinkingLevel");
   if (
     thinkingLevel === "off" ||
@@ -779,9 +1053,18 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   ) {
     fields.thinkingLevel = thinkingLevel;
   }
-  const thinkingBudgetTokens = readNumber(raw, "thinking_budget_tokens", "thinkingBudgetTokens");
-  if (thinkingBudgetTokens !== undefined) fields.thinkingBudgetTokens = thinkingBudgetTokens;
-  const reasoningEffort = readString(raw, "reasoning_effort", "reasoningEffort");
+  const thinkingBudgetTokens = readNumber(
+    raw,
+    "thinking_budget_tokens",
+    "thinkingBudgetTokens",
+  );
+  if (thinkingBudgetTokens !== undefined)
+    fields.thinkingBudgetTokens = thinkingBudgetTokens;
+  const reasoningEffort = readString(
+    raw,
+    "reasoning_effort",
+    "reasoningEffort",
+  );
   if (
     reasoningEffort === "minimal" ||
     reasoningEffort === "low" ||
@@ -797,42 +1080,70 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   if (responseFormat !== undefined) fields.responseFormat = responseFormat;
   const toolChoice = readToolChoice(raw);
   if (toolChoice !== undefined) fields.toolChoice = toolChoice;
-  const parallelToolCalls = readBoolean(raw, "parallel_tool_calls", "parallelToolCalls");
-  if (parallelToolCalls !== undefined) fields.parallelToolCalls = parallelToolCalls;
+  const parallelToolCalls = readBoolean(
+    raw,
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (parallelToolCalls !== undefined)
+    fields.parallelToolCalls = parallelToolCalls;
   const seed = readNumber(raw, "seed");
   if (seed !== undefined) fields.seed = seed;
   const logitBias = readNumberRecord(raw, "logit_bias", "logitBias");
   if (logitBias !== undefined) fields.logitBias = logitBias;
   const dropParams = readStringArray(raw, "drop_params", "dropParams");
   if (dropParams !== undefined) fields.dropParams = dropParams;
-  const allowedOpenaiParams = readStringArray(raw, "allowed_openai_params", "allowedOpenaiParams");
-  if (allowedOpenaiParams !== undefined) fields.allowedOpenaiParams = allowedOpenaiParams;
+  const allowedOpenaiParams = readStringArray(
+    raw,
+    "allowed_openai_params",
+    "allowedOpenaiParams",
+  );
+  if (allowedOpenaiParams !== undefined)
+    fields.allowedOpenaiParams = allowedOpenaiParams;
   const contextWindow = readNumber(raw, "context_window", "contextWindow");
   if (contextWindow !== undefined) fields.contextWindow = contextWindow;
-  const supportsToolCall = readBoolean(raw, "supports_tool_call", "supportsToolCall");
-  if (supportsToolCall !== undefined) fields.supportsToolCall = supportsToolCall;
+  const supportsToolCall = readBoolean(
+    raw,
+    "supports_tool_call",
+    "supportsToolCall",
+  );
+  if (supportsToolCall !== undefined)
+    fields.supportsToolCall = supportsToolCall;
   const supportsVision = readBoolean(raw, "supports_vision", "supportsVision");
   if (supportsVision !== undefined) fields.supportsVision = supportsVision;
-  const supportsCachePrompt = readBoolean(raw, "supports_cache_prompt", "supportsCachePrompt");
-  if (supportsCachePrompt !== undefined) fields.supportsCachePrompt = supportsCachePrompt;
+  const supportsCachePrompt = readBoolean(
+    raw,
+    "supports_cache_prompt",
+    "supportsCachePrompt",
+  );
+  if (supportsCachePrompt !== undefined)
+    fields.supportsCachePrompt = supportsCachePrompt;
   applyModelCatalogProviderFields(raw, fields);
 
   return fields;
 }
 
-export function createLlmClientFromModelSpec(model: ModelSpec): ChatCompletionClient {
+export function createLlmClientFromModelSpec(
+  model: ModelSpec,
+): ChatCompletionClient {
   return createChatClientFromModelSpec(model);
 }
 
-function createConfiguredAgentAdapter(kind: AppConfig["agent"]["default"]): AgentAdapter | undefined {
+function createConfiguredAgentAdapter(
+  kind: AppConfig["agent"]["default"],
+): AgentAdapter | undefined {
   return kind === "native-llm" ? undefined : createAgentAdapter({ kind });
 }
 
-export function resolveAgentAdapterFromConfig(config: AppConfig): AgentAdapter | undefined {
+export function resolveAgentAdapterFromConfig(
+  config: AppConfig,
+): AgentAdapter | undefined {
   return createConfiguredAgentAdapter(config.agent.default);
 }
 
-export async function createSandboxBackendFromConfig(config: AppConfig): Promise<SandboxBackend> {
+export async function createSandboxBackendFromConfig(
+  config: AppConfig,
+): Promise<SandboxBackend> {
   return createSandboxBackendFromSandboxConfig(config.agent.sandbox);
 }
 
@@ -863,7 +1174,13 @@ export function resolveGiteaWebhookConfig(
   appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
   workspaceRuntime?: WorkspaceRuntime,
 ): VcsWebhookConfig | undefined {
-  return resolveGiteaLikeWebhookConfigs(config, "gitea", triggerName, appTokenServices, workspaceRuntime)[0];
+  return resolveGiteaLikeWebhookConfigs(
+    config,
+    "gitea",
+    triggerName,
+    appTokenServices,
+    workspaceRuntime,
+  )[0];
 }
 
 /**
@@ -878,10 +1195,23 @@ export function resolveGiteaLikeWebhookConfigs(
   appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
   workspaceRuntime?: WorkspaceRuntime,
 ): readonly VcsWebhookConfig[] {
-  const kinds: readonly string[] = kind === "gitea" ? ["gitea", "forgejo"] : ["forgejo"];
-  const triggers = config.triggers.filter((trigger) =>
-    kinds.includes(trigger.kind) && (triggerName === undefined || trigger.name === triggerName));
-  return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
+  const kinds: readonly string[] =
+    kind === "gitea" ? ["gitea", "forgejo"] : ["forgejo"];
+  const triggers = config.triggers.filter(
+    (trigger) =>
+      kinds.includes(trigger.kind) &&
+      (triggerName === undefined || trigger.name === triggerName),
+  );
+  return triggers
+    .filter((trigger) => triggerAdmitsNewWork(config, trigger))
+    .map((trigger) =>
+      buildWebhookConfigFromTrigger(
+        config,
+        trigger,
+        appTokenServices,
+        workspaceRuntime,
+      ),
+    );
 }
 
 function buildWebhookConfigFromTrigger(
@@ -891,29 +1221,53 @@ function buildWebhookConfigFromTrigger(
   workspaceRuntime?: WorkspaceRuntime,
 ): VcsWebhookConfig {
   const triggerConfig = trigger as Record<string, unknown>;
-  const webhookSecret = resolveSecretField(triggerConfig, "webhook_secret", "webhook_secret_env");
+  const webhookSecret = resolveSecretField(
+    triggerConfig,
+    "webhook_secret",
+    "webhook_secret_env",
+  );
   const token = resolveSecretField(triggerConfig, "token", "token_env");
   const baseUrl = triggerConfig.base_url as string | undefined;
   const workspaceId = resolveWorkspaceIdFromTrigger(config, trigger.name);
-  const repoRef = resolveWorkspaceRepoRef(config, trigger.name, workspaceId) ?? resolveWorkspaceRepoRef(config, trigger.name);
+  const repoRef =
+    resolveWorkspaceRepoRef(config, trigger.name, workspaceId) ??
+    resolveWorkspaceRepoRef(config, trigger.name);
   const hasApp = isPlainObject(triggerConfig.app);
-  const appTokenService = hasApp ? appTokenServices?.get(trigger.name) : undefined;
+  const appTokenService = hasApp
+    ? appTokenServices?.get(trigger.name)
+    : undefined;
 
   return {
     triggerName: trigger.name,
     routingEnabled: (config as EffectiveConfigV2).routing !== undefined,
     workspaceId,
-    isWorkspaceEnabled: (id) => (id === "default" && Object.keys(config.workspaces.instances).length === 0) ||
-      (config.workspaces.instances[id] !== undefined && config.workspaces.instances[id]?.enabled !== false),
+    isWorkspaceEnabled: (id) =>
+      (id === "default" &&
+        Object.keys(config.workspaces.instances).length === 0) ||
+      (config.workspaces.instances[id] !== undefined &&
+        config.workspaces.instances[id]?.enabled !== false),
     ...(repoRef ? { repoRef } : {}),
     ...withRepoMappings(triggerConfig),
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
     ...(token !== undefined ? { token } : {}),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
-    ...(appTokenService ? { appTokenResolver: (installationId: number) => appTokenService.getInstallationToken(installationId) } : {}),
-    ...(appTokenService ? { evictTokenCache: (installationId?: number) => appTokenService.evict(installationId) } : {}),
+    ...(appTokenService
+      ? {
+          appTokenResolver: (installationId: number) =>
+            appTokenService.getInstallationToken(installationId),
+        }
+      : {}),
+    ...(appTokenService
+      ? {
+          evictTokenCache: (installationId?: number) =>
+            appTokenService.evict(installationId),
+        }
+      : {}),
     ...(workspaceRuntime?.isMatchReferenced(trigger.name)
-      ? { resolveWorkspace: (source, event) => workspaceRuntime.resolveForSource(trigger.name, source, event) }
+      ? {
+          resolveWorkspace: (source, event) =>
+            workspaceRuntime.resolveForSource(trigger.name, source, event),
+        }
       : {}),
   };
 }
@@ -926,10 +1280,21 @@ export function resolveGenericWebhookConfigs(
   workspaceRuntime?: WorkspaceRuntime,
 ): readonly VcsWebhookConfig[] {
   const triggers = triggerName
-    ? config.triggers.filter((trigger) => trigger.name === triggerName && trigger.kind === kind)
+    ? config.triggers.filter(
+        (trigger) => trigger.name === triggerName && trigger.kind === kind,
+      )
     : config.triggers.filter((trigger) => trigger.kind === kind);
 
-  return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
+  return triggers
+    .filter((trigger) => triggerAdmitsNewWork(config, trigger))
+    .map((trigger) =>
+      buildWebhookConfigFromTrigger(
+        config,
+        trigger,
+        appTokenServices,
+        workspaceRuntime,
+      ),
+    );
 }
 
 export function resolveGenericWebhookConfig(
@@ -938,7 +1303,12 @@ export function resolveGenericWebhookConfig(
   triggerName?: string,
   appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
 ): VcsWebhookConfig | undefined {
-  return resolveGenericWebhookConfigs(config, kind, triggerName, appTokenServices)[0];
+  return resolveGenericWebhookConfigs(
+    config,
+    kind,
+    triggerName,
+    appTokenServices,
+  )[0];
 }
 
 export function resolveP4TriggerConfigs(
@@ -950,38 +1320,46 @@ export function resolveP4TriggerConfigs(
     ? config.triggers.filter((t) => t.name === triggerName && t.kind === "p4")
     : config.triggers.filter((t) => t.kind === "p4");
 
-  return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger): P4TriggerConfig => {
-    const triggerConfig = trigger as Record<string, unknown>;
-    const port = triggerConfig.port as string | undefined;
-    const user = resolveSecretField(triggerConfig, "user", "user_env");
-    const rawPassword = resolveSecretField(triggerConfig, "password", "password_env")
-      ?? resolveSecretField(triggerConfig, "ticket", "ticket_env");
-    const depot = triggerConfig.depot_path as string | undefined;
-    const streams = triggerConfig.streams as string[] | undefined;
-    const workspace = triggerConfig.workspace as string | undefined;
-    const watchPath = triggerConfig.watch_path as string[] | undefined;
-    const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
-    const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
+  return triggers
+    .filter((trigger) => triggerAdmitsNewWork(config, trigger))
+    .map((trigger): P4TriggerConfig => {
+      const triggerConfig = trigger as Record<string, unknown>;
+      const port = triggerConfig.port as string | undefined;
+      const user = resolveSecretField(triggerConfig, "user", "user_env");
+      const rawPassword =
+        resolveSecretField(triggerConfig, "password", "password_env") ??
+        resolveSecretField(triggerConfig, "ticket", "ticket_env");
+      const depot = triggerConfig.depot_path as string | undefined;
+      const streams = triggerConfig.streams as string[] | undefined;
+      const workspace = triggerConfig.workspace as string | undefined;
+      const watchPath = triggerConfig.watch_path as string[] | undefined;
+      const includeCrFile = triggerConfig.include_cr_file as
+        string[] | undefined;
+      const excludeCrFile = triggerConfig.exclude_cr_file as
+        string[] | undefined;
 
-    return {
-      triggerName: trigger.name,
-      workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
-      ...(port ? { port } : {}),
-      ...(user ? { user } : {}),
-      ...(rawPassword ? { password: rawPassword } : {}),
-      // depot stays the legacy single-scope fallback; streams keeps the full
-      // configured list so resolution/factory never truncate to the first.
-      ...(streams?.[0] ? { depot: streams[0] } : depot ? { depot } : {}),
-      ...(streams && streams.length > 0 ? { streams } : {}),
-      ...(workspace ? { workspace } : {}),
-      ...(watchPath ? { watchPath } : {}),
-      ...(includeCrFile ? { includeCrFile } : {}),
-      ...(excludeCrFile ? { excludeCrFile } : {}),
-      ...(workspaceRuntime?.isMatchReferenced(trigger.name)
-        ? { resolveWorkspace: (source, event) => workspaceRuntime.resolveForSource(trigger.name, source, event) }
-        : {}),
-    };
-  });
+      return {
+        triggerName: trigger.name,
+        workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+        ...(port ? { port } : {}),
+        ...(user ? { user } : {}),
+        ...(rawPassword ? { password: rawPassword } : {}),
+        // depot stays the legacy single-scope fallback; streams keeps the full
+        // configured list so resolution/factory never truncate to the first.
+        ...(streams?.[0] ? { depot: streams[0] } : depot ? { depot } : {}),
+        ...(streams && streams.length > 0 ? { streams } : {}),
+        ...(workspace ? { workspace } : {}),
+        ...(watchPath ? { watchPath } : {}),
+        ...(includeCrFile ? { includeCrFile } : {}),
+        ...(excludeCrFile ? { excludeCrFile } : {}),
+        ...(workspaceRuntime?.isMatchReferenced(trigger.name)
+          ? {
+              resolveWorkspace: (source, event) =>
+                workspaceRuntime.resolveForSource(trigger.name, source, event),
+            }
+          : {}),
+      };
+    });
 }
 
 export function resolveP4TriggerConfig(
@@ -1005,9 +1383,10 @@ export function resolveSvnTriggerConfigs(
   for (const trigger of triggers) {
     if (!triggerAdmitsNewWork(config, trigger)) continue;
     const triggerConfig = trigger as Record<string, unknown>;
-    const repositoryUrl = typeof triggerConfig.repository_url === "string"
-      ? triggerConfig.repository_url.trim()
-      : "";
+    const repositoryUrl =
+      typeof triggerConfig.repository_url === "string"
+        ? triggerConfig.repository_url.trim()
+        : "";
     if (!repositoryUrl) {
       continue;
     }
@@ -1015,7 +1394,10 @@ export function resolveSvnTriggerConfigs(
       ? (triggerConfig.project_roots as readonly Record<string, unknown>[])
       : undefined;
     const projectRoots = rawRoots
-      ?.filter((root) => typeof root?.prefix === "string" && typeof root?.project === "string")
+      ?.filter(
+        (root) =>
+          typeof root?.prefix === "string" && typeof root?.project === "string",
+      )
       .map((root) => ({
         prefix: String(root.prefix),
         project: String(root.project),
@@ -1028,7 +1410,10 @@ export function resolveSvnTriggerConfigs(
       repositoryUrl,
       ...(projectRoots && projectRoots.length > 0 ? { projectRoots } : {}),
       ...(workspaceRuntime?.isMatchReferenced(trigger.name)
-        ? { resolveWorkspace: (source, event) => workspaceRuntime.resolveForSource(trigger.name, source, event) }
+        ? {
+            resolveWorkspace: (source, event) =>
+              workspaceRuntime.resolveForSource(trigger.name, source, event),
+          }
         : {}),
     });
   }
@@ -1045,19 +1430,30 @@ export function resolveSvnTriggerConfig(
 
 export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
   const serverAuth = config.server.auth as Record<string, unknown> | undefined;
-  const globalApiKey = serverAuth ? resolveSecretField(serverAuth, "api_key", "api_key_env") : undefined;
-  const authEnabled = serverAuth ? (serverAuth.enabled as boolean | undefined) !== false : true;
+  const globalApiKey = serverAuth
+    ? resolveSecretField(serverAuth, "api_key", "api_key_env")
+    : undefined;
+  const authEnabled = serverAuth
+    ? (serverAuth.enabled as boolean | undefined) !== false
+    : true;
 
   const workspaceApiKeys = new Map<string, string>();
-  for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
+  for (const [workspaceId, instance] of Object.entries(
+    config.workspaces.instances,
+  )) {
     const workspaceConfig = instance as Record<string, unknown>;
-    const workspaceAuth = workspaceConfig.auth as Record<string, unknown> | undefined;
+    const workspaceAuth = workspaceConfig.auth as
+      Record<string, unknown> | undefined;
     if (!workspaceAuth) continue;
 
     const wsEnabled = workspaceAuth.enabled as boolean | undefined;
     if (wsEnabled === false) continue;
 
-    const wsApiKey = resolveSecretField(workspaceAuth, "api_key", "api_key_env");
+    const wsApiKey = resolveSecretField(
+      workspaceAuth,
+      "api_key",
+      "api_key_env",
+    );
     if (wsApiKey) {
       workspaceApiKeys.set(workspaceId, wsApiKey);
     }
@@ -1074,30 +1470,52 @@ export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
   };
 }
 
-function triggerAdmitsNewWork(config: AppConfig, trigger: AppConfig["triggers"][number]): boolean {
+function triggerAdmitsNewWork(
+  config: AppConfig,
+  trigger: AppConfig["triggers"][number],
+): boolean {
   if (trigger.enabled === false) return false;
-  const bound = Object.values(config.workspaces.instances).find((entry) => entry.source_repo?.trigger === trigger.name);
+  const bound = Object.values(config.workspaces.instances).find(
+    (entry) => entry.source_repo?.trigger === trigger.name,
+  );
   if (bound) return bound.enabled !== false;
-  const candidates = Object.values(config.workspaces.instances).filter((entry) => entry.match?.some((rule) => !rule.triggers || rule.triggers.includes(trigger.name)));
-  return candidates.length === 0 || candidates.some((entry) => entry.enabled !== false);
+  const candidates = Object.values(config.workspaces.instances).filter(
+    (entry) =>
+      entry.match?.some(
+        (rule) => !rule.triggers || rule.triggers.includes(trigger.name),
+      ),
+  );
+  return (
+    candidates.length === 0 ||
+    candidates.some((entry) => entry.enabled !== false)
+  );
 }
 
-function buildActiveProjectIdentities(config: AppConfig): readonly ActiveProjectIdentity[] {
-  return Object.entries(config.workspaces.instances).flatMap(([workspaceId, instance]) => {
-    const sourceRepo = instance.source_repo;
-    if (!sourceRepo) {
-      return [];
-    }
+function buildActiveProjectIdentities(
+  config: AppConfig,
+): readonly ActiveProjectIdentity[] {
+  return Object.entries(config.workspaces.instances).flatMap(
+    ([workspaceId, instance]) => {
+      const sourceRepo = instance.source_repo;
+      if (!sourceRepo) {
+        return [];
+      }
 
-    return [{
-      workspaceId,
-      triggerName: sourceRepo.trigger,
-      repoRef: sourceRepo.repo,
-    }];
-  });
+      return [
+        {
+          workspaceId,
+          triggerName: sourceRepo.trigger,
+          repoRef: sourceRepo.repo,
+        },
+      ];
+    },
+  );
 }
 
-function resolveWorkspaceIdFromTrigger(config: AppConfig, triggerName: string): string {
+function resolveWorkspaceIdFromTrigger(
+  config: AppConfig,
+  triggerName: string,
+): string {
   const instances = config.workspaces.instances;
   for (const [id, instance] of Object.entries(instances)) {
     if (instance.source_repo?.trigger === triggerName) {
@@ -1113,7 +1531,9 @@ function resolveWorkspaceIdFromTrigger(config: AppConfig, triggerName: string): 
   return "default";
 }
 
-function resolveRepoMappings(triggerConfig: Record<string, unknown>): readonly { readonly match: string; readonly workspace: string }[] {
+function resolveRepoMappings(
+  triggerConfig: Record<string, unknown>,
+): readonly { readonly match: string; readonly workspace: string }[] {
   const repos = triggerConfig.repos;
   if (!Array.isArray(repos)) {
     return [];
@@ -1125,15 +1545,19 @@ function resolveRepoMappings(triggerConfig: Record<string, unknown>): readonly {
     }
 
     const entry = repo as Record<string, unknown>;
-    return typeof entry.match === "string" && typeof entry.workspace === "string"
+    return typeof entry.match === "string" &&
+      typeof entry.workspace === "string"
       ? [{ match: entry.match, workspace: entry.workspace }]
       : [];
   });
 }
 
-function withRepoMappings(
-  triggerConfig: Record<string, unknown>,
-): { readonly repoMappings?: readonly { readonly match: string; readonly workspace: string }[] } {
+function withRepoMappings(triggerConfig: Record<string, unknown>): {
+  readonly repoMappings?: readonly {
+    readonly match: string;
+    readonly workspace: string;
+  }[];
+} {
   const repoMappings = resolveRepoMappings(triggerConfig);
   return repoMappings.length > 0 ? { repoMappings } : {};
 }
@@ -1162,7 +1586,9 @@ export interface CardActionIssuerOptions {
 }
 
 export interface OutputPublisherConfigOptions {
-  readonly authorGuesserFactory?: (context: ReviewOrchestrationContext) => ChannelAuthorGuesser;
+  readonly authorGuesserFactory?: (
+    context: ReviewOrchestrationContext,
+  ) => ChannelAuthorGuesser;
   readonly baseDir?: string;
   readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
   readonly resolutionAnalyzerFactory?: (
@@ -1177,7 +1603,9 @@ function readNoProblemsAction(value: unknown): NoProblemsAction | undefined {
     return undefined;
   }
 
-  return value.action === "publish" || value.action === "suppress" || value.action === "publish_if_summary"
+  return value.action === "publish" ||
+    value.action === "suppress" ||
+    value.action === "publish_if_summary"
     ? value.action
     : undefined;
 }
@@ -1190,7 +1618,10 @@ function readNoProblemsActionFrom(raw: unknown): NoProblemsAction | undefined {
   return readNoProblemsAction(raw.no_problems);
 }
 
-function readChannelOverrideNoProblemsAction(raw: unknown, channelName: string): NoProblemsAction | undefined {
+function readChannelOverrideNoProblemsAction(
+  raw: unknown,
+  channelName: string,
+): NoProblemsAction | undefined {
   if (!isPlainObject(raw) || !isPlainObject(raw.channel_overrides)) {
     return undefined;
   }
@@ -1198,11 +1629,26 @@ function readChannelOverrideNoProblemsAction(raw: unknown, channelName: string):
   return readNoProblemsActionFrom(raw.channel_overrides[channelName]);
 }
 
-function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsAction {
-  if (channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue" || channelKind === "gitlab_problem_issue") {
+function defaultNoProblemsActionForChannel(
+  channelKind: string,
+): NoProblemsAction {
+  if (
+    channelKind === "gitea_problem_issue" ||
+    channelKind === "github_problem_issue" ||
+    channelKind === "gitlab_problem_issue"
+  ) {
     return "publish";
   }
-  if (["feishu_bot", "feishu_app", "wecom_bot", "slack_app", "discord_bot", "telegram_bot"].includes(channelKind)) {
+  if (
+    [
+      "feishu_bot",
+      "feishu_app",
+      "wecom_bot",
+      "slack_app",
+      "discord_bot",
+      "telegram_bot",
+    ].includes(channelKind)
+  ) {
     return "publish_if_summary";
   }
   return "suppress";
@@ -1219,11 +1665,17 @@ function resolveNoProblemsAction(
 
   const defaultsOutputs = config.workspaces.defaults.outputs;
   action = readNoProblemsActionFrom(defaultsOutputs) ?? action;
-  action = readChannelOverrideNoProblemsAction(defaultsOutputs, channel.name) ?? action;
+  action =
+    readChannelOverrideNoProblemsAction(defaultsOutputs, channel.name) ??
+    action;
 
-  const workspaceOutputs = workspaceId ? config.workspaces.instances[workspaceId]?.outputs : undefined;
+  const workspaceOutputs = workspaceId
+    ? config.workspaces.instances[workspaceId]?.outputs
+    : undefined;
   action = readNoProblemsActionFrom(workspaceOutputs) ?? action;
-  action = readChannelOverrideNoProblemsAction(workspaceOutputs, channel.name) ?? action;
+  action =
+    readChannelOverrideNoProblemsAction(workspaceOutputs, channel.name) ??
+    action;
 
   return action;
 }
@@ -1245,7 +1697,9 @@ function resolveProblemIssueMaxRecentIssues(
   }
 }
 
-function toMentionChannelKind(channelKind: string): MentionChannelKind | undefined {
+function toMentionChannelKind(
+  channelKind: string,
+): MentionChannelKind | undefined {
   switch (channelKind) {
     case "gitea_pr_review":
     case "github_pr_review":
@@ -1270,14 +1724,16 @@ function shouldMentionAuthor(channel: OutputChannelConfig): boolean {
     return configured;
   }
 
-  return readFileDirectoryConfig(channel as Record<string, unknown>) !== undefined ||
+  return (
+    readFileDirectoryConfig(channel as Record<string, unknown>) !== undefined ||
     channel.kind === "gitea_pr_review" ||
     channel.kind === "github_pr_review" ||
     channel.kind === "github_issue" ||
     channel.kind === "github_problem_issue" ||
     channel.kind === "gitlab_mr_review" ||
     channel.kind === "gitlab_problem_issue" ||
-    channel.kind === "gitea_issue";
+    channel.kind === "gitea_issue"
+  );
 }
 
 function buildAuthorResolutionOptions(
@@ -1287,9 +1743,15 @@ function buildAuthorResolutionOptions(
   const authorResolution = config.outputs.author_resolution;
   const mentionFallback = (channel as Record<string, unknown>).mention_fallback;
   const options: AuthorResolutionOptions = {
-    ...(authorResolution?.email_mappings ? { emailMappings: authorResolution.email_mappings } : {}),
-    ...(authorResolution?.email_blacklist ? { emailBlacklist: new Set(authorResolution.email_blacklist) } : {}),
-    ...(mentionFallback === "all" || mentionFallback === "skip" ? { mentionFallback } : {}),
+    ...(authorResolution?.email_mappings
+      ? { emailMappings: authorResolution.email_mappings }
+      : {}),
+    ...(authorResolution?.email_blacklist
+      ? { emailBlacklist: new Set(authorResolution.email_blacklist) }
+      : {}),
+    ...(mentionFallback === "all" || mentionFallback === "skip"
+      ? { mentionFallback }
+      : {}),
   };
 
   return Object.keys(options).length > 0 ? options : undefined;
@@ -1306,7 +1768,13 @@ function buildBaseTemplateContext(
   const eventAuthor = reviewEvent?.author?.username;
   const eventEmail = reviewEvent?.author?.email;
   const eventDisplayName = reviewEvent?.author?.displayName;
-  const eventCtx: { author?: string; email?: string; displayName?: string; url?: string; title?: string } = {};
+  const eventCtx: {
+    author?: string;
+    email?: string;
+    displayName?: string;
+    url?: string;
+    title?: string;
+  } = {};
   if (eventAuthor !== undefined) {
     eventCtx.author = eventAuthor;
   }
@@ -1331,18 +1799,29 @@ function buildBaseTemplateContext(
         ...(repoName ? { name: repoName } : {}),
       }
     : undefined;
-  const atMentions = mentionAuthor && reviewEvent && mentionChannelKind
-    ? buildAtMentions({ author: reviewEvent.author }, mentionChannelKind, authorResolution)
-    : "";
+  const atMentions =
+    mentionAuthor && reviewEvent && mentionChannelKind
+      ? buildAtMentions(
+          { author: reviewEvent.author },
+          mentionChannelKind,
+          authorResolution,
+        )
+      : "";
   const target = reviewEvent
     ? buildTemplateTargetContext({
         kind: reviewEvent.targetKind,
         provider: reviewEvent.provider,
         ...(resolvedRepoRef ? { repoRef: resolvedRepoRef } : {}),
-        ...(reviewEvent.title !== undefined ? { title: reviewEvent.title } : {}),
+        ...(reviewEvent.title !== undefined
+          ? { title: reviewEvent.title }
+          : {}),
         ...(reviewEvent.url !== undefined ? { url: reviewEvent.url } : {}),
-        ...(reviewEvent.baseSha !== undefined ? { baseRevision: reviewEvent.baseSha } : {}),
-        ...(reviewEvent.headSha !== undefined ? { headRevision: reviewEvent.headSha } : {}),
+        ...(reviewEvent.baseSha !== undefined
+          ? { baseRevision: reviewEvent.baseSha }
+          : {}),
+        ...(reviewEvent.headSha !== undefined
+          ? { headRevision: reviewEvent.headSha }
+          : {}),
         triggerName: reviewEvent.triggerName,
         workspaceId: reviewEvent.workspaceId,
         ...targetUrlTemplates,
@@ -1360,12 +1839,22 @@ function buildBaseTemplateContext(
   };
 }
 
-function buildVcsContext(reviewEvent: ReviewEvent | undefined): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {
+function buildVcsContext(reviewEvent: ReviewEvent | undefined): {
+  branch?: string;
+  sourcePath?: string;
+  workspace?: string;
+  repositoryPath?: string;
+} {
   if (!reviewEvent) {
     return {};
   }
 
-  const result: { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } = {};
+  const result: {
+    branch?: string;
+    sourcePath?: string;
+    workspace?: string;
+    repositoryPath?: string;
+  } = {};
 
   if (reviewEvent.branch !== undefined) {
     result.branch = reviewEvent.branch;
@@ -1395,12 +1884,20 @@ function createChannelRendering(
 ): {
   readonly mentionText: string;
   readonly renderProblem: (problem: ReviewProblem) => ReviewProblem;
-  readonly renderSummary: (summary: string, problems: readonly ReviewProblem[], title?: string) => string;
+  readonly renderSummary: (
+    summary: string,
+    problems: readonly ReviewProblem[],
+    title?: string,
+  ) => string;
 } {
-  const layout = reviewEvent ? createWorkspaceRuntime(config, baseDir).layoutForEvent(reviewEvent) : undefined;
-  const workspaceTemplatesDir = layout?.templatesDir ?? (workspaceId
-    ? resolve(baseDir, "workspaces", workspaceId, "templates")
-    : undefined);
+  const layout = reviewEvent
+    ? createWorkspaceRuntime(config, baseDir).layoutForEvent(reviewEvent)
+    : undefined;
+  const workspaceTemplatesDir =
+    layout?.templatesDir ??
+    (workspaceId
+      ? resolve(baseDir, "workspaces", workspaceId, "templates")
+      : undefined);
   const builtinTemplatesBaseDir = resolve(baseDir, "templates", "builtin");
   const resolver = createTemplateResolver({
     channelKind: channel.kind,
@@ -1412,7 +1909,13 @@ function createChannelRendering(
       return name !== undefined ? config.outputs.templates[name] : undefined;
     },
     ...(workspaceTemplatesDir ? { workspaceTemplatesDir } : {}),
-    ...(layout?.policyRoot ? { fallbackWorkspaceTemplatesDirs: [resolve(layout.policyRoot, "templates")] } : {}),
+    ...(layout?.policyRoot
+      ? {
+          fallbackWorkspaceTemplatesDirs: [
+            resolve(layout.policyRoot, "templates"),
+          ],
+        }
+      : {}),
     builtinTemplatesBaseDir,
   });
   const mentionChannelKind = toMentionChannelKind(channel.kind);
@@ -1421,13 +1924,18 @@ function createChannelRendering(
     reviewEvent,
     repoRef,
     mentionChannelKind,
-    shouldMentionAuthor(channel) && readFileDirectoryConfig(channel as Record<string, unknown>) === undefined,
+    shouldMentionAuthor(channel) &&
+      readFileDirectoryConfig(channel as Record<string, unknown>) === undefined,
     authorResolution,
     targetUrlTemplates,
   );
 
-  const normalize = channel.kind === "slack_app" || channel.kind === "discord_bot" || channel.kind === "telegram_bot"
-    ? normalizeSocialImMarkdown : fixAndValidateMarkdown;
+  const normalize =
+    channel.kind === "slack_app" ||
+    channel.kind === "discord_bot" ||
+    channel.kind === "telegram_bot"
+      ? normalizeSocialImMarkdown
+      : fixAndValidateMarkdown;
 
   return {
     mentionText: resolvedMention ?? baseTemplateContext.atMentions ?? "",
@@ -1436,27 +1944,42 @@ function createChannelRendering(
         return problem;
       }
 
-      const renderedMarkdown = normalize(resolver.render("problem", {
-        ...baseTemplateContext,
-        ...(resolvedMention !== undefined ? { atMentions: resolvedMention } : {}),
-        problem: toTemplateProblem(problem),
-      }));
+      const renderedMarkdown = normalize(
+        resolver.render("problem", {
+          ...baseTemplateContext,
+          ...(resolvedMention !== undefined
+            ? { atMentions: resolvedMention }
+            : {}),
+          problem: toTemplateProblem(problem),
+        }),
+      );
 
       return { ...problem, renderedMarkdown };
     },
-    renderSummary(summary: string, problems: readonly ReviewProblem[], title?: string): string {
-      return normalize(resolver.render("summary", {
-        ...baseTemplateContext,
-        ...(resolvedMention !== undefined ? { atMentions: resolvedMention } : {}),
-        summary,
-        ...(title ? { summaryTitle: title } : {}),
-        problems: problems.map((problem) => toTemplateProblem(problem)),
-      }));
+    renderSummary(
+      summary: string,
+      problems: readonly ReviewProblem[],
+      title?: string,
+    ): string {
+      return normalize(
+        resolver.render("summary", {
+          ...baseTemplateContext,
+          ...(resolvedMention !== undefined
+            ? { atMentions: resolvedMention }
+            : {}),
+          summary,
+          ...(title ? { summaryTitle: title } : {}),
+          problems: problems.map((problem) => toTemplateProblem(problem)),
+        }),
+      );
     },
   };
 }
 
-function appendPublisherResults(target: DispatchResult[], result: ReviewDispatchResult): void {
+function appendPublisherResults(
+  target: DispatchResult[],
+  result: ReviewDispatchResult,
+): void {
   if (Array.isArray(result)) {
     target.push(...(result as readonly DispatchResult[]));
     return;
@@ -1485,7 +2008,10 @@ function toDispatchErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function buildDispatchFailureHint(channelName: string, status: number | undefined): string | undefined {
+function buildDispatchFailureHint(
+  channelName: string,
+  status: number | undefined,
+): string | undefined {
   if (status === 403 && channelName.toLowerCase().includes("github")) {
     return "GitHub webhook event subscriptions do not grant REST API permissions. Configure token_env with a token or GitHub App installation token that has Issues read/write access, and reinstall/refresh the App installation after changing permissions.";
   }
@@ -1493,7 +2019,11 @@ function buildDispatchFailureHint(channelName: string, status: number | undefine
   return undefined;
 }
 
-function createFailedDispatchResult(channelName: string, phase: "problem" | "summary", error: unknown): DispatchResult {
+function createFailedDispatchResult(
+  channelName: string,
+  phase: "problem" | "summary",
+  error: unknown,
+): DispatchResult {
   const status = readDispatchErrorStatus(error);
   const hint = buildDispatchFailureHint(channelName, status);
   return {
@@ -1509,18 +2039,24 @@ function createFailedDispatchResult(channelName: string, phase: "problem" | "sum
   };
 }
 
-function logDispatchFailure(channelName: string, phase: "problem" | "summary", error: unknown): void {
+function logDispatchFailure(
+  channelName: string,
+  phase: "problem" | "summary",
+  error: unknown,
+): void {
   const status = readDispatchErrorStatus(error);
   const hint = buildDispatchFailureHint(channelName, status);
-  console.warn(JSON.stringify({
-    level: "warn",
-    msg: "output channel dispatch failed",
-    channel: channelName,
-    phase,
-    error: toDispatchErrorMessage(error),
-    ...(status !== undefined ? { status } : {}),
-    ...(hint ? { hint } : {}),
-  }));
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      msg: "output channel dispatch failed",
+      channel: channelName,
+      phase,
+      error: toDispatchErrorMessage(error),
+      ...(status !== undefined ? { status } : {}),
+      ...(hint ? { hint } : {}),
+    }),
+  );
 }
 
 function callPublishProblem(
@@ -1534,7 +2070,9 @@ function callPublishProblem(
   return publisher.publishProblem(problem);
 }
 
-function uniqueOutputPublisherEntries(entries: readonly OutputPublisherEntry[]): readonly OutputPublisherEntry[] {
+function uniqueOutputPublisherEntries(
+  entries: readonly OutputPublisherEntry[],
+): readonly OutputPublisherEntry[] {
   const seen = new Set<string>();
   const result: OutputPublisherEntry[] = [];
   for (const entry of entries) {
@@ -1552,7 +2090,9 @@ function uniqueOutputPublisherEntries(entries: readonly OutputPublisherEntry[]):
  * issue/PR creations expose `raw.html_url` (GitLab: `web_url`); managed problem-issue
  * reconciliations nest that record under `raw.issue`.
  */
-function extractIssueUrlFromResults(results: readonly DispatchResult[]): string | undefined {
+function extractIssueUrlFromResults(
+  results: readonly DispatchResult[],
+): string | undefined {
   for (const result of results) {
     if (result.status !== "published" || !isPlainObject(result.raw)) {
       continue;
@@ -1575,29 +2115,58 @@ export function createCompositeOutputPublisher(
     readonly skipChannels?: ReadonlySet<string>;
     readonly signal?: AbortSignal;
     readonly onChannelStart?: (channel: string) => void | Promise<void>;
-    readonly onChannelResult?: (result: DispatchResult, phase: "problem" | "summary", finalForChannel?: boolean) => void | Promise<void>;
+    readonly onChannelResult?: (
+      result: DispatchResult,
+      phase: "problem" | "summary",
+      finalForChannel?: boolean,
+    ) => void | Promise<void>;
   },
 ): ReviewOutputPublisher | undefined {
-  const summaryCapable = uniqueOutputPublisherEntries(summaryPublishers.filter((entry) => entry.publisher.publishSummary));
-  const lineFlushCapable = uniqueOutputPublisherEntries(linePublishers.filter((entry) => entry.publisher.publishSummary));
-  const summaryFlushCapable = uniqueOutputPublisherEntries([...lineFlushCapable, ...summaryCapable]);
-  const summaryChannelNames = new Set(summaryCapable.map((entry) => entry.name));
+  const summaryCapable = uniqueOutputPublisherEntries(
+    summaryPublishers.filter((entry) => entry.publisher.publishSummary),
+  );
+  const lineFlushCapable = uniqueOutputPublisherEntries(
+    linePublishers.filter((entry) => entry.publisher.publishSummary),
+  );
+  const summaryFlushCapable = uniqueOutputPublisherEntries([
+    ...lineFlushCapable,
+    ...summaryCapable,
+  ]);
+  const summaryChannelNames = new Set(
+    summaryCapable.map((entry) => entry.name),
+  );
   // Confirm the full report before sending a linked IM notification.
   const ISSUE_CHANNEL_KINDS: Record<string, true> = {
-    github_issue: true, github_problem_issue: true, github_pr_review: true,
-    gitea_issue: true, gitea_problem_issue: true, gitea_pr_review: true,
-    gitlab_mr_review: true, gitlab_problem_issue: true,
+    github_issue: true,
+    github_problem_issue: true,
+    github_pr_review: true,
+    gitea_issue: true,
+    gitea_problem_issue: true,
+    gitea_pr_review: true,
+    gitlab_mr_review: true,
+    gitlab_problem_issue: true,
   };
   const LINKED_IM_CHANNEL_KINDS: Record<string, true> = {
-    feishu_bot: true, feishu_app: true, slack_app: true, discord_bot: true, telegram_bot: true,
+    feishu_bot: true,
+    feishu_app: true,
+    slack_app: true,
+    discord_bot: true,
+    telegram_bot: true,
   };
   const calls = new Map<string, number>();
   let summarySequence = 0;
-  const invoke = <T>(channel: string, phase: string, work: () => Promise<T>, ordinal?: number): Promise<T> => {
+  const invoke = <T>(
+    channel: string,
+    phase: string,
+    work: () => Promise<T>,
+    ordinal?: number,
+  ): Promise<T> => {
     const key = `${channel}:${phase}`;
     const index = ordinal ?? calls.get(key) ?? 0;
     calls.set(key, index + 1);
-    return recovery?.remote ? recovery.remote.run(channel, `${phase}:${index}`, work) : work();
+    return recovery?.remote
+      ? recovery.remote.run(channel, `${phase}:${index}`, work)
+      : work();
   };
 
   if (linePublishers.length === 0 && summaryFlushCapable.length === 0) {
@@ -1607,10 +2176,28 @@ export function createCompositeOutputPublisher(
   return {
     handlesRendering: true,
     publishesProblems: linePublishers.length > 0,
-    noProblemsAction: summaryCapable.some((entry) => entry.publisher.noProblemsAction === "publish" || entry.publisher.noProblemsAction === "publish_if_summary") ? summaryCapable.every((entry) => entry.publisher.noProblemsAction === "publish_if_summary") ? "publish_if_summary" : "publish" : "suppress",
-    reconcilesManagedIssues: summaryCapable.some((entry) => entry.publisher.reconcilesManagedIssues === true),
-    publishEmptySummary: summaryCapable.some((entry) => entry.publisher.publishEmptySummary && entry.publisher.noProblemsAction !== "suppress"),
-    async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
+    noProblemsAction: summaryCapable.some(
+      (entry) =>
+        entry.publisher.noProblemsAction === "publish" ||
+        entry.publisher.noProblemsAction === "publish_if_summary",
+    )
+      ? summaryCapable.every(
+          (entry) => entry.publisher.noProblemsAction === "publish_if_summary",
+        )
+        ? "publish_if_summary"
+        : "publish"
+      : "suppress",
+    reconcilesManagedIssues: summaryCapable.some(
+      (entry) => entry.publisher.reconcilesManagedIssues === true,
+    ),
+    publishEmptySummary: summaryCapable.some(
+      (entry) =>
+        entry.publisher.publishEmptySummary &&
+        entry.publisher.noProblemsAction !== "suppress",
+    ),
+    async publishProblem(
+      problem: ReviewProblem,
+    ): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
       for (const entry of linePublishers) {
         if (recovery?.skipChannels?.has(entry.name)) {
@@ -1620,10 +2207,17 @@ export function createCompositeOutputPublisher(
         await recovery?.onChannelStart?.(entry.name);
         const firstResult = results.length;
         try {
-          appendPublisherResults(results, await invoke(entry.name, "problem", () => callPublishProblem(entry.publisher, problem)));
+          appendPublisherResults(
+            results,
+            await invoke(entry.name, "problem", () =>
+              callPublishProblem(entry.publisher, problem),
+            ),
+          );
         } catch (error) {
           logDispatchFailure(entry.name, "problem", error);
-          results.push(createFailedDispatchResult(entry.name, "problem", error));
+          results.push(
+            createFailedDispatchResult(entry.name, "problem", error),
+          );
         }
         for (const result of results.slice(firstResult)) {
           await recovery?.onChannelResult?.(result, "problem");
@@ -1641,14 +2235,31 @@ export function createCompositeOutputPublisher(
             const results: DispatchResult[] = [];
             const summaryOrdinal = summarySequence++;
             const noProblems = (problems?.length ?? 0) === 0;
-            const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
-            const entries = [...(noProblems ? summaryCapable : summaryFlushCapable)].sort((a, b) =>
-              Number(b.kind !== undefined && ISSUE_CHANNEL_KINDS[b.kind] === true) - Number(a.kind !== undefined && ISSUE_CHANNEL_KINDS[a.kind] === true));
+            const bypassNoProblemsPolicy =
+              options?.bypassNoProblemsPolicy === true;
+            const entries = [
+              ...(noProblems ? summaryCapable : summaryFlushCapable),
+            ].sort(
+              (a, b) =>
+                Number(
+                  b.kind !== undefined && ISSUE_CHANNEL_KINDS[b.kind] === true,
+                ) -
+                Number(
+                  a.kind !== undefined && ISSUE_CHANNEL_KINDS[a.kind] === true,
+                ),
+            );
             let issueLinkUrl = options?.summaryIssueUrl;
             if (!issueLinkUrl && recovery?.remote) {
               for (const entry of entries) {
-                if (entry.kind && ISSUE_CHANNEL_KINDS[entry.kind] && recovery.skipChannels?.has(entry.name)) {
-                  issueLinkUrl = recovery.remote.publishedUrl(entry.name, `summary:${summaryOrdinal}`);
+                if (
+                  entry.kind &&
+                  ISSUE_CHANNEL_KINDS[entry.kind] &&
+                  recovery.skipChannels?.has(entry.name)
+                ) {
+                  issueLinkUrl = recovery.remote.publishedUrl(
+                    entry.name,
+                    `summary:${summaryOrdinal}`,
+                  );
                   if (issueLinkUrl) break;
                 }
               }
@@ -1661,11 +2272,18 @@ export function createCompositeOutputPublisher(
               if (!summaryChannelNames.has(entry.name) && noProblems) {
                 continue;
               }
-              if (!bypassNoProblemsPolicy && noProblems && publisher.reconcilesManagedIssues !== true) {
+              if (
+                !bypassNoProblemsPolicy &&
+                noProblems &&
+                publisher.reconcilesManagedIssues !== true
+              ) {
                 if (publisher.noProblemsAction === "suppress") {
                   continue;
                 }
-                if (publisher.noProblemsAction === "publish_if_summary" && !summary.trim()) {
+                if (
+                  publisher.noProblemsAction === "publish_if_summary" &&
+                  !summary.trim()
+                ) {
                   continue;
                 }
               }
@@ -1674,23 +2292,53 @@ export function createCompositeOutputPublisher(
                 await recovery?.onChannelStart?.(entry.name);
                 const firstResult = results.length;
                 const kind = entry.kind;
-                const isIssueChannel = kind !== undefined && ISSUE_CHANNEL_KINDS[kind] === true;
-                const isLinkedImChannel = kind !== undefined && LINKED_IM_CHANNEL_KINDS[kind] === true;
-                const effectiveOptions = isLinkedImChannel && issueLinkUrl
-                  ? { ...options, summaryIssueUrl: issueLinkUrl }
-                  : options;
+                const isIssueChannel =
+                  kind !== undefined && ISSUE_CHANNEL_KINDS[kind] === true;
+                const isLinkedImChannel =
+                  kind !== undefined && LINKED_IM_CHANNEL_KINDS[kind] === true;
+                const effectiveOptions =
+                  isLinkedImChannel && issueLinkUrl
+                    ? { ...options, summaryIssueUrl: issueLinkUrl }
+                    : options;
                 try {
-                  appendPublisherResults(results, await invoke(entry.name, "summary", () => publisher.publishSummary!(summary, problems, effectiveOptions), summaryOrdinal));
+                  appendPublisherResults(
+                    results,
+                    await invoke(
+                      entry.name,
+                      "summary",
+                      () =>
+                        publisher.publishSummary!(
+                          summary,
+                          problems,
+                          effectiveOptions,
+                        ),
+                      summaryOrdinal,
+                    ),
+                  );
                 } catch (error) {
                   logDispatchFailure(entry.name, "summary", error);
-                  results.push(createFailedDispatchResult(entry.name, "summary", error));
+                  results.push(
+                    createFailedDispatchResult(entry.name, "summary", error),
+                  );
                 }
                 const produced = results.slice(firstResult);
                 if (isIssueChannel && !issueLinkUrl) {
                   issueLinkUrl = extractIssueUrlFromResults(produced);
                 }
-                for (const result of produced.length > 0 ? produced : [{ channel: entry.name, status: "published" as const, raw: { noOutput: true } }]) {
-                  await recovery?.onChannelResult?.(result, "summary", options?.finalForChannel);
+                for (const result of produced.length > 0
+                  ? produced
+                  : [
+                      {
+                        channel: entry.name,
+                        status: "published" as const,
+                        raw: { noOutput: true },
+                      },
+                    ]) {
+                  await recovery?.onChannelResult?.(
+                    result,
+                    "summary",
+                    options?.finalForChannel,
+                  );
                 }
               }
             }
@@ -1701,7 +2349,10 @@ export function createCompositeOutputPublisher(
   };
 }
 
-const feishuAppClients = new WeakMap<OutputChannelConfig, { secret: string; client: FeishuAppClient }>();
+const feishuAppClients = new WeakMap<
+  OutputChannelConfig,
+  { secret: string; client: FeishuAppClient }
+>();
 
 /** One IM connection registry per config generation; credential-keyed clients. */
 const imConnectionRegistries = new WeakMap<AppConfig, ImConnectionRegistry>();
@@ -1713,11 +2364,21 @@ const imConnectionRegistries = new WeakMap<AppConfig, ImConnectionRegistry>();
  * reaches prompts or durable records beyond the opaque member key.
  */
 const memberDirectoryHosts = new WeakMap<AppConfig, MemberDirectoryService>();
-const memberDirectoryViews = new WeakMap<AppConfig, Map<string, Promise<MemberDirectoryView>>>();
+const memberDirectoryViews = new WeakMap<
+  AppConfig,
+  Map<string, Promise<MemberDirectoryView>>
+>();
 
-function readFileDirectoryConfig(channelConfig: Record<string, unknown>): FileDirectoryConfig | undefined {
+function readFileDirectoryConfig(
+  channelConfig: Record<string, unknown>,
+): FileDirectoryConfig | undefined {
   const directory = channelConfig.member_directory;
-  if (directory === null || typeof directory !== "object" || Array.isArray(directory)) return undefined;
+  if (
+    directory === null ||
+    typeof directory !== "object" ||
+    Array.isArray(directory)
+  )
+    return undefined;
   const record = directory as Record<string, unknown>;
   if (record.source !== "file") return undefined;
   return directory as FileDirectoryConfig;
@@ -1759,10 +2420,16 @@ async function acquireFileDirectoryView(
       baseDir,
       directoryId: directory.directory_id,
       identityScope: directory.identity_scope,
-      ...(directory.allowed_root !== undefined ? { allowedRoot: directory.allowed_root } : {}),
+      ...(directory.allowed_root !== undefined
+        ? { allowedRoot: directory.allowed_root }
+        : {}),
       ...(directory.watch !== undefined ? { watch: directory.watch } : {}),
-      ...(directory.debounce_ms !== undefined ? { debounceMs: directory.debounce_ms } : {}),
-      ...(directory.poll_interval_seconds !== undefined ? { pollIntervalSeconds: directory.poll_interval_seconds } : {}),
+      ...(directory.debounce_ms !== undefined
+        ? { debounceMs: directory.debounce_ms }
+        : {}),
+      ...(directory.poll_interval_seconds !== undefined
+        ? { pollIntervalSeconds: directory.poll_interval_seconds }
+        : {}),
     });
   })();
   views.set(key, view);
@@ -1774,7 +2441,10 @@ interface FileDirectoryMention {
   readonly mobileReminder: string | undefined;
 }
 
-const NO_DIRECTORY_MENTION: FileDirectoryMention = { mentionText: "", mobileReminder: undefined };
+const NO_DIRECTORY_MENTION: FileDirectoryMention = {
+  mentionText: "",
+  mobileReminder: undefined,
+};
 
 /**
  * Resolves the commit author against a file member directory (member-directory
@@ -1795,43 +2465,72 @@ async function resolveFileDirectoryMention(options: {
   readonly reviewEvent: ReviewEvent;
   readonly baseDir: string;
 }): Promise<FileDirectoryMention> {
-  const view = await acquireFileDirectoryView(options.config, options.channelName, options.directory, options.baseDir)
-    .catch(() => undefined);
+  const view = await acquireFileDirectoryView(
+    options.config,
+    options.channelName,
+    options.directory,
+    options.baseDir,
+  ).catch(() => undefined);
   if (view === undefined) return NO_DIRECTORY_MENTION;
   const snapshot = view.getSnapshot();
-  if (snapshot.status !== "ready" || snapshot.members === undefined) return NO_DIRECTORY_MENTION;
+  if (snapshot.status !== "ready" || snapshot.members === undefined)
+    return NO_DIRECTORY_MENTION;
   const users = memberDirectoryChannelUsers(snapshot.members);
   const match = await resolveChannelAuthor({
     channelKind: options.channelKind,
-    input: { author: options.reviewEvent.author, provider: options.reviewEvent.provider,
-      submitterWorkspace: options.reviewEvent.provider === "p4" ? options.reviewEvent.submitterWorkspace : undefined,
-      sourceTrigger: options.reviewEvent.triggerName },
+    input: {
+      author: options.reviewEvent.author,
+      provider: options.reviewEvent.provider,
+      submitterWorkspace:
+        options.reviewEvent.provider === "p4"
+          ? options.reviewEvent.submitterWorkspace
+          : undefined,
+      sourceTrigger: options.reviewEvent.triggerName,
+    },
     directory: { listUsers: async () => users },
-    policy: { mappings: options.authorMappings, guessAuthor: options.guessAuthor,
-      emailBlacklist: options.config.outputs.author_resolution?.email_blacklist },
+    policy: {
+      mappings: options.authorMappings,
+      guessAuthor: options.guessAuthor,
+      emailBlacklist: options.config.outputs.author_resolution?.email_blacklist,
+    },
     guesser: options.guesser,
   });
   if (match.status !== "matched") return NO_DIRECTORY_MENTION;
-  const member = users.find(user => user.id === match.userId);
+  const member = users.find((user) => user.id === match.userId);
   if (member === undefined) return NO_DIRECTORY_MENTION;
   const rendered = renderMemberDirectoryMention(options.channelKind, member);
-  if (rendered.kind === "inline") return { mentionText: rendered.markup, mobileReminder: undefined };
-  if (rendered.kind === "text_reminder") return { mentionText: "", mobileReminder: rendered.mobile };
+  if (rendered.kind === "inline")
+    return { mentionText: rendered.markup, mobileReminder: undefined };
+  if (rendered.kind === "text_reminder")
+    return { mentionText: "", mobileReminder: rendered.mobile };
   return NO_DIRECTORY_MENTION;
 }
 
 /** Resolve identities outside report rendering; native controls are added only after escaping. */
 async function resolveSocialImAuthorId(options: {
-  config: AppConfig; channel: OutputChannelConfig; client: SocialImClient;
-  destination: string; event: ReviewEvent; baseDir: string;
-  workspaceId: string | undefined; guesser?: ChannelAuthorGuesser | undefined;
+  config: AppConfig;
+  channel: OutputChannelConfig;
+  client: SocialImClient;
+  destination: string;
+  event: ReviewEvent;
+  baseDir: string;
+  workspaceId: string | undefined;
+  guesser?: ChannelAuthorGuesser | undefined;
 }): Promise<string | undefined> {
   const { channel, config, event, client } = options;
   const directory = channel.member_directory;
-  const policy = { mappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
-    emailBlacklist: config.outputs.author_resolution?.email_blacklist };
-  const input = { author: event.author, provider: event.provider, sourceTrigger: event.triggerName,
-    submitterWorkspace: event.provider === "p4" ? event.submitterWorkspace : undefined };
+  const policy = {
+    mappings: channel.author_mappings,
+    guessAuthor: channel.guess_author === true,
+    emailBlacklist: config.outputs.author_resolution?.email_blacklist,
+  };
+  const input = {
+    author: event.author,
+    provider: event.provider,
+    sourceTrigger: event.triggerName,
+    submitterWorkspace:
+      event.provider === "p4" ? event.submitterWorkspace : undefined,
+  };
   if (directory === undefined) {
     const match = matchChannelAuthor(input, undefined, policy);
     return match.status === "matched" ? match.userId : undefined;
@@ -1840,24 +2539,53 @@ async function resolveSocialImAuthorId(options: {
   const listUsers = async (): Promise<readonly ChannelUser[]> => {
     if ("source" in directory && directory.source === "file") {
       const c = client.connection;
-      const expectedScope = c.kind === "slack_app" ? c.team_id : c.kind === "discord_bot" ? c.guild_id : c.bot_id;
+      const expectedScope =
+        c.kind === "slack_app"
+          ? c.team_id
+          : c.kind === "discord_bot"
+            ? c.guild_id
+            : c.bot_id;
       if (directory.identity_scope.id !== expectedScope) return [];
-      const view = await acquireFileDirectoryView(config, channel.name, directory, options.baseDir);
+      const view = await acquireFileDirectoryView(
+        config,
+        channel.name,
+        directory,
+        options.baseDir,
+      );
       const snapshot = view.getSnapshot();
       if (snapshot.status !== "ready" || !snapshot.members) return [];
       const users = memberDirectoryChannelUsers(snapshot.members);
       for (const user of users) ids.set(user.id, user.mentionId);
       return users;
     }
-    const users = await client.members(options.destination, resolveChannelDirectoryCacheTtlSeconds({
-      channel: "cache_ttl_seconds" in directory ? directory.cache_ttl_seconds : undefined,
-      global: config.outputs.author_resolution?.directory_cache_ttl_seconds,
-    }));
+    const users = await client.members(
+      options.destination,
+      resolveChannelDirectoryCacheTtlSeconds({
+        channel:
+          "cache_ttl_seconds" in directory
+            ? directory.cache_ttl_seconds
+            : undefined,
+        global: config.outputs.author_resolution?.directory_cache_ttl_seconds,
+      }),
+    );
     for (const user of users) ids.set(user.id, user.id);
     return users;
   };
-  const match = await resolveChannelAuthor({ channelKind: channel.kind, input, directory: { listUsers }, policy,
-    guesser: channel.guess_author === true ? options.guesser ?? ((input, users) => createConfiguredAuthorGuesser(config, options.workspaceId)(input, users)) : undefined });
+  const match = await resolveChannelAuthor({
+    channelKind: channel.kind,
+    input,
+    directory: { listUsers },
+    policy,
+    guesser:
+      channel.guess_author === true
+        ? (options.guesser ??
+          ((input, users) =>
+            createConfiguredAuthorGuesser(config, options.workspaceId)(
+              input,
+              users,
+            )))
+        : undefined,
+  });
   return match.status === "matched" ? ids.get(match.userId) : undefined;
 }
 
@@ -1880,7 +2608,12 @@ export function createOutputPublisherFromConfig(
 
   const channel = channelName
     ? channels.find((c) => c.name === channelName)
-    : channels.find((c) => c.kind === "gitea_pr_review" || c.kind === "github_pr_review" || c.kind === "gitlab_mr_review");
+    : channels.find(
+        (c) =>
+          c.kind === "gitea_pr_review" ||
+          c.kind === "github_pr_review" ||
+          c.kind === "gitlab_mr_review",
+      );
 
   if (!channel) {
     return undefined;
@@ -1888,46 +2621,66 @@ export function createOutputPublisherFromConfig(
 
   const channelConfig = channel as Record<string, unknown>;
   const triggerName = channelConfig.trigger as string | undefined;
-  const isPrReview = channel.kind === "gitea_pr_review" || channel.kind === "github_pr_review" || channel.kind === "gitlab_mr_review";
-  const supportedTriggerKinds = channel.kind === "gitea_pr_review" ||
+  const isPrReview =
+    channel.kind === "gitea_pr_review" ||
+    channel.kind === "github_pr_review" ||
+    channel.kind === "gitlab_mr_review";
+  const supportedTriggerKinds =
+    channel.kind === "gitea_pr_review" ||
     channel.kind === "gitea_issue" ||
     channel.kind === "gitea_problem_issue"
-    ? ["gitea", "forgejo"]
-    : channel.kind === "github_pr_review" ||
-      channel.kind === "github_issue" ||
-      channel.kind === "github_problem_issue"
-      ? ["github"]
-      : channel.kind === "gitlab_mr_review" ||
-        channel.kind === "gitlab_problem_issue"
-        ? ["gitlab"]
-        : [];
+      ? ["gitea", "forgejo"]
+      : channel.kind === "github_pr_review" ||
+          channel.kind === "github_issue" ||
+          channel.kind === "github_problem_issue"
+        ? ["github"]
+        : channel.kind === "gitlab_mr_review" ||
+            channel.kind === "gitlab_problem_issue"
+          ? ["gitlab"]
+          : [];
 
   // Outbound attribution (E04): a channel without an explicit `trigger` pins
   // publishes through the trigger that accepted this event, so each run posts
   // to its owning host with that trigger's base_url/token_env. An explicit
   // channel trigger stays pinned; without any event the first supported
   // trigger remains the fallback.
-  const eventTrigger = triggerName === undefined && reviewEvent?.triggerName !== undefined
-    ? config.triggers.find((t) => t.name === reviewEvent.triggerName && supportedTriggerKinds.includes(t.kind))
-    : undefined;
-  const trigger = isPrReview || supportedTriggerKinds.length > 0
-    ? (triggerName
-        ? config.triggers.find((t) => t.name === triggerName && supportedTriggerKinds.includes(t.kind))
-        : (eventTrigger ?? config.triggers.find((t) => supportedTriggerKinds.includes(t.kind))))
-    : undefined;
+  const eventTrigger =
+    triggerName === undefined && reviewEvent?.triggerName !== undefined
+      ? config.triggers.find(
+          (t) =>
+            t.name === reviewEvent.triggerName &&
+            supportedTriggerKinds.includes(t.kind),
+        )
+      : undefined;
+  const trigger =
+    isPrReview || supportedTriggerKinds.length > 0
+      ? triggerName
+        ? config.triggers.find(
+            (t) =>
+              t.name === triggerName && supportedTriggerKinds.includes(t.kind),
+          )
+        : (eventTrigger ??
+          config.triggers.find((t) => supportedTriggerKinds.includes(t.kind)))
+      : undefined;
   const triggerConfig = (trigger ?? {}) as Record<string, unknown>;
-  const baseUrl = (channelConfig.base_url as string | undefined) ??
+  const baseUrl =
+    (channelConfig.base_url as string | undefined) ??
     (triggerConfig.base_url as string | undefined);
   // GitHub triggers carry `base_url` as the host (github.com / GHE host) for App
   // JWT and git clone, but GitHub REST dispatchers need the API base. Derive it
   // for GitHub channels only; leave `baseUrl` (host) for URL-template links and
   // for gitea/gitlab dispatchers.
-  const githubApiBaseUrl = baseUrl ? resolveGithubApiBaseUrl(baseUrl) : undefined;
-  const commitUrlTemplate = readString(channelConfig, "commit_url_template", "commitUrlTemplate") ??
+  const githubApiBaseUrl = baseUrl
+    ? resolveGithubApiBaseUrl(baseUrl)
+    : undefined;
+  const commitUrlTemplate =
+    readString(channelConfig, "commit_url_template", "commitUrlTemplate") ??
     readString(triggerConfig, "commit_url_template", "commitUrlTemplate");
-  const revisionUrlTemplate = readString(channelConfig, "revision_url_template", "revisionUrlTemplate") ??
+  const revisionUrlTemplate =
+    readString(channelConfig, "revision_url_template", "revisionUrlTemplate") ??
     readString(triggerConfig, "revision_url_template", "revisionUrlTemplate");
-  const changeUrlTemplate = readString(channelConfig, "change_url_template", "changeUrlTemplate") ??
+  const changeUrlTemplate =
+    readString(channelConfig, "change_url_template", "changeUrlTemplate") ??
     readString(triggerConfig, "change_url_template", "changeUrlTemplate");
   const targetUrlTemplates: TargetUrlTemplateOptions = {
     ...(commitUrlTemplate ? { commitUrlTemplate } : {}),
@@ -1935,7 +2688,11 @@ export function createOutputPublisherFromConfig(
     ...(changeUrlTemplate ? { changeUrlTemplate } : {}),
     ...(baseUrl && channel.kind !== "feishu_app" ? { baseUrl } : {}),
   };
-  const noProblemsAction = resolveNoProblemsAction(config, channel, workspaceId);
+  const noProblemsAction = resolveNoProblemsAction(
+    config,
+    channel,
+    workspaceId,
+  );
   const workspaceLabels = workspaceId
     ? (() => {
         try {
@@ -1947,10 +2704,12 @@ export function createOutputPublisherFromConfig(
       })()
     : undefined;
   const autoTag = workspaceLabels?.auto_tag ?? config.review.labels?.auto_tag;
-  const reviewedTag = workspaceLabels?.reviewed_tag ?? config.review.labels?.reviewed_tag;
+  const reviewedTag =
+    workspaceLabels?.reviewed_tag ?? config.review.labels?.reviewed_tag;
   const channelToken = resolveSecretField(channelConfig, "token", "token_env");
   const triggerToken = resolveSecretField(triggerConfig, "token", "token_env");
-  const resolvedToken = channelToken ?? triggerToken ?? (resolvedTriggerToken ?? "");
+  const resolvedToken =
+    channelToken ?? triggerToken ?? resolvedTriggerToken ?? "";
   const explicitOwner = channelConfig.owner as string | undefined;
   const explicitRepo = channelConfig.repo as string | undefined;
   const workspaceRepoRef = trigger
@@ -1959,64 +2718,200 @@ export function createOutputPublisherFromConfig(
   // Match-rule workspaces carry no source_repo, so the accepted event's
   // repoRef is the only repository identity (E04); legacy bindings keep
   // their workspace-pinned repo untouched.
-  const parsedRepo = parseRepoRef(explicitOwner && explicitRepo ? undefined : explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef);
+  const parsedRepo = parseRepoRef(
+    explicitOwner && explicitRepo
+      ? undefined
+      : (explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef),
+  );
   const owner = explicitOwner ?? parsedRepo?.owner;
   const repo = explicitOwner ? explicitRepo : parsedRepo?.repo;
   // GitLab project paths may contain multiple namespace segments. Preserve
   // the complete accepted target path instead of requiring owner/repo shape.
-  const repoRef = owner && repo ? `${owner}/${repo}` :
-    channel.kind === "gitlab_mr_review" || channel.kind === "gitlab_problem_issue"
-      ? explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef
-      : workspaceRepoRef;
-  const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates);
+  const repoRef =
+    owner && repo
+      ? `${owner}/${repo}`
+      : channel.kind === "gitlab_mr_review" ||
+          channel.kind === "gitlab_problem_issue"
+        ? (explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef)
+        : workspaceRepoRef;
+  const rendering = createChannelRendering(
+    config,
+    channel,
+    workspaceId,
+    reviewEvent,
+    repoRef,
+    baseDir,
+    targetUrlTemplates,
+  );
   const publishEmptySummary = noProblemsAction === "publish";
-  const channelSeverityLabelPrefix = readString(channelConfig, "severity_label_prefix", "severityLabelPrefix");
-  const channelSeverityLabelColors = isPlainObject(channelConfig.severity_label_colors)
-    ? channelConfig.severity_label_colors as Readonly<Record<string, string>>
+  const channelSeverityLabelPrefix = readString(
+    channelConfig,
+    "severity_label_prefix",
+    "severityLabelPrefix",
+  );
+  const channelSeverityLabelColors = isPlainObject(
+    channelConfig.severity_label_colors,
+  )
+    ? (channelConfig.severity_label_colors as Readonly<Record<string, string>>)
     : undefined;
-  const problemIssueMaxRecentIssues = resolveProblemIssueMaxRecentIssues(config, workspaceId);
-  const channelReviewMode = readString(channelConfig, "review_mode", "reviewMode") as "auto" | "review" | "comment" | undefined;
-  const channelReviewEvent = readString(channelConfig, "review_event", "reviewEvent") as "COMMENT" | "REQUEST_CHANGES" | undefined;
-  const channelReviewUpdateStrategy = readString(channelConfig, "review_update_strategy", "reviewUpdateStrategy") as "always_new" | "update_existing" | undefined;
+  const problemIssueMaxRecentIssues = resolveProblemIssueMaxRecentIssues(
+    config,
+    workspaceId,
+  );
+  const channelReviewMode = readString(
+    channelConfig,
+    "review_mode",
+    "reviewMode",
+  ) as "auto" | "review" | "comment" | undefined;
+  const channelReviewEvent = readString(
+    channelConfig,
+    "review_event",
+    "reviewEvent",
+  ) as "COMMENT" | "REQUEST_CHANGES" | undefined;
+  const channelReviewUpdateStrategy = readString(
+    channelConfig,
+    "review_update_strategy",
+    "reviewUpdateStrategy",
+  ) as "always_new" | "update_existing" | undefined;
   const headSha = reviewEvent?.headSha;
 
-  if (channel.kind === "slack_app" || channel.kind === "discord_bot" || channel.kind === "telegram_bot") {
+  if (
+    channel.kind === "slack_app" ||
+    channel.kind === "discord_bot" ||
+    channel.kind === "telegram_bot"
+  ) {
     const connection = config.im?.connections?.[channel.connection ?? ""];
-    if (!connection || connection.enabled === false || connection.kind !== channel.kind ||
-      (connection.kind !== "slack_app" && connection.kind !== "discord_bot" && connection.kind !== "telegram_bot")) throw new Error("Social IM channel connection is unavailable.");
+    if (
+      !connection ||
+      connection.enabled === false ||
+      connection.kind !== channel.kind ||
+      (connection.kind !== "slack_app" &&
+        connection.kind !== "discord_bot" &&
+        connection.kind !== "telegram_bot")
+    )
+      throw new Error("Social IM channel connection is unavailable.");
     const registry = imConnectionRegistryFor(config, { env: resolveEnv });
     const client = registry.social(connection);
-    const destination = channel.kind === "telegram_bot" ? channel.chat_id! : channel.channel_id!;
+    const destination =
+      channel.kind === "telegram_bot" ? channel.chat_id! : channel.channel_id!;
     const problems: ReviewProblem[] = [];
     let flush: Promise<DispatchResult> | undefined;
     return {
-      handlesRendering: true, noProblemsAction, publishEmptySummary,
+      handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary, summaryProblems, options): Promise<DispatchResult> {
+      async publishSummary(
+        summary,
+        summaryProblems,
+        options,
+      ): Promise<DispatchResult> {
         flush ??= (async (): Promise<DispatchResult> => {
-          if (!client.isReady(destination) && !await client.refreshReadiness(destination)) return { channel: channel.name, status: "failed", raw: { kind: "rejected", code: "destination_not_ready" } };
+          if (
+            !client.isReady(destination) &&
+            !(await client.refreshReadiness(destination))
+          )
+            return {
+              channel: channel.name,
+              status: "failed",
+              raw: { kind: "rejected", code: "destination_not_ready" },
+            };
           let authorUserId: string | undefined;
-          if (reviewEvent && channel.mention_author !== false && (channel.mention_author === true || channel.member_directory || channel.author_mappings)) {
+          if (
+            reviewEvent &&
+            channel.mention_author !== false &&
+            (channel.mention_author === true ||
+              channel.member_directory ||
+              channel.author_mappings)
+          ) {
             try {
-              authorUserId = await resolveSocialImAuthorId({ config, channel, client, destination, event: reviewEvent, baseDir, workspaceId, guesser: authorGuesser });
+              authorUserId = await resolveSocialImAuthorId({
+                config,
+                channel,
+                client,
+                destination,
+                event: reviewEvent,
+                baseDir,
+                workspaceId,
+                guesser: authorGuesser,
+              });
             } catch {
-              console.warn("[outputs] Social IM member directory unavailable; sending report without mentions.");
+              console.warn(
+                "[outputs] Social IM member directory unavailable; sending report without mentions.",
+              );
             }
           }
-          const rendered = (summaryProblems ?? problems).map(problem => rendering.renderProblem(problem));
-          const renderedSummary = rendering.renderSummary(summary, rendered, options?.title);
+          const rendered = (summaryProblems ?? problems).map((problem) =>
+            rendering.renderProblem(problem),
+          );
+          const renderedSummary = rendering.renderSummary(
+            summary,
+            rendered,
+            options?.title,
+          );
           const content = options?.summaryIssueUrl
-            ? buildImIssueLinkSections(rendered, renderedSummary, { url: options.summaryIssueUrl, label: "View full report" }).join("\n")
-            : [renderedSummary, ...(rendered.length ? [`## Problems (${rendered.length})`] : []), ...rendered.map(problem => problem.renderedMarkdown ?? problem.message)].join("\n\n");
-          const message = channel.kind === "telegram_bot" ? toTelegramMessage(content, options?.summaryIssueUrl, authorUserId)
-            : { text: channel.kind === "slack_app" ? toBoundedSlackMarkdown(content, options?.summaryIssueUrl, authorUserId) : toDiscordMarkdown(content, options?.summaryIssueUrl, authorUserId),
-              ...(channel.kind === "discord_bot" && authorUserId ? { allowedUserMentions: [authorUserId] } : {}) };
+            ? buildImIssueLinkSections(rendered, renderedSummary, {
+                url: options.summaryIssueUrl,
+                label: "View full report",
+              }).join("\n")
+            : [
+                renderedSummary,
+                ...(rendered.length
+                  ? [`## Problems (${rendered.length})`]
+                  : []),
+                ...rendered.map(
+                  (problem) => problem.renderedMarkdown ?? problem.message,
+                ),
+              ].join("\n\n");
+          const message =
+            channel.kind === "telegram_bot"
+              ? toTelegramMessage(
+                  content,
+                  options?.summaryIssueUrl,
+                  authorUserId,
+                )
+              : {
+                  text:
+                    channel.kind === "slack_app"
+                      ? toBoundedSlackMarkdown(
+                          content,
+                          options?.summaryIssueUrl,
+                          authorUserId,
+                        )
+                      : toDiscordMarkdown(
+                          content,
+                          options?.summaryIssueUrl,
+                          authorUserId,
+                        ),
+                  ...(channel.kind === "discord_bot" && authorUserId
+                    ? { allowedUserMentions: [authorUserId] }
+                    : {}),
+                };
           const result = await client.sendMessage(destination, message);
-          return result.kind === "delivered" ? { channel: channel.name, status: "published", externalId: result.receipt.messageId }
-            : { channel: channel.name, status: "failed", raw: { kind: result.kind, code: result.code, ...(result.kind === "rejected" && result.retryAt ? { retryAt: result.retryAt } : {}) } };
+          return result.kind === "delivered"
+            ? {
+                channel: channel.name,
+                status: "published",
+                externalId: result.receipt.messageId,
+              }
+            : {
+                channel: channel.name,
+                status: "failed",
+                raw: {
+                  kind: result.kind,
+                  code: result.code,
+                  ...(result.kind === "rejected" && result.retryAt
+                    ? { retryAt: result.retryAt }
+                    : {}),
+                },
+              };
         })();
         return flush;
       },
@@ -2035,13 +2930,19 @@ export function createOutputPublisherFromConfig(
       repo,
       pullNumber,
       channelName: channel.name,
-      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
-      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(channelSeverityLabelPrefix
+        ? { severityLabelPrefix: channelSeverityLabelPrefix }
+        : {}),
+      ...(channelSeverityLabelColors
+        ? { severityLabelColors: channelSeverityLabelColors }
+        : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(channelReviewMode ? { reviewMode: channelReviewMode } : {}),
       ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
-      ...(channelReviewUpdateStrategy ? { reviewUpdateStrategy: channelReviewUpdateStrategy } : {}),
+      ...(channelReviewUpdateStrategy
+        ? { reviewUpdateStrategy: channelReviewUpdateStrategy }
+        : {}),
       ...(headSha ? { headSha } : {}),
       ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
     });
@@ -2053,16 +2954,30 @@ export function createOutputPublisherFromConfig(
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
-      ...(dispatcher.publishSummary ? {
-        async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-          const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(
-            rendering.renderSummary(summary, renderedProblems, options?.title),
-            renderedProblems,
-            options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
-          );
-        },
-      } : {}),
+      ...(dispatcher.publishSummary
+        ? {
+            async publishSummary(
+              summary: string,
+              problems?: readonly ReviewProblem[],
+              options?: ReviewSummaryPublishOptions,
+            ): Promise<DispatchResult> {
+              const renderedProblems = (problems ?? []).map((problem) =>
+                rendering.renderProblem(problem),
+              );
+              return dispatcher.publishSummary!(
+                rendering.renderSummary(
+                  summary,
+                  renderedProblems,
+                  options?.title,
+                ),
+                renderedProblems,
+                options?.reviewedFiles
+                  ? { reviewedFiles: options.reviewedFiles }
+                  : undefined,
+              );
+            },
+          }
+        : {}),
     };
   }
 
@@ -2078,13 +2993,19 @@ export function createOutputPublisherFromConfig(
       repo,
       pullNumber,
       channelName: channel.name,
-      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
-      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(channelSeverityLabelPrefix
+        ? { severityLabelPrefix: channelSeverityLabelPrefix }
+        : {}),
+      ...(channelSeverityLabelColors
+        ? { severityLabelColors: channelSeverityLabelColors }
+        : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(channelReviewMode ? { reviewMode: channelReviewMode } : {}),
       ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
-      ...(channelReviewUpdateStrategy ? { reviewUpdateStrategy: channelReviewUpdateStrategy } : {}),
+      ...(channelReviewUpdateStrategy
+        ? { reviewUpdateStrategy: channelReviewUpdateStrategy }
+        : {}),
       ...(headSha ? { headSha } : {}),
       ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
     });
@@ -2096,16 +3017,30 @@ export function createOutputPublisherFromConfig(
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
-      ...(dispatcher.publishSummary ? {
-        async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-          const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(
-            rendering.renderSummary(summary, renderedProblems, options?.title),
-            renderedProblems,
-            options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
-          );
-        },
-      } : {}),
+      ...(dispatcher.publishSummary
+        ? {
+            async publishSummary(
+              summary: string,
+              problems?: readonly ReviewProblem[],
+              options?: ReviewSummaryPublishOptions,
+            ): Promise<DispatchResult> {
+              const renderedProblems = (problems ?? []).map((problem) =>
+                rendering.renderProblem(problem),
+              );
+              return dispatcher.publishSummary!(
+                rendering.renderSummary(
+                  summary,
+                  renderedProblems,
+                  options?.title,
+                ),
+                renderedProblems,
+                options?.reviewedFiles
+                  ? { reviewedFiles: options.reviewedFiles }
+                  : undefined,
+              );
+            },
+          }
+        : {}),
     };
   }
 
@@ -2132,10 +3067,20 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<DispatchResult> {
+        const renderedProblems = (summaryProblems ?? problems).map((problem) =>
+          rendering.renderProblem(problem),
+        );
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
@@ -2149,26 +3094,58 @@ export function createOutputPublisherFromConfig(
       return undefined;
     }
 
-    const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
-    const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
-    const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const resolvedAction = readString(
+      channelConfig,
+      "resolved_action",
+      "resolvedAction",
+    );
+    const markerPrefix = readString(
+      channelConfig,
+      "marker_prefix",
+      "markerPrefix",
+    );
+    const markerLabel = readString(
+      channelConfig,
+      "marker_label",
+      "markerLabel",
+    );
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
-    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem" || issueMode === "per_commit"
-      ? issueMode
-      : undefined;
-    const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
-      ? channelConfig.labels as readonly string[]
-      : undefined;
-    const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
+    const resolvedIssueMode =
+      issueMode === "consolidated" ||
+      issueMode === "per_problem" ||
+      issueMode === "per_commit"
+        ? issueMode
+        : undefined;
+    const channelLabels =
+      Array.isArray(channelConfig.labels) &&
+      channelConfig.labels.every((value) => typeof value === "string")
+        ? (channelConfig.labels as readonly string[])
+        : undefined;
+    const assignCommitter = readBoolean(
+      channelConfig,
+      "assign_committer",
+      "assignCommitter",
+    );
     const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
-    const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
+    const addOwnersAsAssignees = readBoolean(
+      channelConfig,
+      "add_owners_as_assignees",
+      "addOwnersAsAssignees",
+    );
     const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
-      ? channelConfig.notify_feishu as Record<string, unknown>
+      ? (channelConfig.notify_feishu as Record<string, unknown>)
       : undefined;
-    const notifyFeishuWebhookUrl = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env") : undefined;
-    const notifyFeishuSecret = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env") : undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuConfig
+      ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env")
+      : undefined;
+    const notifyFeishuSecret = notifyFeishuConfig
+      ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env")
+      : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
-    const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
+    const authorAssignment = resolveAuthorAssignment(
+      reviewEvent ?? {},
+      authorResolution,
+    );
     const committerUsername = authorAssignment.username;
     const fallbackCommitterUsername = authorAssignment.fallbackUsername;
     const ref = reviewEvent?.headSha ?? "main";
@@ -2183,22 +3160,45 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(channelLabels ? { labels: channelLabels } : {}),
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
-      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" ? { resolvedAction } : {}),
-      ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
-      ...(authorAssignment.blocked ? { assignCommitter: false } : assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(resolvedAction === "none" ||
+      resolvedAction === "close" ||
+      resolvedAction === "mark_resolved"
+        ? { resolvedAction }
+        : {}),
+      ...(problemIssueMaxRecentIssues !== undefined
+        ? { maxRecentIssues: problemIssueMaxRecentIssues }
+        : {}),
+      ...(authorAssignment.blocked
+        ? { assignCommitter: false }
+        : assignCommitter !== undefined
+          ? { assignCommitter }
+          : {}),
       ...(committerUsername ? { committerUsername } : {}),
       ...(fallbackCommitterUsername ? { fallbackCommitterUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
       ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
-      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
-      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
-      ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ...(channelSeverityLabelPrefix
+        ? { severityLabelPrefix: channelSeverityLabelPrefix }
+        : {}),
+      ...(channelSeverityLabelColors
+        ? { severityLabelColors: channelSeverityLabelColors }
+        : {}),
+      ...(notifyFeishuWebhookUrl
+        ? {
+            notifyFeishu: {
+              webhookUrl: notifyFeishuWebhookUrl,
+              ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}),
+            },
+          }
+        : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
-      ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
+      ...(reviewEvent?.targetKind
+        ? { targetKind: reviewEvent.targetKind }
+        : {}),
       ...(pullNumber !== undefined ? { pullNumber } : {}),
       ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
@@ -2211,9 +3211,17 @@ export function createOutputPublisherFromConfig(
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<readonly DispatchResult[]> {
         if (options?.skipReconcile) {
           return [];
         }
@@ -2221,20 +3229,30 @@ export function createOutputPublisherFromConfig(
           return [];
         }
         reconciled = true;
-        const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
+        const renderedProblems = (summaryProblems ?? []).map((problem) =>
+          rendering.renderProblem(problem),
+        );
         return dispatcher.reconcileProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
-          options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
+          options?.reviewedFiles
+            ? { reviewedFiles: options.reviewedFiles }
+            : undefined,
         );
       },
     };
   }
 
   if (channel.kind === "gitlab_mr_review") {
-    const projectId = channelConfig.project_id ?? channelConfig.projectId ?? repoRef;
-    const mergeRequestIid = readNumber(channelConfig, "merge_request_iid", "mergeRequestIid") ?? pullNumber;
-    if ((typeof projectId !== "string" && typeof projectId !== "number") || mergeRequestIid === undefined) {
+    const projectId =
+      channelConfig.project_id ?? channelConfig.projectId ?? repoRef;
+    const mergeRequestIid =
+      readNumber(channelConfig, "merge_request_iid", "mergeRequestIid") ??
+      pullNumber;
+    if (
+      (typeof projectId !== "string" && typeof projectId !== "number") ||
+      mergeRequestIid === undefined
+    ) {
       return undefined;
     }
 
@@ -2247,8 +3265,12 @@ export function createOutputPublisherFromConfig(
       ...(reviewEvent?.baseSha ? { startSha: reviewEvent.baseSha } : {}),
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
       channelName: channel.name,
-      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
-      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(channelSeverityLabelPrefix
+        ? { severityLabelPrefix: channelSeverityLabelPrefix }
+        : {}),
+      ...(channelSeverityLabelColors
+        ? { severityLabelColors: channelSeverityLabelColors }
+        : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
     });
@@ -2260,41 +3282,92 @@ export function createOutputPublisherFromConfig(
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
-      ...(dispatcher.publishSummary ? {
-        async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-          const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
-        },
-      } : {}),
+      ...(dispatcher.publishSummary
+        ? {
+            async publishSummary(
+              summary: string,
+              problems?: readonly ReviewProblem[],
+              options?: ReviewSummaryPublishOptions,
+            ): Promise<DispatchResult> {
+              const renderedProblems = (problems ?? []).map((problem) =>
+                rendering.renderProblem(problem),
+              );
+              return dispatcher.publishSummary!(
+                rendering.renderSummary(
+                  summary,
+                  renderedProblems,
+                  options?.title,
+                ),
+                renderedProblems,
+              );
+            },
+          }
+        : {}),
     };
   }
 
   if (channel.kind === "gitlab_problem_issue") {
-    const projectId = channelConfig.project_id ?? channelConfig.projectId ?? repoRef;
-    if (!baseUrl || (typeof projectId !== "string" && typeof projectId !== "number")) {
+    const projectId =
+      channelConfig.project_id ?? channelConfig.projectId ?? repoRef;
+    if (
+      !baseUrl ||
+      (typeof projectId !== "string" && typeof projectId !== "number")
+    ) {
       return undefined;
     }
 
-    const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
-    const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
-    const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const resolvedAction = readString(
+      channelConfig,
+      "resolved_action",
+      "resolvedAction",
+    );
+    const markerPrefix = readString(
+      channelConfig,
+      "marker_prefix",
+      "markerPrefix",
+    );
+    const markerLabel = readString(
+      channelConfig,
+      "marker_label",
+      "markerLabel",
+    );
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
-    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem" || issueMode === "per_commit"
-      ? issueMode
-      : undefined;
-    const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
-      ? channelConfig.labels as readonly string[]
-      : undefined;
-    const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
+    const resolvedIssueMode =
+      issueMode === "consolidated" ||
+      issueMode === "per_problem" ||
+      issueMode === "per_commit"
+        ? issueMode
+        : undefined;
+    const channelLabels =
+      Array.isArray(channelConfig.labels) &&
+      channelConfig.labels.every((value) => typeof value === "string")
+        ? (channelConfig.labels as readonly string[])
+        : undefined;
+    const assignCommitter = readBoolean(
+      channelConfig,
+      "assign_committer",
+      "assignCommitter",
+    );
     const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
-    const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
+    const addOwnersAsAssignees = readBoolean(
+      channelConfig,
+      "add_owners_as_assignees",
+      "addOwnersAsAssignees",
+    );
     const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
-      ? channelConfig.notify_feishu as Record<string, unknown>
+      ? (channelConfig.notify_feishu as Record<string, unknown>)
       : undefined;
-    const notifyFeishuWebhookUrl = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env") : undefined;
-    const notifyFeishuSecret = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env") : undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuConfig
+      ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env")
+      : undefined;
+    const notifyFeishuSecret = notifyFeishuConfig
+      ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env")
+      : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
-    const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
+    const authorAssignment = resolveAuthorAssignment(
+      reviewEvent ?? {},
+      authorResolution,
+    );
     const committerUsername = authorAssignment.username;
     const fallbackCommitterUsername = authorAssignment.fallbackUsername;
     const ref = reviewEvent?.headSha ?? "main";
@@ -2308,22 +3381,46 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(channelLabels ? { labels: channelLabels } : {}),
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
-      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" || resolvedAction === "delete" ? { resolvedAction } : {}),
-      ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
-      ...(authorAssignment.blocked ? { assignCommitter: false } : assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(resolvedAction === "none" ||
+      resolvedAction === "close" ||
+      resolvedAction === "mark_resolved" ||
+      resolvedAction === "delete"
+        ? { resolvedAction }
+        : {}),
+      ...(problemIssueMaxRecentIssues !== undefined
+        ? { maxRecentIssues: problemIssueMaxRecentIssues }
+        : {}),
+      ...(authorAssignment.blocked
+        ? { assignCommitter: false }
+        : assignCommitter !== undefined
+          ? { assignCommitter }
+          : {}),
       ...(committerUsername ? { committerUsername } : {}),
       ...(fallbackCommitterUsername ? { fallbackCommitterUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
       ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
-      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
-      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
-      ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ...(channelSeverityLabelPrefix
+        ? { severityLabelPrefix: channelSeverityLabelPrefix }
+        : {}),
+      ...(channelSeverityLabelColors
+        ? { severityLabelColors: channelSeverityLabelColors }
+        : {}),
+      ...(notifyFeishuWebhookUrl
+        ? {
+            notifyFeishu: {
+              webhookUrl: notifyFeishuWebhookUrl,
+              ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}),
+            },
+          }
+        : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
-      ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
+      ...(reviewEvent?.targetKind
+        ? { targetKind: reviewEvent.targetKind }
+        : {}),
       ...(pullNumber !== undefined ? { pullNumber } : {}),
       ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
@@ -2336,9 +3433,17 @@ export function createOutputPublisherFromConfig(
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<readonly DispatchResult[]> {
         if (options?.skipReconcile) {
           return [];
         }
@@ -2346,11 +3451,15 @@ export function createOutputPublisherFromConfig(
           return [];
         }
         reconciled = true;
-        const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
+        const renderedProblems = (summaryProblems ?? []).map((problem) =>
+          rendering.renderProblem(problem),
+        );
         return dispatcher.reconcileProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
-          options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
+          options?.reviewedFiles
+            ? { reviewedFiles: options.reviewedFiles }
+            : undefined,
         );
       },
     };
@@ -2379,10 +3488,20 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<DispatchResult> {
+        const renderedProblems = (summaryProblems ?? problems).map((problem) =>
+          rendering.renderProblem(problem),
+        );
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
@@ -2396,26 +3515,58 @@ export function createOutputPublisherFromConfig(
       return undefined;
     }
 
-    const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
-    const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
-    const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const resolvedAction = readString(
+      channelConfig,
+      "resolved_action",
+      "resolvedAction",
+    );
+    const markerPrefix = readString(
+      channelConfig,
+      "marker_prefix",
+      "markerPrefix",
+    );
+    const markerLabel = readString(
+      channelConfig,
+      "marker_label",
+      "markerLabel",
+    );
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
-    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem" || issueMode === "per_commit"
-      ? issueMode
-      : undefined;
-    const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
-      ? channelConfig.label_ids as readonly number[]
-      : undefined;
-    const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
+    const resolvedIssueMode =
+      issueMode === "consolidated" ||
+      issueMode === "per_problem" ||
+      issueMode === "per_commit"
+        ? issueMode
+        : undefined;
+    const labelIds =
+      Array.isArray(channelConfig.label_ids) &&
+      channelConfig.label_ids.every((value) => typeof value === "number")
+        ? (channelConfig.label_ids as readonly number[])
+        : undefined;
+    const assignCommitter = readBoolean(
+      channelConfig,
+      "assign_committer",
+      "assignCommitter",
+    );
     const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
-    const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
+    const addOwnersAsAssignees = readBoolean(
+      channelConfig,
+      "add_owners_as_assignees",
+      "addOwnersAsAssignees",
+    );
     const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
-      ? channelConfig.notify_feishu as Record<string, unknown>
+      ? (channelConfig.notify_feishu as Record<string, unknown>)
       : undefined;
-    const notifyFeishuWebhookUrl = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env") : undefined;
-    const notifyFeishuSecret = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env") : undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuConfig
+      ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env")
+      : undefined;
+    const notifyFeishuSecret = notifyFeishuConfig
+      ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env")
+      : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
-    const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
+    const authorAssignment = resolveAuthorAssignment(
+      reviewEvent ?? {},
+      authorResolution,
+    );
     const committerUsername = authorAssignment.username;
     const fallbackCommitterUsername = authorAssignment.fallbackUsername;
     const ref = reviewEvent?.headSha ?? "main";
@@ -2430,22 +3581,46 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(labelIds ? { labelIds } : {}),
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
-      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" || resolvedAction === "delete" ? { resolvedAction } : {}),
-      ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
-      ...(authorAssignment.blocked ? { assignCommitter: false } : assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(resolvedAction === "none" ||
+      resolvedAction === "close" ||
+      resolvedAction === "mark_resolved" ||
+      resolvedAction === "delete"
+        ? { resolvedAction }
+        : {}),
+      ...(problemIssueMaxRecentIssues !== undefined
+        ? { maxRecentIssues: problemIssueMaxRecentIssues }
+        : {}),
+      ...(authorAssignment.blocked
+        ? { assignCommitter: false }
+        : assignCommitter !== undefined
+          ? { assignCommitter }
+          : {}),
       ...(committerUsername ? { committerUsername } : {}),
       ...(fallbackCommitterUsername ? { fallbackCommitterUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
       ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
-      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
-      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
-      ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ...(channelSeverityLabelPrefix
+        ? { severityLabelPrefix: channelSeverityLabelPrefix }
+        : {}),
+      ...(channelSeverityLabelColors
+        ? { severityLabelColors: channelSeverityLabelColors }
+        : {}),
+      ...(notifyFeishuWebhookUrl
+        ? {
+            notifyFeishu: {
+              webhookUrl: notifyFeishuWebhookUrl,
+              ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}),
+            },
+          }
+        : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
-      ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
+      ...(reviewEvent?.targetKind
+        ? { targetKind: reviewEvent.targetKind }
+        : {}),
       ...(pullNumber !== undefined ? { pullNumber } : {}),
       ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
@@ -2458,9 +3633,17 @@ export function createOutputPublisherFromConfig(
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<readonly DispatchResult[]> {
         if (options?.skipReconcile) {
           return [];
         }
@@ -2468,71 +3651,155 @@ export function createOutputPublisherFromConfig(
           return [];
         }
         reconciled = true;
-        const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
+        const renderedProblems = (summaryProblems ?? []).map((problem) =>
+          rendering.renderProblem(problem),
+        );
         return dispatcher.reconcileProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
-          options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
+          options?.reviewedFiles
+            ? { reviewedFiles: options.reviewedFiles }
+            : undefined,
         );
       },
     };
   }
 
   if (channel.kind === "feishu_app") {
-    const secret = resolveSecretField(channelConfig, "app_secret", "app_secret_env");
+    const secret = resolveSecretField(
+      channelConfig,
+      "app_secret",
+      "app_secret_env",
+    );
     if (!secret || !channel.app_id || !channel.receive_id) {
-      throw new Error("Feishu application channel requires app_id, app_secret or app_secret_env, and receive_id.");
+      throw new Error(
+        "Feishu application channel requires app_id, app_secret or app_secret_env, and receive_id.",
+      );
     }
     let cached = feishuAppClients.get(channel);
     if (!cached || cached.secret !== secret) {
-      cached = { secret, client: new FeishuAppClient({
-        appId: channel.app_id, appSecret: secret, baseUrl,
-        onDirectoryWarning: (code) => console.warn(`[outputs] Feishu directory: ${code}`),
-      }) };
+      cached = {
+        secret,
+        client: new FeishuAppClient({
+          appId: channel.app_id,
+          appSecret: secret,
+          baseUrl,
+          onDirectoryWarning: (code) =>
+            console.warn(`[outputs] Feishu directory: ${code}`),
+        }),
+      };
       feishuAppClients.set(channel, cached);
     }
     const client = cached.client;
-    const dispatcher = createFeishuAppDispatcher({ client, receiveId: channel.receive_id,
-      receiveIdType: channel.receive_id_type, channelName: channel.name });
+    const dispatcher = createFeishuAppDispatcher({
+      client,
+      receiveId: channel.receive_id,
+      receiveIdType: channel.receive_id_type,
+      channelName: channel.name,
+    });
     const problems: ReviewProblem[] = [];
     return {
-      handlesRendering: true, noProblemsAction, publishEmptySummary,
+      handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary, summaryProblems, options): Promise<DispatchResult> {
+      async publishSummary(
+        summary,
+        summaryProblems,
+        options,
+      ): Promise<DispatchResult> {
         let mention = "";
         if (channel.mention_author && reviewEvent) {
           try {
             const directory = channel.member_directory;
             // The file source lands with IM-07/IM-08; until then only the
             // feishu API forms (legacy and explicit) can serve this channel.
-            const apiDirectory = directory !== undefined && "chat_id" in directory ? directory : undefined;
+            const apiDirectory =
+              directory !== undefined && "chat_id" in directory
+                ? directory
+                : undefined;
             const matched = await resolveChannelAuthor({
               channelKind: channel.kind,
-              input: { author: reviewEvent.author, provider: reviewEvent.provider,
-                submitterWorkspace: reviewEvent.provider === "p4" ? reviewEvent.submitterWorkspace : undefined },
-              directory: apiDirectory ? { listUsers: async () => feishuDirectoryUsers(await client.members(apiDirectory.chat_id,
-                resolveChannelDirectoryCacheTtlSeconds({ channel: apiDirectory.cache_ttl_seconds,
-                  global: config.outputs.author_resolution?.directory_cache_ttl_seconds }))) } : undefined,
-              policy: { mappings: channel.user_mappings, guessAuthor: channel.guess_author,
-                emailBlacklist: config.outputs.author_resolution?.email_blacklist },
-              guesser: authorGuesser ?? ((input, users) => createConfiguredAuthorGuesser(config, workspaceId)(input, users)),
+              input: {
+                author: reviewEvent.author,
+                provider: reviewEvent.provider,
+                submitterWorkspace:
+                  reviewEvent.provider === "p4"
+                    ? reviewEvent.submitterWorkspace
+                    : undefined,
+              },
+              directory: apiDirectory
+                ? {
+                    listUsers: async () =>
+                      feishuDirectoryUsers(
+                        await client.members(
+                          apiDirectory.chat_id,
+                          resolveChannelDirectoryCacheTtlSeconds({
+                            channel: apiDirectory.cache_ttl_seconds,
+                            global:
+                              config.outputs.author_resolution
+                                ?.directory_cache_ttl_seconds,
+                          }),
+                        ),
+                      ),
+                  }
+                : undefined,
+              policy: {
+                mappings: channel.user_mappings,
+                guessAuthor: channel.guess_author,
+                emailBlacklist:
+                  config.outputs.author_resolution?.email_blacklist,
+              },
+              guesser:
+                authorGuesser ??
+                ((input, users) =>
+                  createConfiguredAuthorGuesser(config, workspaceId)(
+                    input,
+                    users,
+                  )),
             });
-            mention = renderFeishuAuthorMention(matched, channel.mention_fallback);
+            mention = renderFeishuAuthorMention(
+              matched,
+              channel.mention_fallback,
+            );
           } catch {
-            console.warn("[outputs] Feishu directory unavailable; sending report without mentions.");
+            console.warn(
+              "[outputs] Feishu directory unavailable; sending report without mentions.",
+            );
           }
         }
-        const appRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
-        const renderedProblems = (summaryProblems ?? problems).map(problem => appRendering.renderProblem(problem));
-        const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
-          ? {
-              detailLink: { url: options.summaryIssueUrl, label: "View full report" },
-              ...(channel.issue_link_card ? { issueLinkCard: channel.issue_link_card } : {}),
-            }
-          : undefined;
+        const appRendering = createChannelRendering(
+          config,
+          channel,
+          workspaceId,
+          reviewEvent,
+          repoRef,
+          baseDir,
+          targetUrlTemplates,
+          mention,
+        );
+        const renderedProblems = (summaryProblems ?? problems).map((problem) =>
+          appRendering.renderProblem(problem),
+        );
+        const aggregated: FeishuBotAggregatedOptions | undefined =
+          options?.summaryIssueUrl
+            ? {
+                detailLink: {
+                  url: options.summaryIssueUrl,
+                  label: "View full report",
+                },
+                ...(channel.issue_link_card
+                  ? { issueLinkCard: channel.issue_link_card }
+                  : {}),
+              }
+            : undefined;
         // IM-15: issue the opaque card action pre-send (only when the im
         // connection/binding surface can consume the callback), then bind
         // the platform-acknowledged message id after the send settles.
@@ -2540,33 +3807,74 @@ export function createOutputPublisherFromConfig(
         if (cardActionIssuer !== undefined && reviewEvent !== undefined) {
           const actionTarget = resolveFeishuCardActionTarget({
             config,
-            channel: { app_id: channel.app_id, receive_id: channel.receive_id, receive_id_type: channel.receive_id_type },
+            channel: {
+              app_id: channel.app_id,
+              receive_id: channel.receive_id,
+              receive_id_type: channel.receive_id_type,
+            },
             reviewEvent: {
-              headSha: reviewEvent.headSha, workspaceId: reviewEvent.workspaceId,
-              triggerName: reviewEvent.triggerName, repoRef: reviewEvent.repoRef,
+              headSha: reviewEvent.headSha,
+              workspaceId: reviewEvent.workspaceId,
+              triggerName: reviewEvent.triggerName,
+              repoRef: reviewEvent.repoRef,
             },
             namespace: cardActionIssuer.namespace,
-            configSnapshotId: cardActionIssuer.currentSnapshotId() ?? "file-only",
+            configSnapshotId:
+              cardActionIssuer.currentSnapshotId() ?? "file-only",
           });
           if (actionTarget !== undefined) {
             try {
-              cardActionId = await issueCardAction(cardActionIssuer.store, actionTarget);
+              cardActionId = await issueCardAction(
+                cardActionIssuer.store,
+                actionTarget,
+              );
             } catch (error) {
-              console.warn(JSON.stringify({ msg: "im_card_action_issue_failed", channel: channel.name, error: String(error) }));
+              console.warn(
+                JSON.stringify({
+                  msg: "im_card_action_issue_failed",
+                  channel: channel.name,
+                  error: String(error),
+                }),
+              );
             }
           }
         }
-        const result = await dispatcher.publishAggregatedProblems(renderedProblems,
-          appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined, aggregated, cardActionId);
-        if (cardActionIssuer !== undefined && cardActionId !== undefined && result.externalId !== undefined) {
+        const result = await dispatcher.publishAggregatedProblems(
+          renderedProblems,
+          appRendering.renderSummary(summary, renderedProblems, options?.title),
+          mention || undefined,
+          aggregated,
+          cardActionId,
+        );
+        if (
+          cardActionIssuer !== undefined &&
+          cardActionId !== undefined &&
+          result.externalId !== undefined
+        ) {
           // A failed bind leaves the action pending: clicks answer `unbound`
           // (A13) — never executed from a callback's self-reported source.
-          await bindImActionSource(cardActionIssuer.store, { actionId: cardActionId, sourceMessageId: result.externalId, now: new Date() })
+          await bindImActionSource(cardActionIssuer.store, {
+            actionId: cardActionId,
+            sourceMessageId: result.externalId,
+            now: new Date(),
+          })
             .then((bound: boolean) => {
-              if (!bound) console.warn(JSON.stringify({ msg: "im_card_action_bind_rejected", actionId: cardActionId }));
+              if (!bound)
+                console.warn(
+                  JSON.stringify({
+                    msg: "im_card_action_bind_rejected",
+                    actionId: cardActionId,
+                  }),
+                );
             })
             .catch((error: unknown) => {
-              console.warn(JSON.stringify({ msg: "im_card_action_bind_failed", actionId: cardActionId, error: String(error) }));
+              console.warn(
+                JSON.stringify({
+                  msg: "im_card_action_bind_failed",
+                  actionId: cardActionId,
+                  error: String(error),
+                }),
+              );
             });
         }
         return result;
@@ -2575,12 +3883,20 @@ export function createOutputPublisherFromConfig(
   }
 
   if (channel.kind === "feishu_bot") {
-    const webhookUrl = resolveSecretField(channelConfig, "webhook_url", "webhook_url_env");
+    const webhookUrl = resolveSecretField(
+      channelConfig,
+      "webhook_url",
+      "webhook_url_env",
+    );
     if (!webhookUrl) {
       return undefined;
     }
 
-    const feishuSecret = resolveSecretField(channelConfig, "secret", "secret_env");
+    const feishuSecret = resolveSecretField(
+      channelConfig,
+      "secret",
+      "secret_env",
+    );
     const dispatcher = createFeishuBotDispatcher({
       webhookUrl,
       ...(feishuSecret !== undefined ? { secret: feishuSecret } : {}),
@@ -2594,29 +3910,70 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-        const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
-          ? {
-              detailLink: { url: options.summaryIssueUrl, label: "View full report" },
-              ...(channel.issue_link_card ? { issueLinkCard: channel.issue_link_card } : {}),
-            }
-          : undefined;
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<DispatchResult> {
+        const aggregated: FeishuBotAggregatedOptions | undefined =
+          options?.summaryIssueUrl
+            ? {
+                detailLink: {
+                  url: options.summaryIssueUrl,
+                  label: "View full report",
+                },
+                ...(channel.issue_link_card
+                  ? { issueLinkCard: channel.issue_link_card }
+                  : {}),
+              }
+            : undefined;
         // File member directory (IM-08): typed feishu mention, one snapshot per report.
         let mention = rendering.mentionText;
         const fileDirectory = readFileDirectoryConfig(channelConfig);
-        if (shouldMentionAuthor(channel) && fileDirectory !== undefined && reviewEvent !== undefined) {
-          const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
-            directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
-            guesser: authorGuesser, reviewEvent, baseDir });
+        if (
+          shouldMentionAuthor(channel) &&
+          fileDirectory !== undefined &&
+          reviewEvent !== undefined
+        ) {
+          const resolved = await resolveFileDirectoryMention({
+            config,
+            channelKind: channel.kind,
+            channelName: channel.name,
+            directory: fileDirectory,
+            authorMappings: channel.author_mappings,
+            guessAuthor: channel.guess_author === true,
+            guesser: authorGuesser,
+            reviewEvent,
+            baseDir,
+          });
           mention = resolved.mentionText;
         }
-        const reportRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
-        const renderedProblems = (summaryProblems ?? problems).map(problem => reportRendering.renderProblem(problem));
+        const reportRendering = createChannelRendering(
+          config,
+          channel,
+          workspaceId,
+          reviewEvent,
+          repoRef,
+          baseDir,
+          targetUrlTemplates,
+          mention,
+        );
+        const renderedProblems = (summaryProblems ?? problems).map((problem) =>
+          reportRendering.renderProblem(problem),
+        );
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
-          reportRendering.renderSummary(summary, renderedProblems, options?.title),
+          reportRendering.renderSummary(
+            summary,
+            renderedProblems,
+            options?.title,
+          ),
           mention || undefined,
           aggregated,
         );
@@ -2625,7 +3982,11 @@ export function createOutputPublisherFromConfig(
   }
 
   if (channel.kind === "wecom_bot") {
-    const webhookUrl = resolveSecretField(channelConfig, "webhook_url", "webhook_url_env");
+    const webhookUrl = resolveSecretField(
+      channelConfig,
+      "webhook_url",
+      "webhook_url_env",
+    );
     if (!webhookUrl) {
       return undefined;
     }
@@ -2634,7 +3995,10 @@ export function createOutputPublisherFromConfig(
       webhookUrl,
       channelName: channel.name,
       ...(channelConfig.mentioned_mobile_list
-        ? { mentionedMobileList: channelConfig.mentioned_mobile_list as readonly string[] }
+        ? {
+            mentionedMobileList:
+              channelConfig.mentioned_mobile_list as readonly string[],
+          }
         : {}),
     });
 
@@ -2645,30 +4009,68 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<DispatchResult> {
         // File member directory (IM-08): wecom userid mention inline; mobile
         // members ride one bounded text reminder after the report.
         let mention = rendering.mentionText;
         let mobileReminder: string | undefined;
         const fileDirectory = readFileDirectoryConfig(channelConfig);
-        if (shouldMentionAuthor(channel) && fileDirectory !== undefined && reviewEvent !== undefined) {
-          const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
-            directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
-            guesser: authorGuesser, reviewEvent, baseDir });
+        if (
+          shouldMentionAuthor(channel) &&
+          fileDirectory !== undefined &&
+          reviewEvent !== undefined
+        ) {
+          const resolved = await resolveFileDirectoryMention({
+            config,
+            channelKind: channel.kind,
+            channelName: channel.name,
+            directory: fileDirectory,
+            authorMappings: channel.author_mappings,
+            guessAuthor: channel.guess_author === true,
+            guesser: authorGuesser,
+            reviewEvent,
+            baseDir,
+          });
           mention = resolved.mentionText;
           mobileReminder = resolved.mobileReminder;
         }
-        const reportRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
-        const renderedProblems = (summaryProblems ?? problems).map(problem => reportRendering.renderProblem(problem));
+        const reportRendering = createChannelRendering(
+          config,
+          channel,
+          workspaceId,
+          reviewEvent,
+          repoRef,
+          baseDir,
+          targetUrlTemplates,
+          mention,
+        );
+        const renderedProblems = (summaryProblems ?? problems).map((problem) =>
+          reportRendering.renderProblem(problem),
+        );
         const result = await dispatcher.publishAggregatedProblems(
           renderedProblems,
-          reportRendering.renderSummary(summary, renderedProblems, options?.title),
+          reportRendering.renderSummary(
+            summary,
+            renderedProblems,
+            options?.title,
+          ),
           mention || undefined,
         );
         if (mobileReminder !== undefined && result.status === "published") {
-          await dispatcher.publishTextReminder("Code review report published; mentioned member please check.", { mentionedMobileList: [mobileReminder] });
+          await dispatcher.publishTextReminder(
+            "Code review report published; mentioned member please check.",
+            { mentionedMobileList: [mobileReminder] },
+          );
         }
         return result;
       },
@@ -2677,9 +4079,18 @@ export function createOutputPublisherFromConfig(
 
   if (channel.kind === "wecom_app") {
     const connectionName = channel.connection;
-    const connection = connectionName !== undefined ? config.im?.connections?.[connectionName] : undefined;
-    if (connection === undefined || connection.kind !== "wecom_app" || channel.target === undefined) {
-      throw new Error(`WeCom application channel ${channel.name} requires a wecom_app connection and target.`);
+    const connection =
+      connectionName !== undefined
+        ? config.im?.connections?.[connectionName]
+        : undefined;
+    if (
+      connection === undefined ||
+      connection.kind !== "wecom_app" ||
+      channel.target === undefined
+    ) {
+      throw new Error(
+        `WeCom application channel ${channel.name} requires a wecom_app connection and target.`,
+      );
     }
     let registry = imConnectionRegistries.get(config);
     if (registry === undefined) {
@@ -2689,14 +4100,21 @@ export function createOutputPublisherFromConfig(
     const client = registry.wecomApp(connection);
     const dispatcher = createWeComAppDispatcher({
       client,
-      target: channel.target.kind === "appchat"
-        ? { kind: "appchat", chatId: channel.target.chat_id }
-        : {
-          kind: "recipients",
-          ...(channel.target.users !== undefined ? { users: channel.target.users } : {}),
-          ...(channel.target.parties !== undefined ? { parties: channel.target.parties } : {}),
-          ...(channel.target.tags !== undefined ? { tags: channel.target.tags } : {}),
-        },
+      target:
+        channel.target.kind === "appchat"
+          ? { kind: "appchat", chatId: channel.target.chat_id }
+          : {
+              kind: "recipients",
+              ...(channel.target.users !== undefined
+                ? { users: channel.target.users }
+                : {}),
+              ...(channel.target.parties !== undefined
+                ? { parties: channel.target.parties }
+                : {}),
+              ...(channel.target.tags !== undefined
+                ? { tags: channel.target.tags }
+                : {}),
+            },
       channelName: channel.name,
       identityPrefix: `wecom-app:${connection.corp_id}:${connection.agent_id}`,
     });
@@ -2708,45 +4126,96 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(problem);
-        return { channel: channel.name, status: "published", raw: { collected: true } };
+        return {
+          channel: channel.name,
+          status: "published",
+          raw: { collected: true },
+        };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
+      async publishSummary(
+        summary: string,
+        summaryProblems?: readonly ReviewProblem[],
+        options?: ReviewSummaryPublishOptions,
+      ): Promise<DispatchResult> {
         let mention = rendering.mentionText;
         let mobileReminder: string | undefined;
         const fileDirectory = readFileDirectoryConfig(channelConfig);
-        if (shouldMentionAuthor(channel) && fileDirectory !== undefined && reviewEvent !== undefined) {
-          const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
-            directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
-            guesser: authorGuesser, reviewEvent, baseDir });
+        if (
+          shouldMentionAuthor(channel) &&
+          fileDirectory !== undefined &&
+          reviewEvent !== undefined
+        ) {
+          const resolved = await resolveFileDirectoryMention({
+            config,
+            channelKind: channel.kind,
+            channelName: channel.name,
+            directory: fileDirectory,
+            authorMappings: channel.author_mappings,
+            guessAuthor: channel.guess_author === true,
+            guesser: authorGuesser,
+            reviewEvent,
+            baseDir,
+          });
           mention = resolved.mentionText;
           mobileReminder = resolved.mobileReminder;
         }
-        const reportRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
-        const renderedProblems = (summaryProblems ?? problems).map(problem => reportRendering.renderProblem(problem));
+        const reportRendering = createChannelRendering(
+          config,
+          channel,
+          workspaceId,
+          reviewEvent,
+          repoRef,
+          baseDir,
+          targetUrlTemplates,
+          mention,
+        );
+        const renderedProblems = (summaryProblems ?? problems).map((problem) =>
+          reportRendering.renderProblem(problem),
+        );
         const result = await dispatcher.publishAggregatedProblems(
           renderedProblems,
-          reportRendering.renderSummary(summary, renderedProblems, options?.title),
+          reportRendering.renderSummary(
+            summary,
+            renderedProblems,
+            options?.title,
+          ),
           mention || undefined,
         );
         if (mobileReminder !== undefined && result.status === "published") {
-          await dispatcher.publishTextReminder("Code review report published; mentioned member please check.", { mentionedMobileList: [mobileReminder] });
+          await dispatcher.publishTextReminder(
+            "Code review report published; mentioned member please check.",
+            { mentionedMobileList: [mobileReminder] },
+          );
         }
         // IM-15: after the report parts, send one button card when the im
         // surface (callback-enabled connection + review binding covering the
         // repository) can consume clicks. appchat never gets a button (W14).
-        if (result.status === "published" && cardActionIssuer !== undefined && reviewEvent !== undefined && channel.target?.kind !== "appchat") {
+        if (
+          result.status === "published" &&
+          cardActionIssuer !== undefined &&
+          reviewEvent !== undefined &&
+          channel.target?.kind !== "appchat"
+        ) {
           const actionTarget = resolveWecomCardActionTarget({
-            config, connectionName: connectionName!, connection,
+            config,
+            connectionName: connectionName!,
+            connection,
             reviewEvent: {
-              headSha: reviewEvent.headSha, workspaceId: reviewEvent.workspaceId,
-              triggerName: reviewEvent.triggerName, repoRef: reviewEvent.repoRef,
+              headSha: reviewEvent.headSha,
+              workspaceId: reviewEvent.workspaceId,
+              triggerName: reviewEvent.triggerName,
+              repoRef: reviewEvent.repoRef,
             },
             namespace: cardActionIssuer.namespace,
-            configSnapshotId: cardActionIssuer.currentSnapshotId() ?? "file-only",
+            configSnapshotId:
+              cardActionIssuer.currentSnapshotId() ?? "file-only",
           });
           if (actionTarget !== undefined) {
             try {
-              const actionId = await issueCardAction(cardActionIssuer.store, actionTarget);
+              const actionId = await issueCardAction(
+                cardActionIssuer.store,
+                actionTarget,
+              );
               const card = await dispatcher.publishCardButton({
                 title: "代码评审报告",
                 desc: reviewEvent.repoRef,
@@ -2754,20 +4223,48 @@ export function createOutputPublisherFromConfig(
                 actionId,
               });
               if (card.status === "failed") {
-                console.warn(JSON.stringify({ msg: "im_card_button_send_failed", channel: channel.name, actionId }));
+                console.warn(
+                  JSON.stringify({
+                    msg: "im_card_button_send_failed",
+                    channel: channel.name,
+                    actionId,
+                  }),
+                );
               } else {
                 // The send is acknowledged: bind the send-side TaskId (equal
                 // to the action id by construction) so clicks become valid.
-                await bindImActionSource(cardActionIssuer.store, { actionId, sourceTaskId: actionId, now: new Date() })
+                await bindImActionSource(cardActionIssuer.store, {
+                  actionId,
+                  sourceTaskId: actionId,
+                  now: new Date(),
+                })
                   .then((bound: boolean) => {
-                    if (!bound) console.warn(JSON.stringify({ msg: "im_card_action_bind_rejected", actionId }));
+                    if (!bound)
+                      console.warn(
+                        JSON.stringify({
+                          msg: "im_card_action_bind_rejected",
+                          actionId,
+                        }),
+                      );
                   })
                   .catch((error: unknown) => {
-                    console.warn(JSON.stringify({ msg: "im_card_action_bind_failed", actionId, error: String(error) }));
+                    console.warn(
+                      JSON.stringify({
+                        msg: "im_card_action_bind_failed",
+                        actionId,
+                        error: String(error),
+                      }),
+                    );
                   });
               }
             } catch (error) {
-              console.warn(JSON.stringify({ msg: "im_card_action_issue_failed", channel: channel.name, error: String(error) }));
+              console.warn(
+                JSON.stringify({
+                  msg: "im_card_action_issue_failed",
+                  channel: channel.name,
+                  error: String(error),
+                }),
+              );
             }
           }
         }
@@ -2781,11 +4278,13 @@ export function createOutputPublisherFromConfig(
 
 function routeMatchesEvent(
   route: {
-    readonly match?: {
-      readonly trigger?: string | undefined;
-      readonly target_kind?: string | undefined;
-      readonly repo_ref?: string | undefined;
-    } | undefined;
+    readonly match?:
+      | {
+          readonly trigger?: string | undefined;
+          readonly target_kind?: string | undefined;
+          readonly repo_ref?: string | undefined;
+        }
+      | undefined;
   },
   context: ReviewOrchestrationContext,
 ): boolean {
@@ -2798,18 +4297,26 @@ function routeMatchesEvent(
     return false;
   }
 
-  if (match.target_kind && match.target_kind !== context.reviewEvent.targetKind) {
+  if (
+    match.target_kind &&
+    match.target_kind !== context.reviewEvent.targetKind
+  ) {
     return false;
   }
 
-  if (match.repo_ref !== undefined && match.repo_ref !== context.reviewEvent.repoRef) {
+  if (
+    match.repo_ref !== undefined &&
+    match.repo_ref !== context.reviewEvent.repoRef
+  ) {
     return false;
   }
 
   return true;
 }
 
-function uniqueChannelNames(channelNames: readonly string[]): readonly string[] {
+function uniqueChannelNames(
+  channelNames: readonly string[],
+): readonly string[] {
   return [...new Set(channelNames)];
 }
 
@@ -2822,20 +4329,27 @@ function resolveOutputChannelNames(
   if (graph.mode === "v2") {
     const event = context.reviewEvent;
     const routingEvent = { ...event, triggerName: event.triggerName };
-    return resolveOutputChannelsForEvent(config as EffectiveConfigV2, graph, routingEvent,
-      event.workspaceId, key, executionRoute(config, event));
+    return resolveOutputChannelsForEvent(
+      config as EffectiveConfigV2,
+      graph,
+      routingEvent,
+      event.workspaceId,
+      key,
+      executionRoute(config, event),
+    );
   }
   // Route rules are more specific (match by trigger + target_kind) and should
   // override workspace defaults for events like push/commit that need different
   // channels than pull_request (e.g. problem_issue instead of pr_review).
-  const routeChannels = config.outputs.routes?.rules
-    .find((route) => routeMatchesEvent(route, context))
-    ?.[key];
+  const routeChannels = config.outputs.routes?.rules.find((route) =>
+    routeMatchesEvent(route, context),
+  )?.[key];
   if (routeChannels && routeChannels.length > 0) {
     return uniqueChannelNames(routeChannels);
   }
 
-  const workspace = config.workspaces.instances[context.reviewEvent.workspaceId];
+  const workspace =
+    config.workspaces.instances[context.reviewEvent.workspaceId];
   const workspaceChannels = workspace?.outputs?.[key];
   if (workspaceChannels && workspaceChannels.length > 0) {
     return uniqueChannelNames(workspaceChannels);
@@ -2847,8 +4361,11 @@ function resolveOutputChannelNames(
   }
 
   if (key === "line_comments") {
-    const fallback = config.outputs.channels.find((c) =>
-      c.kind === "gitea_pr_review" || c.kind === "github_pr_review" || c.kind === "gitlab_mr_review"
+    const fallback = config.outputs.channels.find(
+      (c) =>
+        c.kind === "gitea_pr_review" ||
+        c.kind === "github_pr_review" ||
+        c.kind === "gitlab_mr_review",
     );
     return fallback ? [fallback.name] : [];
   }
@@ -2857,13 +4374,20 @@ function resolveOutputChannelNames(
 }
 
 /** Re-resolve only inside the task's immutable generation; never the live head. */
-function executionRoute(config: AppConfig, event: ReviewEvent): CompiledRoutingRule | undefined {
+function executionRoute(
+  config: AppConfig,
+  event: ReviewEvent,
+): CompiledRoutingRule | undefined {
   const graph = compileExecutionGraph(config as EffectiveConfigV2);
   if (graph.mode === "legacy") return undefined;
   const selected = resolveRouteForEvent(graph, event);
-  if (selected.status === "none") throw new ConfigError("no_route", "No route matches the accepted event.");
+  if (selected.status === "none")
+    throw new ConfigError("no_route", "No route matches the accepted event.");
   if (selected.rule.workspace !== event.workspaceId) {
-    throw new ConfigError("routing_invalid", "Accepted workspace differs from the pinned route.");
+    throw new ConfigError(
+      "routing_invalid",
+      "Accepted workspace differs from the pinned route.",
+    );
   }
   return selected.rule;
 }
@@ -2883,7 +4407,9 @@ async function resolveGithubAppInstallationToken(
     return undefined;
   }
 
-  const trigger = config.triggers.find((t) => t.name === triggerName && t.kind === "github");
+  const trigger = config.triggers.find(
+    (t) => t.name === triggerName && t.kind === "github",
+  );
   if (!trigger) {
     return undefined;
   }
@@ -2923,18 +4449,47 @@ export function createOutputPublisherResolverFromConfig(
     const baseDir = options.baseDir ?? process.cwd();
     const tokenPromises = new Map<string, Promise<string | undefined>>();
     const channelToken = (name: string): Promise<string | undefined> => {
-      const channel = config.outputs.channels.find(entry => entry.name === name);
-      if (!channel?.kind.startsWith("github_") || channel.token_env !== undefined || channel.token !== undefined) return Promise.resolve(undefined);
-      const eventTrigger = config.triggers.find(entry => entry.name === context.reviewEvent.triggerName && entry.kind === "github");
-      const triggerName = readString(channel, "trigger") ?? eventTrigger?.name ?? config.triggers.find(entry => entry.kind === "github")?.name;
+      const channel = config.outputs.channels.find(
+        (entry) => entry.name === name,
+      );
+      if (
+        !channel?.kind.startsWith("github_") ||
+        channel.token_env !== undefined ||
+        channel.token !== undefined
+      )
+        return Promise.resolve(undefined);
+      const eventTrigger = config.triggers.find(
+        (entry) =>
+          entry.name === context.reviewEvent.triggerName &&
+          entry.kind === "github",
+      );
+      const triggerName =
+        readString(channel, "trigger") ??
+        eventTrigger?.name ??
+        config.triggers.find((entry) => entry.kind === "github")?.name;
       const explicitOwner = readString(channel, "owner");
       const explicitRepo = readString(channel, "repo");
-      const repoRef = explicitOwner && explicitRepo ? `${explicitOwner}/${explicitRepo}` : explicitRepo ??
-        (triggerName ? resolveWorkspaceRepoRef(config, triggerName, context.reviewEvent.workspaceId) : undefined) ?? context.reviewEvent.repoRef;
+      const repoRef =
+        explicitOwner && explicitRepo
+          ? `${explicitOwner}/${explicitRepo}`
+          : (explicitRepo ??
+            (triggerName
+              ? resolveWorkspaceRepoRef(
+                  config,
+                  triggerName,
+                  context.reviewEvent.workspaceId,
+                )
+              : undefined) ??
+            context.reviewEvent.repoRef);
       const key = JSON.stringify([triggerName, repoRef]);
       let token = tokenPromises.get(key);
       if (!token) {
-        token = resolveGithubAppInstallationToken(config, options.appTokenServices, triggerName, repoRef);
+        token = resolveGithubAppInstallationToken(
+          config,
+          options.appTokenServices,
+          triggerName,
+          repoRef,
+        );
         tokenPromises.set(key, token);
       }
       return token;
@@ -2946,55 +4501,90 @@ export function createOutputPublisherResolverFromConfig(
     // Construct the model client only after directory rules leave an unmatched author.
     let identityGuesser: ChannelAuthorGuesser | undefined;
     const authorGuesser: ChannelAuthorGuesser = (input, users) => {
-      identityGuesser ??= options.authorGuesserFactory?.(context) ?? createConfiguredAuthorGuesser(config, context.reviewEvent.workspaceId);
+      identityGuesser ??=
+        options.authorGuesserFactory?.(context) ??
+        createConfiguredAuthorGuesser(config, context.reviewEvent.workspaceId);
       return identityGuesser(input, users);
     };
-    const linePublishers = (await Promise.all(resolveOutputChannelNames(config, context, "line_comments")
-      .map(async (name): Promise<OutputPublisherEntry | undefined> => {
-        const publisher = createOutputPublisherFromConfig(
-          config,
-          name,
-          pullNumber,
-          context.reviewEvent.workspaceId,
-          context.reviewEvent,
-          baseDir,
-          await channelToken(name),
-          resolutionAnalyzer,
-          authorGuesser,
-          options.cardActionIssuer,
-        );
-        return publisher ? { name, kind: config.outputs.channels.find((c) => c.name === name)?.kind, publisher } : undefined;
-      })))
-      .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
-    const summaryPublishers = (await Promise.all(resolveOutputChannelNames(config, context, "summary")
-      .map(async (name): Promise<OutputPublisherEntry | undefined> => {
-        const publisher = createOutputPublisherFromConfig(
-          config,
-          name,
-          pullNumber,
-          context.reviewEvent.workspaceId,
-          context.reviewEvent,
-          baseDir,
-          await channelToken(name),
-          resolutionAnalyzer,
-          authorGuesser,
-          options.cardActionIssuer,
-        );
-        return publisher ? { name, kind: config.outputs.channels.find((c) => c.name === name)?.kind, publisher } : undefined;
-      })))
-      .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
+    const linePublishers = (
+      await Promise.all(
+        resolveOutputChannelNames(config, context, "line_comments").map(
+          async (name): Promise<OutputPublisherEntry | undefined> => {
+            const publisher = createOutputPublisherFromConfig(
+              config,
+              name,
+              pullNumber,
+              context.reviewEvent.workspaceId,
+              context.reviewEvent,
+              baseDir,
+              await channelToken(name),
+              resolutionAnalyzer,
+              authorGuesser,
+              options.cardActionIssuer,
+            );
+            return publisher
+              ? {
+                  name,
+                  kind: config.outputs.channels.find((c) => c.name === name)
+                    ?.kind,
+                  publisher,
+                }
+              : undefined;
+          },
+        ),
+      )
+    ).filter((entry): entry is OutputPublisherEntry => Boolean(entry));
+    const summaryPublishers = (
+      await Promise.all(
+        resolveOutputChannelNames(config, context, "summary").map(
+          async (name): Promise<OutputPublisherEntry | undefined> => {
+            const publisher = createOutputPublisherFromConfig(
+              config,
+              name,
+              pullNumber,
+              context.reviewEvent.workspaceId,
+              context.reviewEvent,
+              baseDir,
+              await channelToken(name),
+              resolutionAnalyzer,
+              authorGuesser,
+              options.cardActionIssuer,
+            );
+            return publisher
+              ? {
+                  name,
+                  kind: config.outputs.channels.find((c) => c.name === name)
+                    ?.kind,
+                  publisher,
+                }
+              : undefined;
+          },
+        ),
+      )
+    ).filter((entry): entry is OutputPublisherEntry => Boolean(entry));
 
     const publicationRecovery = context.publicationRecovery;
-    return createCompositeOutputPublisher(linePublishers, summaryPublishers,
+    return createCompositeOutputPublisher(
+      linePublishers,
+      summaryPublishers,
       publicationRecovery
         ? {
-            ...(publicationRecovery.remote ? { remote: publicationRecovery.remote } : {}),
-            ...(publicationRecovery.skipChannels ? { skipChannels: new Set(publicationRecovery.skipChannels) } : {}),
+            ...(publicationRecovery.remote
+              ? { remote: publicationRecovery.remote }
+              : {}),
+            ...(publicationRecovery.skipChannels
+              ? { skipChannels: new Set(publicationRecovery.skipChannels) }
+              : {}),
             ...(context.signal ? { signal: context.signal } : {}),
-            ...(publicationRecovery.onChannelStart ? { onChannelStart: publicationRecovery.onChannelStart } : {}),
-            ...(publicationRecovery.onChannelResult ? { onChannelResult: publicationRecovery.onChannelResult } : {}),
+            ...(publicationRecovery.onChannelStart
+              ? { onChannelStart: publicationRecovery.onChannelStart }
+              : {}),
+            ...(publicationRecovery.onChannelResult
+              ? { onChannelResult: publicationRecovery.onChannelResult }
+              : {}),
           }
-        : undefined);
+        : undefined,
+    );
   };
 }
 
@@ -3005,7 +4595,9 @@ function resolveWorkspaceRepoRef(
 ): string | undefined {
   if (workspaceId) {
     const instance = config.workspaces.instances[workspaceId];
-    return instance?.source_repo?.trigger === triggerName ? instance.source_repo.repo : undefined;
+    return instance?.source_repo?.trigger === triggerName
+      ? instance.source_repo.repo
+      : undefined;
   }
 
   for (const instance of Object.values(config.workspaces.instances)) {
@@ -3017,7 +4609,9 @@ function resolveWorkspaceRepoRef(
   return undefined;
 }
 
-function parseRepoRef(repoRef: string | undefined): { owner: string; repo: string } | undefined {
+function parseRepoRef(
+  repoRef: string | undefined,
+): { owner: string; repo: string } | undefined {
   if (!repoRef) {
     return undefined;
   }
@@ -3031,10 +4625,18 @@ function parseRepoRef(repoRef: string | undefined): { owner: string; repo: strin
 }
 
 function isGitRemoteTriggerKind(kind: string): boolean {
-  return kind === "gitea" || kind === "forgejo" || kind === "github" || kind === "gitlab";
+  return (
+    kind === "gitea" ||
+    kind === "forgejo" ||
+    kind === "github" ||
+    kind === "gitlab"
+  );
 }
 
-function buildGitRemoteUrl(baseUrl: string | undefined, repoRef: string | undefined): string | undefined {
+function buildGitRemoteUrl(
+  baseUrl: string | undefined,
+  repoRef: string | undefined,
+): string | undefined {
   if (!baseUrl || !repoRef) {
     return undefined;
   }
@@ -3055,7 +4657,8 @@ export function createVcsAdapterFromConfig(
   repoRef?: string,
   options?: {
     readonly resolvedToken?: string;
-    readonly tokenProvider?: () => Promise<string | undefined> | string | undefined;
+    readonly tokenProvider?: () =>
+      Promise<string | undefined> | string | undefined;
     readonly alwaysFetch?: boolean;
   },
 ): GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter {
@@ -3072,15 +4675,17 @@ export function createVcsAdapterFromConfig(
     const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
     const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
 
-    const password = resolveSecretField(triggerConfig, "password", "password_env")
-      ?? resolveSecretField(triggerConfig, "ticket", "ticket_env");
+    const password =
+      resolveSecretField(triggerConfig, "password", "password_env") ??
+      resolveSecretField(triggerConfig, "ticket", "ticket_env");
     const user = resolveSecretField(triggerConfig, "user", "user_env");
 
     // Scope binding: the event repoRef is the authoritative depot scope
     // (routing-derived receipts carry the per-scope depot path; legacy
     // payloads may override depot_path). Configured depot/streams[0] is only
     // the fallback when the event carries no usable scope.
-    const scopeDepot = repoRef !== undefined && repoRef.startsWith("//") ? repoRef : undefined;
+    const scopeDepot =
+      repoRef !== undefined && repoRef.startsWith("//") ? repoRef : undefined;
     const boundDepot = scopeDepot ?? streams?.[0] ?? depot;
     return createP4VcsAdapter({
       repositoryDir: resolve(repositoryDir),
@@ -3100,12 +4705,18 @@ export function createVcsAdapterFromConfig(
     : config.triggers.find((t) => t.kind === "svn");
   if (svnTrigger) {
     const triggerConfig = svnTrigger as Record<string, unknown>;
-    const repositoryUrl = typeof triggerConfig.repository_url === "string"
-      ? triggerConfig.repository_url.trim()
-      : undefined;
-    const username = resolveSecretField(triggerConfig, "username", "username_env")
-      ?? resolveSecretField(triggerConfig, "user", "user_env");
-    const password = resolveSecretField(triggerConfig, "password", "password_env");
+    const repositoryUrl =
+      typeof triggerConfig.repository_url === "string"
+        ? triggerConfig.repository_url.trim()
+        : undefined;
+    const username =
+      resolveSecretField(triggerConfig, "username", "username_env") ??
+      resolveSecretField(triggerConfig, "user", "user_env");
+    const password = resolveSecretField(
+      triggerConfig,
+      "password",
+      "password_env",
+    );
     const watchPath = triggerConfig.watch_path as string[] | undefined;
     const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
     const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
@@ -3115,8 +4726,10 @@ export function createVcsAdapterFromConfig(
     // scope URL (repository_url + prefix) as repoRef; bind the adapter to
     // it so log/diff run against the project scope, not the repo root.
     const scopeUrl =
-      repoRef !== undefined && repositoryUrl !== undefined &&
-      (repoRef === repositoryUrl || repoRef.startsWith(`${repositoryUrl.replace(/\/+$/u, "")}/`))
+      repoRef !== undefined &&
+      repositoryUrl !== undefined &&
+      (repoRef === repositoryUrl ||
+        repoRef.startsWith(`${repositoryUrl.replace(/\/+$/u, "")}/`))
         ? repoRef
         : undefined;
     return createSvnVcsAdapter({
@@ -3136,17 +4749,21 @@ export function createVcsAdapterFromConfig(
   }
 
   const gitTrigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && isGitRemoteTriggerKind(t.kind))
+    ? config.triggers.find(
+        (t) => t.name === triggerName && isGitRemoteTriggerKind(t.kind),
+      )
     : undefined;
   const gitTriggerConfig = gitTrigger as Record<string, unknown> | undefined;
   const gitTriggerKind = gitTriggerConfig?.kind as string | undefined;
   const triggerBaseUrl = gitTriggerConfig?.base_url as string | undefined;
-  const effectiveBaseUrl = triggerBaseUrl
-    ?? (gitTriggerKind === "github" ? "https://github.com" : undefined);
+  const effectiveBaseUrl =
+    triggerBaseUrl ??
+    (gitTriggerKind === "github" ? "https://github.com" : undefined);
   const remoteUrl = buildGitRemoteUrl(effectiveBaseUrl, repoRef);
-  const token = gitTriggerConfig !== undefined
-    ? resolveSecretField(gitTriggerConfig, "token", "token_env")
-    : undefined;
+  const token =
+    gitTriggerConfig !== undefined
+      ? resolveSecretField(gitTriggerConfig, "token", "token_env")
+      : undefined;
   const resolvedGitToken = token ?? options?.resolvedToken;
 
   return createGitVcsAdapter({
@@ -3164,7 +4781,13 @@ export function buildSourceRootResolver(
 ): (reviewEvent: ReviewEvent) => string {
   return (reviewEvent: ReviewEvent) => {
     const repoRef = reviewEvent.repoRef.replace(/[/:]/g, "_");
-    return resolve(baseDir, "workspaces", reviewEvent.workspaceId, "source", repoRef);
+    return resolve(
+      baseDir,
+      "workspaces",
+      reviewEvent.workspaceId,
+      "source",
+      repoRef,
+    );
   };
 }
 
@@ -3178,30 +4801,50 @@ function toGatewayProviders(
   }));
 }
 
-function toGatewayRetry(config: AppConfig["llm"]["retry"]): LlmGatewayRetryConfig | undefined {
+function toGatewayRetry(
+  config: AppConfig["llm"]["retry"],
+): LlmGatewayRetryConfig | undefined {
   if (!config) return undefined;
   return {
-    ...(config.max_attempts !== undefined ? { maxAttempts: config.max_attempts } : {}),
-    ...(config.respect_retry_after !== undefined ? { respectRetryAfter: config.respect_retry_after } : {}),
+    ...(config.max_attempts !== undefined
+      ? { maxAttempts: config.max_attempts }
+      : {}),
+    ...(config.respect_retry_after !== undefined
+      ? { respectRetryAfter: config.respect_retry_after }
+      : {}),
     ...(config.backoff
       ? {
           backoff: {
             kind: config.backoff.kind,
-            ...(config.backoff.base_ms !== undefined ? { baseMs: config.backoff.base_ms } : {}),
-            ...(config.backoff.max_ms !== undefined ? { maxMs: config.backoff.max_ms } : {}),
-            ...(config.backoff.jitter !== undefined ? { jitter: config.backoff.jitter } : {}),
+            ...(config.backoff.base_ms !== undefined
+              ? { baseMs: config.backoff.base_ms }
+              : {}),
+            ...(config.backoff.max_ms !== undefined
+              ? { maxMs: config.backoff.max_ms }
+              : {}),
+            ...(config.backoff.jitter !== undefined
+              ? { jitter: config.backoff.jitter }
+              : {}),
           },
         }
       : {}),
-    ...(config.give_up_after_seconds !== undefined ? { giveUpAfterSeconds: config.give_up_after_seconds } : {}),
+    ...(config.give_up_after_seconds !== undefined
+      ? { giveUpAfterSeconds: config.give_up_after_seconds }
+      : {}),
   };
 }
 
-function toGatewayBudget(config: AppConfig["llm"]["budget"]): LlmGatewayBudgetConfig | undefined {
+function toGatewayBudget(
+  config: AppConfig["llm"]["budget"],
+): LlmGatewayBudgetConfig | undefined {
   if (!config) return undefined;
   return {
-    ...(config.per_run_usd !== undefined ? { perRunUsd: config.per_run_usd } : {}),
-    ...(config.per_repo_daily_usd !== undefined ? { perRepoDailyUsd: config.per_repo_daily_usd } : {}),
+    ...(config.per_run_usd !== undefined
+      ? { perRunUsd: config.per_run_usd }
+      : {}),
+    ...(config.per_repo_daily_usd !== undefined
+      ? { perRepoDailyUsd: config.per_repo_daily_usd }
+      : {}),
   };
 }
 
@@ -3215,8 +4858,12 @@ function toGatewayPerProviderOverrides(
     if (!value) continue;
 
     const entry: LlmGatewayPerProviderOverride = {
-      ...(value.max_attempts !== undefined ? { maxAttempts: value.max_attempts } : {}),
-      ...(value.give_up_after_seconds !== undefined ? { giveUpAfterSeconds: value.give_up_after_seconds } : {}),
+      ...(value.max_attempts !== undefined
+        ? { maxAttempts: value.max_attempts }
+        : {}),
+      ...(value.give_up_after_seconds !== undefined
+        ? { giveUpAfterSeconds: value.give_up_after_seconds }
+        : {}),
     };
 
     if (Object.keys(entry).length > 0) {
@@ -3260,7 +4907,10 @@ function buildGatewayModelPricing(
   config: AppConfig,
 ): Record<string, ModelPricing> {
   const pricing: Record<string, ModelPricing> = {};
-  const collect = (provider: AppConfig["llm"]["providers"][number], modelId: string): void => {
+  const collect = (
+    provider: AppConfig["llm"]["providers"][number],
+    modelId: string,
+  ): void => {
     const key = `${provider.id}/${modelId}`;
     if (pricing[key]) return;
     const enriched = catalogService.enrichModelSpec({
@@ -3288,14 +4938,23 @@ function buildGatewayModelPricing(
   return pricing;
 }
 
-function toCompressionConfig(compression: AppConfig["compression"]): CompressionConfig | undefined {
+function toCompressionConfig(
+  compression: AppConfig["compression"],
+): CompressionConfig | undefined {
   if (!compression) return undefined;
 
-  let perModelOverrides: Readonly<Record<string, { readonly triggerTokens?: number }>> | undefined;
+  let perModelOverrides:
+    Readonly<Record<string, { readonly triggerTokens?: number }>> | undefined;
   if (compression.per_model_overrides) {
     const entries: Record<string, { readonly triggerTokens?: number }> = {};
-    for (const [key, value] of Object.entries(compression.per_model_overrides)) {
-      if (value && typeof value === "object" && value.trigger_tokens !== undefined) {
+    for (const [key, value] of Object.entries(
+      compression.per_model_overrides,
+    )) {
+      if (
+        value &&
+        typeof value === "object" &&
+        value.trigger_tokens !== undefined
+      ) {
         entries[key] = { triggerTokens: value.trigger_tokens };
       }
     }
@@ -3305,11 +4964,21 @@ function toCompressionConfig(compression: AppConfig["compression"]): Compression
   }
 
   return {
-    ...(compression.trigger_tokens !== undefined ? { triggerTokens: compression.trigger_tokens } : {}),
-    ...(compression.max_input_ratio !== undefined ? { maxInputRatio: compression.max_input_ratio } : {}),
-    ...(compression.keep_hunks_top_k !== undefined ? { keepHunksTopK: compression.keep_hunks_top_k } : {}),
-    ...(compression.context_lines !== undefined ? { contextLines: compression.context_lines } : {}),
-    ...(compression.summarize_model_role !== undefined ? { summarizeModelRole: compression.summarize_model_role } : {}),
+    ...(compression.trigger_tokens !== undefined
+      ? { triggerTokens: compression.trigger_tokens }
+      : {}),
+    ...(compression.max_input_ratio !== undefined
+      ? { maxInputRatio: compression.max_input_ratio }
+      : {}),
+    ...(compression.keep_hunks_top_k !== undefined
+      ? { keepHunksTopK: compression.keep_hunks_top_k }
+      : {}),
+    ...(compression.context_lines !== undefined
+      ? { contextLines: compression.context_lines }
+      : {}),
+    ...(compression.summarize_model_role !== undefined
+      ? { summarizeModelRole: compression.summarize_model_role }
+      : {}),
     ...(perModelOverrides ? { perModelOverrides } : {}),
   };
 }
@@ -3327,16 +4996,22 @@ function toDefaultCompressionConfig(model: ModelSpec): CompressionConfig {
   };
 }
 
-function resolveSummarizeModelFromChain(config: AppConfig, chain: LlmModelChain): ModelSpec | undefined {
+function resolveSummarizeModelFromChain(
+  config: AppConfig,
+  chain: LlmModelChain,
+): ModelSpec | undefined {
   const summarizeRole = config.compression?.summarize_model_role ?? "light";
   const providers = config.llm.providers;
   if (providers.length === 0) return undefined;
 
-  const entry = chain.find((candidate) => candidate.role === summarizeRole) ?? chain[0];
+  const entry =
+    chain.find((candidate) => candidate.role === summarizeRole) ?? chain[0];
   return entry ? resolveModelSpecFromChain(providers, [entry]) : undefined;
 }
 
-async function createAppTokenServices(config: AppConfig): Promise<Map<string, GithubAppTokenService>> {
+async function createAppTokenServices(
+  config: AppConfig,
+): Promise<Map<string, GithubAppTokenService>> {
   const services = new Map<string, GithubAppTokenService>();
   for (const trigger of config.triggers) {
     if (trigger.kind !== "github") {
@@ -3375,42 +5050,78 @@ interface BootstrapOpenedResources {
 const ADMIN_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 
 function logBootstrapCloseFailure(resource: string, error: unknown): void {
-  console.warn(JSON.stringify({
-    level: "warn",
-    msg: "failed to release resource after bootstrap failure",
-    resource,
-    error: error instanceof Error ? error.message : String(error),
-  }));
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      msg: "failed to release resource after bootstrap failure",
+      resource,
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
 }
 
-export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
+export async function bootstrapServerApp(
+  options: BootstrapServerOptions,
+): Promise<ServerAppOptions> {
   // A failure mid-build must not leak what earlier steps opened: release in
   // reverse creation order, then rethrow the original error.
-  const opened: BootstrapOpenedResources = { store: undefined, sessionStore: undefined, configStore: undefined, catalogBackend: undefined, closeAutoCommit: undefined };
+  const opened: BootstrapOpenedResources = {
+    store: undefined,
+    sessionStore: undefined,
+    configStore: undefined,
+    catalogBackend: undefined,
+    closeAutoCommit: undefined,
+  };
   try {
     return await bootstrapServerAppCore(options, opened);
   } catch (error) {
     if (opened.closeAutoCommit !== undefined) {
-      await opened.closeAutoCommit().catch((closeError: unknown) => logBootstrapCloseFailure("autoCommit", closeError));
+      await opened
+        .closeAutoCommit()
+        .catch((closeError: unknown) =>
+          logBootstrapCloseFailure("autoCommit", closeError),
+        );
     }
     if (opened.sessionStore !== undefined) {
-      await opened.sessionStore.close().catch((closeError: unknown) => logBootstrapCloseFailure("sessionStore", closeError));
+      await opened.sessionStore
+        .close()
+        .catch((closeError: unknown) =>
+          logBootstrapCloseFailure("sessionStore", closeError),
+        );
     }
     if (opened.configStore !== undefined) {
-      await opened.configStore.close().catch((closeError: unknown) => logBootstrapCloseFailure("configStore", closeError));
+      await opened.configStore
+        .close()
+        .catch((closeError: unknown) =>
+          logBootstrapCloseFailure("configStore", closeError),
+        );
     }
     if (opened.catalogBackend?.close !== undefined) {
-      await opened.catalogBackend.close().catch((closeError: unknown) => logBootstrapCloseFailure("catalogBackend", closeError));
+      await opened.catalogBackend
+        .close()
+        .catch((closeError: unknown) =>
+          logBootstrapCloseFailure("catalogBackend", closeError),
+        );
     }
     if (opened.store !== undefined) {
-      await closeStoreDb(opened.store).catch((closeError: unknown) => logBootstrapCloseFailure("store", closeError));
+      await closeStoreDb(opened.store).catch((closeError: unknown) =>
+        logBootstrapCloseFailure("store", closeError),
+      );
     }
     throw error;
   }
 }
 
-async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: BootstrapOpenedResources): Promise<ServerAppOptions> {
-  const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
+async function bootstrapServerAppCore(
+  options: BootstrapServerOptions,
+  opened: BootstrapOpenedResources,
+): Promise<ServerAppOptions> {
+  const {
+    config,
+    baseSystemPrompt,
+    baseDir = process.cwd(),
+    jobHandler,
+  } = options;
 
   // IM authorization directory: background-refreshed corporate-directory
   // snapshots backing scope matchers (departments/tags/extattr/chats).
@@ -3438,16 +5149,24 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           "config_sources.database.backend 'redis' requires storage.cache.redis.url_env to resolve to a Redis URL.",
         );
       }
-      runtimeConfigStore = await createRedisConfigStore({ connection: { url: redisUrl } });
+      runtimeConfigStore = await createRedisConfigStore({
+        connection: { url: redisUrl },
+      });
     } else {
-      runtimeConfigStore = await createConfigStoreFromDatabaseConfig(config.storage.database, resolveEnv);
+      runtimeConfigStore = await createConfigStoreFromDatabaseConfig(
+        config.storage.database,
+        resolveEnv,
+      );
     }
     opened.configStore = runtimeConfigStore;
   }
   const runtimeConfig = new RuntimeConfigManager({
     fileConfig: config,
     ...(options.configDocument
-      ? { fileDocument: options.configDocument.document, fileDigest: options.configDocument.digest }
+      ? {
+          fileDocument: options.configDocument.document,
+          fileDigest: options.configDocument.digest,
+        }
       : {}),
     ...(runtimeConfigStore ? { store: runtimeConfigStore } : {}),
     namespace: configSources.database.namespace,
@@ -3461,13 +5180,18 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // Background refresh only accelerates generation swaps; every admission
     // re-reads the durable head regardless (H15).
     const refreshTimer = setInterval(() => {
-      void runtimeConfig.admission().finally(() => runtimeConfig.heartbeat()).catch((error: unknown) => {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "runtime config background refresh failed; admissions will retry",
-          error: admissionUnavailableReason(error),
-        }));
-      });
+      void runtimeConfig
+        .admission()
+        .finally(() => runtimeConfig.heartbeat())
+        .catch((error: unknown) => {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              msg: "runtime config background refresh failed; admissions will retry",
+              error: admissionUnavailableReason(error),
+            }),
+          );
+        });
     }, configSources.runtime.refresh_interval_seconds * 1000);
     refreshTimer.unref();
     const closeConfigStore = runtimeConfigStore.close.bind(runtimeConfigStore);
@@ -3493,11 +5217,24 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     readonly summarizeModel?: ModelSpec;
     readonly summarizeClient?: ChatCompletionClient;
   }
-  const generationModelRoutes = new WeakMap<RuntimeConfigGeneration, Map<string, ModelRoute>>();
+  const generationModelRoutes = new WeakMap<
+    RuntimeConfigGeneration,
+    Map<string, ModelRoute>
+  >();
   const dailyBudgetTracker = new DailyBudgetTracker();
-  const rateLimiter = createMultiProviderRateLimiter(() => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.rate_limit?.per_provider_rps ?? {}));
-  const generationAppTokenServices = new WeakMap<RuntimeConfigGeneration, Promise<ReadonlyMap<string, GithubAppTokenService>>>();
-  const appTokenServicesFor = (generation: RuntimeConfigGeneration): Promise<ReadonlyMap<string, GithubAppTokenService>> => {
+  const rateLimiter = createMultiProviderRateLimiter(() =>
+    runtimeConfig.withoutGeneration(
+      () =>
+        runtimeConfig.current().config.queue.rate_limit?.per_provider_rps ?? {},
+    ),
+  );
+  const generationAppTokenServices = new WeakMap<
+    RuntimeConfigGeneration,
+    Promise<ReadonlyMap<string, GithubAppTokenService>>
+  >();
+  const appTokenServicesFor = (
+    generation: RuntimeConfigGeneration,
+  ): Promise<ReadonlyMap<string, GithubAppTokenService>> => {
     let services = generationAppTokenServices.get(generation);
     if (services === undefined) {
       services = createAppTokenServices(generation.config);
@@ -3512,29 +5249,78 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   // profiles from the CURRENT generation, so publishing a revision that
   // adds/removes/re-credentials triggers applies to the next request without
   // remounting any Hono route.
-  const gitWebhookConfigs = async (kind: "gitea" | "forgejo" | "github" | "gitlab"): Promise<readonly VcsWebhookConfig[]> => {
+  const gitWebhookConfigs = async (
+    kind: "gitea" | "forgejo" | "github" | "gitlab",
+  ): Promise<readonly VcsWebhookConfig[]> => {
     const generation = runtimeConfig.current();
     const tokenServices = await appTokenServicesFor(generation);
-    if (kind === "gitea") return resolveGiteaLikeWebhookConfigs(generation.config, "gitea", undefined, tokenServices, generation.workspaceRuntime);
-    if (kind === "forgejo") return resolveGiteaLikeWebhookConfigs(generation.config, "forgejo", undefined, tokenServices, generation.workspaceRuntime);
-    if (kind === "github") return resolveGenericWebhookConfigs(generation.config, "github", undefined, tokenServices, generation.workspaceRuntime);
-    return resolveGenericWebhookConfigs(generation.config, "gitlab", undefined, undefined, generation.workspaceRuntime);
+    if (kind === "gitea")
+      return resolveGiteaLikeWebhookConfigs(
+        generation.config,
+        "gitea",
+        undefined,
+        tokenServices,
+        generation.workspaceRuntime,
+      );
+    if (kind === "forgejo")
+      return resolveGiteaLikeWebhookConfigs(
+        generation.config,
+        "forgejo",
+        undefined,
+        tokenServices,
+        generation.workspaceRuntime,
+      );
+    if (kind === "github")
+      return resolveGenericWebhookConfigs(
+        generation.config,
+        "github",
+        undefined,
+        tokenServices,
+        generation.workspaceRuntime,
+      );
+    return resolveGenericWebhookConfigs(
+      generation.config,
+      "gitlab",
+      undefined,
+      undefined,
+      generation.workspaceRuntime,
+    );
   };
   const giteaConfigs = () => gitWebhookConfigs("gitea");
   const forgejoConfigs = () => gitWebhookConfigs("forgejo");
   const githubConfigs = () => gitWebhookConfigs("github");
   const gitlabConfigs = () => gitWebhookConfigs("gitlab");
-  const p4Configs = () => resolveP4TriggerConfigs(runtimeConfig.current().config, undefined, runtimeConfig.current().workspaceRuntime);
-  const svnConfigs = () => resolveSvnTriggerConfigs(runtimeConfig.current().config, undefined, runtimeConfig.current().workspaceRuntime);
+  const p4Configs = () =>
+    resolveP4TriggerConfigs(
+      runtimeConfig.current().config,
+      undefined,
+      runtimeConfig.current().workspaceRuntime,
+    );
+  const svnConfigs = () =>
+    resolveSvnTriggerConfigs(
+      runtimeConfig.current().config,
+      undefined,
+      runtimeConfig.current().workspaceRuntime,
+    );
 
-  const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
+  const adminAuthConfig = resolveAdminAuthConfig(
+    config as unknown as Record<string, unknown>,
+    resolveEnv,
+  );
   const catalogConfig = config.llm?.model_catalog;
   const catalogEnabled = !!catalogConfig?.enabled;
   const reflectionConfig = config.review.reflection;
-  const catalogNeedsStore = catalogEnabled && catalogConfig!.cache.backend === "sqlite";
+  const catalogNeedsStore =
+    catalogEnabled && catalogConfig!.cache.backend === "sqlite";
   const reflectionNeedsStore =
-    !!reflectionConfig && reflectionConfig.enabled !== false && reflectionConfig.mode !== "off";
-  const needsStore = !!adminAuthConfig || catalogNeedsStore || reflectionNeedsStore || runtimeConfig.mode === "database";
+    !!reflectionConfig &&
+    reflectionConfig.enabled !== false &&
+    reflectionConfig.mode !== "off";
+  const needsStore =
+    !!adminAuthConfig ||
+    catalogNeedsStore ||
+    reflectionNeedsStore ||
+    runtimeConfig.mode === "database";
 
   let store: StoreDb | undefined;
   let sessionStore: ConfigStore | undefined;
@@ -3545,30 +5331,52 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   if (needsStore) {
     try {
       if (config.storage.database.kind === "postgres") {
-        const pgConfig = (config.storage.database.postgres ?? {}) as Record<string, unknown>;
-        const pgUrlEnv = typeof pgConfig.url_env === "string" ? pgConfig.url_env : undefined;
-        const pgUrl = (pgUrlEnv ? resolveEnv(pgUrlEnv) : undefined)
-          ?? (typeof pgConfig.url === "string" ? pgConfig.url : undefined);
+        const pgConfig = (config.storage.database.postgres ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const pgUrlEnv =
+          typeof pgConfig.url_env === "string" ? pgConfig.url_env : undefined;
+        const pgUrl =
+          (pgUrlEnv ? resolveEnv(pgUrlEnv) : undefined) ??
+          (typeof pgConfig.url === "string" ? pgConfig.url : undefined);
         if (!pgUrl) {
           throw new TypeError(
             "storage.database.kind 'postgres' requires storage.database.postgres.url_env to resolve to a PostgreSQL URL.",
           );
         }
-        store = await createStoreDb({ kind: "postgres", url: pgUrl, migrationMode: config.storage.database.migrate });
+        store = await createStoreDb({
+          kind: "postgres",
+          url: pgUrl,
+          migrationMode: config.storage.database.migrate,
+        });
       } else {
-        store = await createStoreDb({ kind: "sqlite", path: config.storage.database.sqlite.path, migrationMode: config.storage.database.migrate });
+        store = await createStoreDb({
+          kind: "sqlite",
+          path: config.storage.database.sqlite.path,
+          migrationMode: config.storage.database.migrate,
+        });
       }
     } catch (error) {
-      if (!runtimeConfigStore || catalogNeedsStore || reflectionNeedsStore) throw error;
-      console.warn(JSON.stringify({ level: "warn", msg: "Statistics store unavailable; configuration administration remains available." }));
+      if (!runtimeConfigStore || catalogNeedsStore || reflectionNeedsStore)
+        throw error;
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "Statistics store unavailable; configuration administration remains available.",
+        }),
+      );
     }
   }
   opened.store = store;
 
-  const generationCatalogs = new WeakMap<RuntimeConfigGeneration, ModelCatalogService>();
+  const generationCatalogs = new WeakMap<
+    RuntimeConfigGeneration,
+    ModelCatalogService
+  >();
   const catalogBackends = new Map<string, Promise<ModelCatalogBackend>>();
   let catalogBackendToClose: ModelCatalogBackend | undefined;
-  await runtimeConfig.setGenerationPreparer(async generation => {
+  await runtimeConfig.setGenerationPreparer(async (generation) => {
     const config = generation.config;
     const catalogConfig = config.llm.model_catalog;
     if (!catalogConfig?.enabled) return;
@@ -3576,25 +5384,42 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     if (!backendPromise) {
       backendPromise = (async () => {
         if (catalogConfig.cache.backend === "sqlite") {
-          if (!store) throw new ConfigError("store_unavailable", "The configured catalog requires an available statistics store.");
+          if (!store)
+            throw new ConfigError(
+              "store_unavailable",
+              "The configured catalog requires an available statistics store.",
+            );
           return createStoreModelCatalogBackend(store);
         }
-        if (catalogConfig.cache.backend === "memory") return createMemoryModelCatalogBackend();
-        const backend = await createRedisModelCatalogBackend(toRedisModelCatalogBackendOptions(config));
+        if (catalogConfig.cache.backend === "memory")
+          return createMemoryModelCatalogBackend();
+        const backend = await createRedisModelCatalogBackend(
+          toRedisModelCatalogBackendOptions(config),
+        );
         catalogBackendToClose = backend;
         opened.catalogBackend = backend;
         return backend;
-      })().catch(error => { catalogBackends.delete(catalogConfig.cache.backend); throw error; });
+      })().catch((error) => {
+        catalogBackends.delete(catalogConfig.cache.backend);
+        throw error;
+      });
       catalogBackends.set(catalogConfig.cache.backend, backendPromise);
     }
     const catalogBackend = await backendPromise;
-    const providerHints: ModelCatalogProviderHint[] = config.llm.providers.map((provider) => {
-      const raw = provider as Record<string, unknown>;
-      const hint: { id: string; catalogProvider?: string; catalogId?: string } = { id: provider.id };
-      if (typeof raw.catalog_provider === "string") hint.catalogProvider = raw.catalog_provider;
-      if (typeof raw.catalog_id === "string") hint.catalogId = raw.catalog_id;
-      return hint;
-    });
+    const providerHints: ModelCatalogProviderHint[] = config.llm.providers.map(
+      (provider) => {
+        const raw = provider as Record<string, unknown>;
+        const hint: {
+          id: string;
+          catalogProvider?: string;
+          catalogId?: string;
+        } = { id: provider.id };
+        if (typeof raw.catalog_provider === "string")
+          hint.catalogProvider = raw.catalog_provider;
+        if (typeof raw.catalog_id === "string") hint.catalogId = raw.catalog_id;
+        return hint;
+      },
+    );
     const catalogService = createModelCatalogService({
       enabled: true,
       sourceUrl: catalogConfig.source_url,
@@ -3604,7 +5429,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       applyToModelSpec: catalogConfig.apply_to_model_spec,
       providerHints,
       overrides: normalizeModelCatalogOverrides(
-        (catalogConfig.overrides ?? {}) as Record<string, Record<string, unknown>>,
+        (catalogConfig.overrides ?? {}) as Record<
+          string,
+          Record<string, unknown>
+        >,
       ),
       ...(catalogBackend ? { backend: catalogBackend } : {}),
       bundledSnapshotPath: getModelCatalogBundledSnapshotPath(),
@@ -3613,29 +5441,68 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     await catalogService.ensureRefreshed();
     // Capture every configured model before activation. Shared cache refreshes
     // must not change a pinned generation's later fallback or summary lookup.
-    const specs = Object.values(config.llm.model_chain).flat().map(entry => resolveModelSpecFromChain(config.llm.providers, [entry]));
-    if (config.llm.providers.length > 0) specs.push(resolveModelSpecFromChain(config.llm.providers, []));
+    const specs = Object.values(config.llm.model_chain)
+      .flat()
+      .map((entry) => resolveModelSpecFromChain(config.llm.providers, [entry]));
+    if (config.llm.providers.length > 0)
+      specs.push(resolveModelSpecFromChain(config.llm.providers, []));
     catalogService.freezeModels(specs);
-    let models = Object.fromEntries(specs.map(spec => [JSON.stringify(spec), catalogService.enrichModelSpec(spec)]));
+    let models = Object.fromEntries(
+      specs.map((spec) => [
+        JSON.stringify(spec),
+        catalogService.enrichModelSpec(spec),
+      ]),
+    );
     if (runtimeConfigStore && generation.snapshotId) {
       const key = `catalog/${generation.snapshotId}`;
-      let record = await runtimeConfigStore.readRuntimeState(configSources.database.namespace, key);
-      if (!record) record = await runtimeConfigStore.writeRuntimeState({ namespace: configSources.database.namespace, key,
-        expectedVersion: null, snapshotId: null, value: { models, hash: hashStructured([models]) }, now: Date.now() });
-      record ??= await runtimeConfigStore.readRuntimeState(configSources.database.namespace, key);
-      if (!isPlainObject(record?.value) || !isPlainObject(record.value.models) || record.value.hash !== hashStructured([record.value.models])) {
-        throw new ConfigError("snapshot_invalid", "Pinned catalog metadata is corrupt.");
+      let record = await runtimeConfigStore.readRuntimeState(
+        configSources.database.namespace,
+        key,
+      );
+      if (!record)
+        record = await runtimeConfigStore.writeRuntimeState({
+          namespace: configSources.database.namespace,
+          key,
+          expectedVersion: null,
+          snapshotId: null,
+          value: { models, hash: hashStructured([models]) },
+          now: Date.now(),
+        });
+      record ??= await runtimeConfigStore.readRuntimeState(
+        configSources.database.namespace,
+        key,
+      );
+      if (
+        !isPlainObject(record?.value) ||
+        !isPlainObject(record.value.models) ||
+        record.value.hash !== hashStructured([record.value.models])
+      ) {
+        throw new ConfigError(
+          "snapshot_invalid",
+          "Pinned catalog metadata is corrupt.",
+        );
       }
       models = record.value.models as Record<string, ModelSpec>;
     }
-    generationCatalogs.set(generation, { ...catalogService, enrichModelSpec(spec) {
-      const frozen = models[JSON.stringify(spec)];
-      if (!frozen) throw new ConfigError("snapshot_invalid", "Pinned catalog metadata does not contain the configured model.");
-      return structuredClone(frozen);
-    } });
+    generationCatalogs.set(generation, {
+      ...catalogService,
+      enrichModelSpec(spec) {
+        const frozen = models[JSON.stringify(spec)];
+        if (!frozen)
+          throw new ConfigError(
+            "snapshot_invalid",
+            "Pinned catalog metadata does not contain the configured model.",
+          );
+        return structuredClone(frozen);
+      },
+    });
   });
 
-  function createModelRouteFor(generation: RuntimeConfigGeneration, name: string, workspaceId?: string): ModelRoute {
+  function createModelRouteFor(
+    generation: RuntimeConfigGeneration,
+    name: string,
+    workspaceId?: string,
+  ): ModelRoute {
     const generationConfig = generation.config;
     const catalogService = generationCatalogs.get(generation);
     // Gateway retry/budget/per-provider overrides and pricing are
@@ -3643,20 +5510,33 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // published revision actually changes the next task's client config.
     const retryConfig = toGatewayRetry(generationConfig.llm.retry);
     const budgetConfig = toGatewayBudget(generationConfig.llm.budget);
-    const perProviderOverrides = toGatewayPerProviderOverrides(generationConfig.llm.per_provider_overrides);
+    const perProviderOverrides = toGatewayPerProviderOverrides(
+      generationConfig.llm.per_provider_overrides,
+    );
     const gatewayModelPricing = catalogService
       ? buildGatewayModelPricing(catalogService, generationConfig)
       : undefined;
     const chain = resolveModelChain(generationConfig, name);
     const enrich = (candidate: ModelSpec): ModelSpec =>
       catalogService ? catalogService.enrichModelSpec(candidate) : candidate;
-    const model = enrich(resolveModelSpecFromChain(generationConfig.llm.providers, chain));
-    const agentModelChain = chain.length > 0
-      ? chain.map((entry, index) => index === 0 ? model : enrich(resolveModelSpecFromChain(generationConfig.llm.providers, [entry])))
-      : [model];
+    const model = enrich(
+      resolveModelSpecFromChain(generationConfig.llm.providers, chain),
+    );
+    const agentModelChain =
+      chain.length > 0
+        ? chain.map((entry, index) =>
+            index === 0
+              ? model
+              : enrich(
+                  resolveModelSpecFromChain(generationConfig.llm.providers, [
+                    entry,
+                  ]),
+                ),
+          )
+        : [model];
     const llm = createResilientChatClient({
       dailyBudgetTracker,
-      beforeRequest: model => rateLimiter.acquireAsync(model.providerId),
+      beforeRequest: (model) => rateLimiter.acquireAsync(model.providerId),
       ...(workspaceId ? { workspaceId } : {}),
       clientFactory: createLlmClientFromModelSpec,
       providers: toGatewayProviders(generationConfig.llm.providers),
@@ -3666,17 +5546,28 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       ...(perProviderOverrides ? { perProviderOverrides } : {}),
       ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
     });
-    const summaryCandidate = resolveSummarizeModelFromChain(generationConfig, chain);
-    const summarizeModel = summaryCandidate ? enrich(summaryCandidate) : undefined;
+    const summaryCandidate = resolveSummarizeModelFromChain(
+      generationConfig,
+      chain,
+    );
+    const summarizeModel = summaryCandidate
+      ? enrich(summaryCandidate)
+      : undefined;
     return {
       llm,
       model,
       agentModelChain,
-      compression: toCompressionConfig(generationConfig.compression) ?? toDefaultCompressionConfig(model),
+      compression:
+        toCompressionConfig(generationConfig.compression) ??
+        toDefaultCompressionConfig(model),
       ...(summarizeModel ? { summarizeModel, summarizeClient: llm } : {}),
     };
   }
-  function getModelRouteFor(generation: RuntimeConfigGeneration, name: string, workspaceId?: string): ModelRoute {
+  function getModelRouteFor(
+    generation: RuntimeConfigGeneration,
+    name: string,
+    workspaceId?: string,
+  ): ModelRoute {
     let routes = generationModelRoutes.get(generation);
     if (!routes) {
       routes = new Map<string, ModelRoute>();
@@ -3692,11 +5583,19 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   }
   const modelOptionsResolver = (workspaceId?: string) => {
     const generation = runtimeConfig.current();
-    return getModelRouteFor(generation, resolveModelChainNames(generation.config, workspaceId).modelChain, workspaceId);
+    return getModelRouteFor(
+      generation,
+      resolveModelChainNames(generation.config, workspaceId).modelChain,
+      workspaceId,
+    );
   };
   const triageModelOptionsResolver = (workspaceId?: string) => {
     const generation = runtimeConfig.current();
-    const { llm, model } = getModelRouteFor(generation, resolveModelChainNames(generation.config, workspaceId).triageModelChain, workspaceId);
+    const { llm, model } = getModelRouteFor(
+      generation,
+      resolveModelChainNames(generation.config, workspaceId).triageModelChain,
+      workspaceId,
+    );
     return { llm, model };
   };
   const defaultRoute = modelOptionsResolver();
@@ -3707,8 +5606,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   }
 
   const sourceRootResolver = (reviewEvent: ReviewEvent): string =>
-    runtimeConfig.current().workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot;
-  const runtimeDirsResolver = (reviewEvent: ReviewEvent) => runtimeConfig.current().workspaceRuntime.layoutForEvent(reviewEvent);
+    runtimeConfig.current().workspaceRuntime.layoutForEvent(reviewEvent)
+      .sourceRoot;
+  const runtimeDirsResolver = (reviewEvent: ReviewEvent) =>
+    runtimeConfig.current().workspaceRuntime.layoutForEvent(reviewEvent);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
 
   if (adminAuthConfig && store) {
@@ -3716,18 +5617,37 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // definitions (dynamic config included) plus durable bindings, never by
     // a stale static snapshot that would bury wildcard-rule projects.
     const generationConfig = currentConfig();
-    const activeProjectIdentities = buildActiveProjectIdentities(generationConfig);
-    const matchDefinitionIds = Object.entries(generationConfig.workspaces.instances)
+    const activeProjectIdentities =
+      buildActiveProjectIdentities(generationConfig);
+    const matchDefinitionIds = Object.entries(
+      generationConfig.workspaces.instances,
+    )
       .filter(([, instance]) => instance.match !== undefined)
       .map(([id]) => id);
-    const bindingDefinitionIds = runtimeConfigStore !== undefined
-      ? new Set((await runtimeConfigStore.listWorkspaceBindings(configSources.database.namespace))
-          .filter((binding) => binding.state === "active")
-          .map((binding) => binding.definitionId))
-      : new Set<string>();
-    const protectedIds = [...new Set([...matchDefinitionIds, ...bindingDefinitionIds])];
-    await softDeleteMissingProjects(store, activeProjectIdentities, protectedIds);
-    await hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
+    const bindingDefinitionIds =
+      runtimeConfigStore !== undefined
+        ? new Set(
+            (
+              await runtimeConfigStore.listWorkspaceBindings(
+                configSources.database.namespace,
+              )
+            )
+              .filter((binding) => binding.state === "active")
+              .map((binding) => binding.definitionId),
+          )
+        : new Set<string>();
+    const protectedIds = [
+      ...new Set([...matchDefinitionIds, ...bindingDefinitionIds]),
+    ];
+    await softDeleteMissingProjects(
+      store,
+      activeProjectIdentities,
+      protectedIds,
+    );
+    await hardDeleteExpiredProjects(
+      store,
+      config.storage.retention.deleted_project_grace_days,
+    );
   }
 
   if (adminAuthConfig) {
@@ -3736,7 +5656,12 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // Dynamic-config mode shares the runtime config store handle instead of
     // opening a second connection to the same backend (P5 decoupling: admin
     // sessions and config management no longer require the stats store).
-    sessionStore = runtimeConfigStore ?? await createConfigStoreFromDatabaseConfig(config.storage.database, resolveEnv);
+    sessionStore =
+      runtimeConfigStore ??
+      (await createConfigStoreFromDatabaseConfig(
+        config.storage.database,
+        resolveEnv,
+      ));
     if (sessionStore !== runtimeConfigStore) {
       opened.sessionStore = sessionStore;
     }
@@ -3746,13 +5671,17 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // the store stops the sweep (close owns the lifecycle).
     const sessions = sessionStore;
     const sessionSweep = setInterval(() => {
-      void cleanupExpiredSessions({ config: adminAuthConfig, sessions }).catch((error: unknown) => {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "failed to sweep expired admin sessions",
-          error: error instanceof Error ? error.message : String(error),
-        }));
-      });
+      void cleanupExpiredSessions({ config: adminAuthConfig, sessions }).catch(
+        (error: unknown) => {
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              msg: "failed to sweep expired admin sessions",
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        },
+      );
     }, ADMIN_SESSION_SWEEP_INTERVAL_MS);
     sessionSweep.unref();
     const closeSessions = sessionStore.close.bind(sessionStore);
@@ -3772,16 +5701,19 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
 
   const webSearchFromConfig = (source: AppConfig) => ({
     enabled: source.agent.web_search?.enabled ?? false,
-    ...(source.agent.web_search !== undefined && source.agent.web_search.providers.length > 0
+    ...(source.agent.web_search !== undefined &&
+    source.agent.web_search.providers.length > 0
       ? { providers: source.agent.web_search.providers }
       : {}),
-    ...(source.agent.web_search !== undefined && source.agent.web_search.exclude.length > 0
+    ...(source.agent.web_search !== undefined &&
+    source.agent.web_search.exclude.length > 0
       ? { exclude: source.agent.web_search.exclude }
       : {}),
     ...(source.agent.web_search?.timeout_seconds !== undefined
       ? { timeoutSeconds: source.agent.web_search.timeout_seconds }
       : {}),
-    ...(source.agent.web_search !== undefined && Object.keys(source.agent.web_search.credentials).length > 0
+    ...(source.agent.web_search !== undefined &&
+    Object.keys(source.agent.web_search.credentials).length > 0
       ? { credentials: source.agent.web_search.credentials }
       : {}),
     ...(source.agent.web_search?.searxng
@@ -3825,32 +5757,72 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const resolveRunOptions = async (
     context: ReviewOrchestrationContext,
   ): Promise<Partial<ServerReviewOrchestrationOptions>> => {
-    const generation = context.configSnapshotId === undefined ? await runtimeConfig.captureForTask() : await runtimeConfig.resolveGeneration(context.configSnapshotId);
+    const generation =
+      context.configSnapshotId === undefined
+        ? await runtimeConfig.captureForTask()
+        : await runtimeConfig.resolveGeneration(context.configSnapshotId);
     const generationConfig = generation.config;
     const workspaceId = context.reviewEvent.workspaceId;
-    const analysis = resolveAnalysisSelection(generationConfig, workspaceId, executionRoute(generationConfig, context.reviewEvent));
+    const analysis = resolveAnalysisSelection(
+      generationConfig,
+      workspaceId,
+      executionRoute(generationConfig, context.reviewEvent),
+    );
     const reviewPolicy = analysis.review as AppConfig["review"];
-    const executionConfig: AppConfig = { ...generationConfig, review: reviewPolicy,
-      workspaces: { ...generationConfig.workspaces, instances: { ...generationConfig.workspaces.instances,
-        [workspaceId]: { ...generationConfig.workspaces.instances[workspaceId], review: reviewPolicy } } } };
-    const agentConfig = { ...generationConfig, agent: analysis.agent ?? generationConfig.agent };
-    const selectedAgentAdapter = createConfiguredAgentAdapter(analysis.agent?.default ?? generationConfig.agent.default);
-    const route = getModelRouteFor(generation, analysis.modelChain, reviewMemoryScope(context.reviewEvent));
+    const executionConfig: AppConfig = {
+      ...generationConfig,
+      review: reviewPolicy,
+      workspaces: {
+        ...generationConfig.workspaces,
+        instances: {
+          ...generationConfig.workspaces.instances,
+          [workspaceId]: {
+            ...generationConfig.workspaces.instances[workspaceId],
+            review: reviewPolicy,
+          },
+        },
+      },
+    };
+    const agentConfig = {
+      ...generationConfig,
+      agent: analysis.agent ?? generationConfig.agent,
+    };
+    const selectedAgentAdapter = createConfiguredAgentAdapter(
+      analysis.agent?.default ?? generationConfig.agent.default,
+    );
+    const route = getModelRouteFor(
+      generation,
+      analysis.modelChain,
+      reviewMemoryScope(context.reviewEvent),
+    );
     const tokenServices = await appTokenServicesFor(generation);
     const billingScope = reviewMemoryScope(context.reviewEvent);
     const budget = generationConfig.llm.budget;
     let runSpend = 0;
     const checkBudget = () => {
-      if (budget?.per_run_usd && runSpend >= budget.per_run_usd) throw new LlmBudgetExceededError("per_run", budget.per_run_usd, runSpend);
+      if (budget?.per_run_usd && runSpend >= budget.per_run_usd)
+        throw new LlmBudgetExceededError(
+          "per_run",
+          budget.per_run_usd,
+          runSpend,
+        );
       const dailySpend = dailyBudgetTracker.getDailySpend(billingScope);
-      if (budget?.per_repo_daily_usd && dailySpend >= budget.per_repo_daily_usd) throw new LlmBudgetExceededError("per_repo_daily", budget.per_repo_daily_usd, dailySpend);
+      if (budget?.per_repo_daily_usd && dailySpend >= budget.per_repo_daily_usd)
+        throw new LlmBudgetExceededError(
+          "per_repo_daily",
+          budget.per_repo_daily_usd,
+          dailySpend,
+        );
     };
-    const budgetedClient = (client: ChatCompletionClient): ChatCompletionClient => ({
+    const budgetedClient = (
+      client: ChatCompletionClient,
+    ): ChatCompletionClient => ({
       async complete(input) {
         checkBudget();
         const result = await client.complete(input);
         const cost = (result as { estimatedCostUsd?: number }).estimatedCostUsd;
-        if (typeof cost === "number" && Number.isFinite(cost) && cost > 0) runSpend += cost;
+        if (typeof cost === "number" && Number.isFinite(cost) && cost > 0)
+          runSpend += cost;
         return result;
       },
     });
@@ -3859,8 +5831,11 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       ...route,
       llm: runClient,
       ...(route.summarizeModel ? { summarizeClient: runClient } : {}),
-      beforeAgentCall: async model => { checkBudget(); await rateLimiter.acquireAsync(model.providerId); },
-      onAgentCost: cost => {
+      beforeAgentCall: async (model) => {
+        checkBudget();
+        await rateLimiter.acquireAsync(model.providerId);
+      },
+      onAgentCost: (cost) => {
         if (!Number.isFinite(cost) || cost <= 0) return;
         runSpend += cost;
         dailyBudgetTracker.recordSpend(billingScope, cost);
@@ -3903,16 +5878,26 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       },
       forceSkillsResolver: (id: string) => {
         try {
-          return resolveWorkspaceConfig(generationConfig, id).prompt?.force_skills;
+          return resolveWorkspaceConfig(generationConfig, id).prompt
+            ?.force_skills;
         } catch {
           return undefined;
         }
       },
-      sourceRootResolver: (reviewEvent: ReviewEvent) => generation.workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot,
-      runtimeDirsResolver: (reviewEvent: ReviewEvent) => generation.workspaceRuntime.layoutForEvent(reviewEvent),
+      sourceRootResolver: (reviewEvent: ReviewEvent) =>
+        generation.workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot,
+      runtimeDirsResolver: (reviewEvent: ReviewEvent) =>
+        generation.workspaceRuntime.layoutForEvent(reviewEvent),
       vcs: createVcsAdapterFromConfig(executionConfig, baseDir),
-      vcsFactory: async (sourceRoot: string, vcsContext: ReviewOrchestrationContext) => {
-        const resolvedToken = await resolveTriggerTokenForContext(generationConfig, vcsContext, tokenServices);
+      vcsFactory: async (
+        sourceRoot: string,
+        vcsContext: ReviewOrchestrationContext,
+      ) => {
+        const resolvedToken = await resolveTriggerTokenForContext(
+          generationConfig,
+          vcsContext,
+          tokenServices,
+        );
         return createVcsAdapterFromConfig(
           executionConfig,
           sourceRoot,
@@ -3921,92 +5906,175 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           resolvedToken !== undefined ? { resolvedToken } : undefined,
         );
       },
-      outputPublisherResolver: createOutputPublisherResolverFromConfig(executionConfig, {
-        baseDir,
-        appTokenServices: tokenServices,
-        ...(store !== undefined ? { cardActionIssuer: {
-          store,
-          namespace: configSources.database.namespace,
-          // Keep the issuing run's generation for audit and GC. A click's
-          // new request captures the current admission generation.
-          currentSnapshotId: () => (runtimeConfig.mode === "file-only" ? null : generation.snapshotId),
-        } } : {}),
-        authorGuesserFactory: () => createConfiguredAuthorGuesser(generationConfig, workspaceId, {
-          enrich: candidate => generationCatalogs.get(generation)?.enrichModelSpec(candidate) ?? candidate,
-          billingScope, dailyBudgetTracker,
-          beforeRequest: async candidate => { checkBudget(); await rateLimiter.acquireAsync(candidate.providerId); },
-          onCost: cost => { if (Number.isFinite(cost) && cost > 0) runSpend += cost; },
-        }),
-        resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => {
-          const triageRoute = getModelRouteFor(generation, resolveAnalysisSelection(generationConfig, analyzerContext.reviewEvent.workspaceId,
-            executionRoute(generationConfig, analyzerContext.reviewEvent)).triageModelChain, reviewMemoryScope(analyzerContext.reviewEvent));
-          return createProblemResolutionAnalyzer({
-            ...triageRoute,
-            llm: budgetedClient(triageRoute.llm),
-            sourceRoot,
-            logContext: { runId: analyzerContext.runId, workspaceId: analyzerContext.reviewEvent.workspaceId, headSha: analyzerContext.reviewEvent.headSha },
-          });
+      outputPublisherResolver: createOutputPublisherResolverFromConfig(
+        executionConfig,
+        {
+          baseDir,
+          appTokenServices: tokenServices,
+          ...(store !== undefined
+            ? {
+                cardActionIssuer: {
+                  store,
+                  namespace: configSources.database.namespace,
+                  // Keep the issuing run's generation for audit and GC. A click's
+                  // new request captures the current admission generation.
+                  currentSnapshotId: () =>
+                    runtimeConfig.mode === "file-only"
+                      ? null
+                      : generation.snapshotId,
+                },
+              }
+            : {}),
+          authorGuesserFactory: () =>
+            createConfiguredAuthorGuesser(generationConfig, workspaceId, {
+              enrich: (candidate) =>
+                generationCatalogs
+                  .get(generation)
+                  ?.enrichModelSpec(candidate) ?? candidate,
+              billingScope,
+              dailyBudgetTracker,
+              beforeRequest: async (candidate) => {
+                checkBudget();
+                await rateLimiter.acquireAsync(candidate.providerId);
+              },
+              onCost: (cost) => {
+                if (Number.isFinite(cost) && cost > 0) runSpend += cost;
+              },
+            }),
+          resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => {
+            const triageRoute = getModelRouteFor(
+              generation,
+              resolveAnalysisSelection(
+                generationConfig,
+                analyzerContext.reviewEvent.workspaceId,
+                executionRoute(generationConfig, analyzerContext.reviewEvent),
+              ).triageModelChain,
+              reviewMemoryScope(analyzerContext.reviewEvent),
+            );
+            return createProblemResolutionAnalyzer({
+              ...triageRoute,
+              llm: budgetedClient(triageRoute.llm),
+              sourceRoot,
+              logContext: {
+                runId: analyzerContext.runId,
+                workspaceId: analyzerContext.reviewEvent.workspaceId,
+                headSha: analyzerContext.reviewEvent.headSha,
+              },
+            });
+          },
         },
-      }),
+      ),
       // H03/H04: workspace-layer agent and sandbox selection via the merged
       // analysis selection; an explicit container sandbox that fails
       // preflight rejects this run instead of downgrading to native.
-      sandboxFactory: selectedAgentAdapter ? () => createSandboxBackendFromSandboxConfig(
-        analysis.sandbox ?? generationConfig.agent.sandbox,
-      ) : undefined,
+      sandboxFactory: selectedAgentAdapter
+        ? () =>
+            createSandboxBackendFromSandboxConfig(
+              analysis.sandbox ?? generationConfig.agent.sandbox,
+            )
+        : undefined,
       agentAdapter: selectedAgentAdapter,
       agentTimeoutMs: agentConfig.agent.timeout_seconds * 1000,
       agentAutoApprove: agentConfig.agent.auto_approve,
       contextCompaction: contextCompactionFromConfig(agentConfig),
       webSearch: webSearchFromConfig(agentConfig),
+      tgrepSearch: (input) => tgrepIndexManager.prepare(input),
       ignoreLabelsResolver: (id: string) => {
-        if (id === workspaceId) return reviewPolicy.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+        if (id === workspaceId)
+          return reviewPolicy.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
         try {
           const workspace = resolveWorkspaceConfig(generationConfig, id);
-          return workspace.review?.labels?.ignore ?? generationConfig.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+          return (
+            workspace.review?.labels?.ignore ??
+            generationConfig.review.labels?.ignore ?? [
+              "aicr:ignore",
+              "aicr-ignore",
+            ]
+          );
         } catch {
-          return generationConfig.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+          return (
+            generationConfig.review.labels?.ignore ?? [
+              "aicr:ignore",
+              "aicr-ignore",
+            ]
+          );
         }
       },
       contextRepositoriesResolver: (id: string) => {
         try {
-          return resolveWorkspaceConfig(generationConfig, id).context_repositories;
+          return resolveWorkspaceConfig(generationConfig, id)
+            .context_repositories;
         } catch {
           return undefined;
         }
       },
       reviewPolicyResolver: (id: string) => {
-        const merged = id === workspaceId
-          ? reviewPolicy
-          : (resolveAnalysisSelection(generationConfig, id, undefined).review as AppConfig["review"]);
-        return { include: merged.include, exclude: merged.exclude, max_files: merged.max_files };
+        const merged =
+          id === workspaceId
+            ? reviewPolicy
+            : (resolveAnalysisSelection(generationConfig, id, undefined)
+                .review as AppConfig["review"]);
+        return {
+          include: merged.include,
+          exclude: merged.exclude,
+          max_files: merged.max_files,
+        };
       },
       reviewConfig: reviewPolicy,
-      configVersion: { configSnapshotId: generation.snapshotId, databaseRevision: generation.databaseRevision,
-        fileDigest: generation.fileDigest, ...(executionRoute(generationConfig, context.reviewEvent)
-          ? { routeId: executionRoute(generationConfig, context.reviewEvent)!.id } : {}) },
+      configVersion: {
+        configSnapshotId: generation.snapshotId,
+        databaseRevision: generation.databaseRevision,
+        fileDigest: generation.fileDigest,
+        ...(executionRoute(generationConfig, context.reviewEvent)
+          ? {
+              routeId: executionRoute(generationConfig, context.reviewEvent)!
+                .id,
+            }
+          : {}),
+      },
       memoryHintsResolver: async (scope: string) => {
         const reflection = reviewPolicy.reflection;
-        if (!store || !reflection || reflection.enabled === false || reflection.mode === "off") return [];
-        const entries = await readReflectionMemory(store, scope, { limit: reflection.memory?.max_entries ?? 100 });
+        if (
+          !store ||
+          !reflection ||
+          reflection.enabled === false ||
+          reflection.mode === "off"
+        )
+          return [];
+        const entries = await readReflectionMemory(store, scope, {
+          limit: reflection.memory?.max_entries ?? 100,
+        });
         let bytes = 0;
-        const bounded = entries.filter(entry => {
+        const bounded = entries.filter((entry) => {
           bytes += Buffer.byteLength(entry.content, "utf8");
           return bytes <= (reflection.memory?.max_size_kb ?? Infinity) * 1024;
         });
         return buildMemoryHintsForPrompt(bounded);
       },
       ...(toCompressionConfig(analysis.compression as AppConfig["compression"])
-        ? { compression: toCompressionConfig(analysis.compression as AppConfig["compression"])! } : {}),
-      ...(reviewPolicy.output_language !== undefined ? { outputLanguage: reviewPolicy.output_language } : {}),
-      ...(reviewPolicy.log_thinking !== undefined ? { logThinking: reviewPolicy.log_thinking } : {}),
+        ? {
+            compression: toCompressionConfig(
+              analysis.compression as AppConfig["compression"],
+            )!,
+          }
+        : {}),
+      ...(reviewPolicy.output_language !== undefined
+        ? { outputLanguage: reviewPolicy.output_language }
+        : {}),
+      ...(reviewPolicy.log_thinking !== undefined
+        ? { logThinking: reviewPolicy.log_thinking }
+        : {}),
     };
   };
 
-  const executionConcurrency = new ExecutionConcurrency(() => runtimeConfig.withoutGeneration(() => ({
-    global: runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
-    workspace: runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
-  })));
+  const executionConcurrency = new ExecutionConcurrency(() =>
+    runtimeConfig.withoutGeneration(() => ({
+      global: runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
+      workspace:
+        runtimeConfig.current().config.queue.workers
+          ?.per_workspace_concurrency ?? 1,
+    })),
+  );
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
     executionConcurrency,
     baseSystemPrompt,
@@ -4017,7 +6085,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     modelOptionsResolver,
     optionsResolver: resolveRunOptions,
     executionScope: async (context, run) => {
-      const generation = context.configSnapshotId === undefined ? await runtimeConfig.captureForTask() : await runtimeConfig.resolveGeneration(context.configSnapshotId);
+      const generation =
+        context.configSnapshotId === undefined
+          ? await runtimeConfig.captureForTask()
+          : await runtimeConfig.resolveGeneration(context.configSnapshotId);
       return runtimeConfig.withGeneration(generation, run);
     },
     dryRun: false,
@@ -4026,26 +6097,44 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // pinned generation per task instead.
     outputPublisherResolver: createOutputPublisherResolverFromConfig(config, {
       baseDir,
-      ...(store !== undefined ? { cardActionIssuer: {
-        store,
-        namespace: configSources.database.namespace,
-        currentSnapshotId: () => (runtimeConfig.mode === "file-only" ? null : runtimeConfig.current().snapshotId),
-      } } : {}),
-      resolutionAnalyzerFactory: (sourceRoot, context) => createProblemResolutionAnalyzer({
-        ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
-        sourceRoot,
-        logContext: { runId: context.runId, workspaceId: context.reviewEvent.workspaceId, headSha: context.reviewEvent.headSha },
-      }),
+      ...(store !== undefined
+        ? {
+            cardActionIssuer: {
+              store,
+              namespace: configSources.database.namespace,
+              currentSnapshotId: () =>
+                runtimeConfig.mode === "file-only"
+                  ? null
+                  : runtimeConfig.current().snapshotId,
+            },
+          }
+        : {}),
+      resolutionAnalyzerFactory: (sourceRoot, context) =>
+        createProblemResolutionAnalyzer({
+          ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
+          sourceRoot,
+          logContext: {
+            runId: context.runId,
+            workspaceId: context.reviewEvent.workspaceId,
+            headSha: context.reviewEvent.headSha,
+          },
+        }),
     }),
-    sandboxFactory: agentAdapter ? () => createSandboxBackendFromConfig(config) : undefined,
+    sandboxFactory: agentAdapter
+      ? () => createSandboxBackendFromConfig(config)
+      : undefined,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
     contextCompaction: contextCompactionFromConfig(config),
     webSearch: webSearchFromConfig(config),
+    tgrepSearch: (input) => tgrepIndexManager.prepare(input),
     ignoreLabelsResolver: (workspaceId) => {
       try {
         const workspace = resolveWorkspaceConfig(config, workspaceId);
-        return workspace.review?.labels?.ignore ?? config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+        return (
+          workspace.review?.labels?.ignore ??
+          config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"]
+        );
       } catch {
         return config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
       }
@@ -4059,9 +6148,13 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     },
     ...(reflectionEnabled
       ? {
-          memoryHintsResolver: async (workspaceId: string): Promise<readonly string[]> => {
+          memoryHintsResolver: async (
+            workspaceId: string,
+          ): Promise<readonly string[]> => {
             try {
-              const entries = await readReflectionMemory(store!, workspaceId, { limit: 100 });
+              const entries = await readReflectionMemory(store!, workspaceId, {
+                limit: 100,
+              });
               return buildMemoryHintsForPrompt(entries);
             } catch {
               return [];
@@ -4071,18 +6164,32 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       : {}),
     ...(reflectionEnabled
       ? {
-          postRunCallback: async (result: ReviewOrchestrationResult, ctx: ReviewOrchestrationContext): Promise<void> => {
+          postRunCallback: async (
+            result: ReviewOrchestrationResult,
+            ctx: ReviewOrchestrationContext,
+          ): Promise<void> => {
             const workspaceId = reviewMemoryScope(ctx.reviewEvent);
-            const runId = ctx.runId ?? ctx.reviewEvent.headSha ?? String(Date.now());
+            const runId =
+              ctx.runId ?? ctx.reviewEvent.headSha ?? String(Date.now());
             // H05 reflection layering: the run's own generation decides mode
             // and retention, not whatever revision is current at completion.
-            const generationConfig = (await runtimeConfig.resolveGeneration(ctx.configSnapshotId ?? null)).config;
-            const reflectionPolicy = (resolveAnalysisSelection(
-              generationConfig,
-              ctx.reviewEvent.workspaceId,
-              executionRoute(generationConfig, ctx.reviewEvent),
-            ).review as AppConfig["review"]).reflection;
-            if (!reflectionPolicy || reflectionPolicy.enabled === false || reflectionPolicy.mode === "off") {
+            const generationConfig = (
+              await runtimeConfig.resolveGeneration(
+                ctx.configSnapshotId ?? null,
+              )
+            ).config;
+            const reflectionPolicy = (
+              resolveAnalysisSelection(
+                generationConfig,
+                ctx.reviewEvent.workspaceId,
+                executionRoute(generationConfig, ctx.reviewEvent),
+              ).review as AppConfig["review"]
+            ).reflection;
+            if (
+              !reflectionPolicy ||
+              reflectionPolicy.enabled === false ||
+              reflectionPolicy.mode === "off"
+            ) {
               return;
             }
             const reflectionInput = {
@@ -4101,8 +6208,11 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
 
             if (reflections.length > 0) {
               const now = new Date();
-              const retentionDays = reflectionPolicy?.memory?.retention_days ?? 90;
-              const expiresAt = new Date(now.getTime() + retentionDays * 86_400_000);
+              const retentionDays =
+                reflectionPolicy?.memory?.retention_days ?? 90;
+              const expiresAt = new Date(
+                now.getTime() + retentionDays * 86_400_000,
+              );
               const toEntries = (rs: readonly ExtractedReflection[]) =>
                 rs.map((r: ExtractedReflection) => ({
                   workspaceId,
@@ -4114,20 +6224,36 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 }));
               await writeReflectionMemory(store!, toEntries(reflections));
 
-              if (reflectionPolicy?.mode === "thorough" && result.outputState.problems.length > 0) {
-                const allEntries = await readReflectionMemory(store!, workspaceId, { limit: 200 });
+              if (
+                reflectionPolicy?.mode === "thorough" &&
+                result.outputState.problems.length > 0
+              ) {
+                const allEntries = await readReflectionMemory(
+                  store!,
+                  workspaceId,
+                  { limit: 200 },
+                );
                 const currentCategories = [
                   ...new Set(
-                    result.outputState.problems.map((p: { category?: string }) => p.category ?? "uncategorized"),
+                    result.outputState.problems.map(
+                      (p: { category?: string }) =>
+                        p.category ?? "uncategorized",
+                    ),
                   ),
                 ];
                 const crossRunReflections = extractCrossRunPatterns(
                   workspaceId,
                   currentCategories,
-                  allEntries.map((e) => ({ fingerprint: e.fingerprint, occurrenceCount: e.occurrenceCount ?? 1 })),
+                  allEntries.map((e) => ({
+                    fingerprint: e.fingerprint,
+                    occurrenceCount: e.occurrenceCount ?? 1,
+                  })),
                 );
                 if (crossRunReflections.length > 0) {
-                  await writeReflectionMemory(store!, toEntries(crossRunReflections));
+                  await writeReflectionMemory(
+                    store!,
+                    toEntries(crossRunReflections),
+                  );
                 }
               }
 
@@ -4136,80 +6262,145 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 await compactReflectionMemory(store!, workspaceId, {
                   retentionDays,
                   ...(maxEntries ? { maxEntries } : {}),
-                  ...(reflectionPolicy.memory?.max_size_kb ? { maxBytes: reflectionPolicy.memory.max_size_kb * 1024 } : {}),
+                  ...(reflectionPolicy.memory?.max_size_kb
+                    ? { maxBytes: reflectionPolicy.memory.max_size_kb * 1024 }
+                    : {}),
                 });
               }
             }
           },
         }
       : {}),
-    ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
+    ...(config.review.output_language
+      ? { outputLanguage: config.review.output_language }
+      : {}),
     ...(config.review.log_thinking === false ? { logThinking: false } : {}),
     liveRuns: liveRunRegistry,
     // Durable in-flight marker rows: IM `running` reads the database (A15d).
     ...(store
       ? {
-        onExecutionStart: (async (info: Parameters<NonNullable<ServerReviewOrchestrationOptions["onExecutionStart"]>>[0]) => {
-          const { insertReviewRunOnce } = await import("@aicr/store");
-          await insertReviewRunOnce(store, {
-            id: info.runId,
-            reviewEventJson: JSON.stringify(info.reviewEvent),
-            eventId: info.runId,
-            workspaceId: info.reviewEvent.workspaceId,
-            triggerName: info.reviewEvent.triggerName ?? null,
-            repoRef: info.reviewEvent.repoRef ?? null,
-            provider: info.model.providerId,
-            providerModel: info.model.modelId,
-            status: "analyzing",
-            startedAt: new Date(),
-            targetKind: info.reviewEvent.targetKind ?? null,
-            targetUrl: info.reviewEvent.url ?? null,
-            branch: info.reviewEvent.branch ?? null,
-            headSha: info.reviewEvent.headSha ?? null,
-          }, true).catch((error: unknown) => {
-            console.warn(JSON.stringify({ msg: "im_lifecycle_row_failed", runId: info.runId, error: String(error) }));
-          });
-        }),
-      }
+          onExecutionStart: async (
+            info: Parameters<
+              NonNullable<ServerReviewOrchestrationOptions["onExecutionStart"]>
+            >[0],
+          ) => {
+            const { insertReviewRunOnce } = await import("@aicr/store");
+            await insertReviewRunOnce(
+              store,
+              {
+                id: info.runId,
+                reviewEventJson: JSON.stringify(info.reviewEvent),
+                eventId: info.runId,
+                workspaceId: info.reviewEvent.workspaceId,
+                triggerName: info.reviewEvent.triggerName ?? null,
+                repoRef: info.reviewEvent.repoRef ?? null,
+                provider: info.model.providerId,
+                providerModel: info.model.modelId,
+                status: "analyzing",
+                startedAt: new Date(),
+                targetKind: info.reviewEvent.targetKind ?? null,
+                targetUrl: info.reviewEvent.url ?? null,
+                branch: info.reviewEvent.branch ?? null,
+                headSha: info.reviewEvent.headSha ?? null,
+              },
+              true,
+            ).catch((error: unknown) => {
+              console.warn(
+                JSON.stringify({
+                  msg: "im_lifecycle_row_failed",
+                  runId: info.runId,
+                  error: String(error),
+                }),
+              );
+            });
+          },
+        }
       : {}),
   };
 
   const rawQueue = await createQueueFromConfig(config);
-  const runtimeQueue = runtimeConfigStore ? createRuntimeQueue(rawQueue, runtimeConfigStore, configSources.database.namespace, runtimeConfig) : undefined;
+  const runtimeQueue = runtimeConfigStore
+    ? createRuntimeQueue(
+        rawQueue,
+        runtimeConfigStore,
+        configSources.database.namespace,
+        runtimeConfig,
+      )
+    : undefined;
   const queue = runtimeQueue?.queue ?? rawQueue;
-  const deferralManager = new ReviewDeferralManager({ ...(store ? { store } : {}),
-    queuedTimeoutFor: async target => {
-      const saved = (await runtimeConfig.resolveGeneration(target.configSnapshotId ?? null)).config;
-      return resolveAutoCommitPolicy(saved.review.auto_commit, saved.workspaces?.defaults?.review?.auto_commit,
-        saved.workspaces?.instances?.[target.reviewEvent.workspaceId]?.review?.auto_commit).queuedTimeoutMs;
+  const deferralManager = new ReviewDeferralManager({
+    ...(store ? { store } : {}),
+    queuedTimeoutFor: async (target) => {
+      const saved = (
+        await runtimeConfig.resolveGeneration(target.configSnapshotId ?? null)
+      ).config;
+      return resolveAutoCommitPolicy(
+        saved.review.auto_commit,
+        saved.workspaces?.defaults?.review?.auto_commit,
+        saved.workspaces?.instances?.[target.reviewEvent.workspaceId]?.review
+          ?.auto_commit,
+      ).queuedTimeoutMs;
     },
   });
 
   let worker: QueueWorker | undefined;
-  let imReviewServiceRef: { wake: (job: { readonly requestId: string; readonly configSnapshotId?: string | undefined }) => Promise<string> } | undefined;
+  let imReviewServiceRef:
+    | {
+        wake: (job: {
+          readonly requestId: string;
+          readonly configSnapshotId?: string | undefined;
+        }) => Promise<string>;
+      }
+    | undefined;
   const createWorker = (): QueueWorker => {
     const workersConfig = config.queue.workers;
-    return createQueueWorker(async job => {
-      const data = job.data as { kind?: string } | null | undefined;
-      if (data !== null && typeof data === "object" && (data as { kind?: string }).kind === "im_review" && imReviewServiceRef !== undefined) {
-        // Strict IM wake-up branch (spec §5): the job only wakes the request
-        // worker; duplicate wake-ups no-op behind the request lease.
-        const payload = data as { kind: "im_review"; requestId: string; configSnapshotId?: string };
-        const outcome = await imReviewServiceRef.wake({ requestId: payload.requestId, ...(payload.configSnapshotId !== undefined ? { configSnapshotId: payload.configSnapshotId } : {}) });
-        if (outcome === "version_mismatch") throw new Error(`im wake-up config version mismatch: ${payload.requestId}`);
-        return;
-      }
-      if (!jobHandler) throw new Error(`no handler registered for queue job ${job.id}`);
-      const generation = await runtimeConfig.resolveGeneration(job.configVersion?.configSnapshotId ?? null);
-      await runtimeConfig.withGeneration(generation, () => jobHandler(job));
-    }, {
-      queue,
-      executionConcurrency,
-      beforePoll: () => runtimeConfig.admission(),
-      concurrency: () => runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
-      perWorkspaceConcurrency: () => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
-      lockTtlSeconds: workersConfig?.lock_ttl_seconds ?? 1800,
-    });
+    return createQueueWorker(
+      async (job) => {
+        const data = job.data as { kind?: string } | null | undefined;
+        if (
+          data !== null &&
+          typeof data === "object" &&
+          (data as { kind?: string }).kind === "im_review" &&
+          imReviewServiceRef !== undefined
+        ) {
+          // Strict IM wake-up branch (spec §5): the job only wakes the request
+          // worker; duplicate wake-ups no-op behind the request lease.
+          const payload = data as {
+            kind: "im_review";
+            requestId: string;
+            configSnapshotId?: string;
+          };
+          const outcome = await imReviewServiceRef.wake({
+            requestId: payload.requestId,
+            ...(payload.configSnapshotId !== undefined
+              ? { configSnapshotId: payload.configSnapshotId }
+              : {}),
+          });
+          if (outcome === "version_mismatch")
+            throw new Error(
+              `im wake-up config version mismatch: ${payload.requestId}`,
+            );
+          return;
+        }
+        if (!jobHandler)
+          throw new Error(`no handler registered for queue job ${job.id}`);
+        const generation = await runtimeConfig.resolveGeneration(
+          job.configVersion?.configSnapshotId ?? null,
+        );
+        await runtimeConfig.withGeneration(generation, () => jobHandler(job));
+      },
+      {
+        queue,
+        executionConcurrency,
+        beforePoll: () => runtimeConfig.admission(),
+        concurrency: () =>
+          runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
+        perWorkspaceConcurrency: () =>
+          runtimeConfig.current().config.queue.workers
+            ?.per_workspace_concurrency ?? 1,
+        lockTtlSeconds: workersConfig?.lock_ttl_seconds ?? 1800,
+      },
+    );
   };
   if (jobHandler) {
     worker = createWorker();
@@ -4230,27 +6421,75 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(store ? { reviewStore: store } : {}),
   });
   opened.closeAutoCommit = autoCommitPipeline.close;
-  const historyMaintenance = createHistoryMaintenance({ store, batches: autoCommitPipeline.store,
-    policy: () => runtimeConfig.withoutGeneration(() => resolveHistoryRetention(runtimeConfig.current().config.storage.retention)),
+  const historyMaintenance = createHistoryMaintenance({
+    store,
+    batches: autoCommitPipeline.store,
+    policy: () =>
+      runtimeConfig.withoutGeneration(() =>
+        resolveHistoryRetention(
+          runtimeConfig.current().config.storage.retention,
+        ),
+      ),
   });
-  opened.closeAutoCommit = async () => { await historyMaintenance.stop(); await autoCommitPipeline.close(); };
-  await historyMaintenance.sweep();
-  if (observability) observability = { ...observability,
-    onBatchRequeued: () => runtimeConfig.withoutGeneration(() => autoCommitPipeline.scheduler.kick()),
-    beforeHistoryRead: historyMaintenance.sweep,
-    historyRetention: () => runtimeConfig.withoutGeneration(() => resolveHistoryRetention(runtimeConfig.current().config.storage.retention)),
+  opened.closeAutoCommit = async () => {
+    await historyMaintenance.stop();
+    await autoCommitPipeline.close();
   };
+  await historyMaintenance.sweep();
+  if (observability)
+    observability = {
+      ...observability,
+      onBatchRequeued: () =>
+        runtimeConfig.withoutGeneration(() =>
+          autoCommitPipeline.scheduler.kick(),
+        ),
+      beforeHistoryRead: historyMaintenance.sweep,
+      historyRetention: () =>
+        runtimeConfig.withoutGeneration(() =>
+          resolveHistoryRetention(
+            runtimeConfig.current().config.storage.retention,
+          ),
+        ),
+    };
   let sweepRunning: Promise<void> | undefined;
-  const sweepTimer = runtimeConfigStore ? setInterval(() => {
-    if (sweepRunning) return;
-    sweepRunning = runtimeConfig.withoutGeneration(async () => {
-      await runtimeConfig.admission();
-      await runtimeConfig.heartbeat();
-      await runtimeConfig.sweepSnapshots([autoCommitPipeline.store, deferralManager, ...(runtimeQueue ? [runtimeQueue] : []),
-        ...(store ? [{ listActiveConfigSnapshotIds: () => listImActiveConfigSnapshotIds(store, configSources.database.namespace) }] : [])]);
-    }).catch((error: unknown) => console.warn(JSON.stringify({ level: "warn", msg: "config snapshot collection deferred", error: admissionUnavailableReason(error) })))
-      .finally(() => { sweepRunning = undefined; });
-  }, 60_000) : undefined;
+  const sweepTimer = runtimeConfigStore
+    ? setInterval(() => {
+        if (sweepRunning) return;
+        sweepRunning = runtimeConfig
+          .withoutGeneration(async () => {
+            await runtimeConfig.admission();
+            await runtimeConfig.heartbeat();
+            await runtimeConfig.sweepSnapshots([
+              autoCommitPipeline.store,
+              deferralManager,
+              ...(runtimeQueue ? [runtimeQueue] : []),
+              ...(store
+                ? [
+                    {
+                      listActiveConfigSnapshotIds: () =>
+                        listImActiveConfigSnapshotIds(
+                          store,
+                          configSources.database.namespace,
+                        ),
+                    },
+                  ]
+                : []),
+            ]);
+          })
+          .catch((error: unknown) =>
+            console.warn(
+              JSON.stringify({
+                level: "warn",
+                msg: "config snapshot collection deferred",
+                error: admissionUnavailableReason(error),
+              }),
+            ),
+          )
+          .finally(() => {
+            sweepRunning = undefined;
+          });
+      }, 60_000)
+    : undefined;
   sweepTimer?.unref();
 
   // Queue-timeout sweep (review.auto_commit.queued_timeout_hours, default
@@ -4276,41 +6515,74 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       // instance falls back to one unscoped pass; an unscoped pass cannot honor
       // a per-workspace disabled timeout, so it must not run alongside
       // declared instances.
-      const scopes: (string | undefined)[] = workspaceIds.size > 0 ? [...workspaceIds] : [undefined];
+      const scopes: (string | undefined)[] =
+        workspaceIds.size > 0 ? [...workspaceIds] : [undefined];
       const timedOut: string[] = [];
       const timedOutBatches: { batchId: string; runId: string }[] = [];
       for (const workspaceId of scopes) {
-        const timeoutMs = workspaceId === undefined
-          ? resolveAutoCommitPolicy(
-              (runtimeConfig.current().config as unknown as { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } }).review?.auto_commit,
-              (runtimeConfig.current().config as unknown as { workspaces?: { defaults?: { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } } } }).workspaces?.defaults?.review?.auto_commit,
-              undefined,
-            ).queuedTimeoutMs
-          : autoCommitPipeline.runtime.policyFor(workspaceId).queuedTimeoutMs;
+        const timeoutMs =
+          workspaceId === undefined
+            ? resolveAutoCommitPolicy(
+                (
+                  runtimeConfig.current().config as unknown as {
+                    review?: {
+                      auto_commit?: Parameters<
+                        typeof resolveAutoCommitPolicy
+                      >[0];
+                    };
+                  }
+                ).review?.auto_commit,
+                (
+                  runtimeConfig.current().config as unknown as {
+                    workspaces?: {
+                      defaults?: {
+                        review?: {
+                          auto_commit?: Parameters<
+                            typeof resolveAutoCommitPolicy
+                          >[0];
+                        };
+                      };
+                    };
+                  }
+                ).workspaces?.defaults?.review?.auto_commit,
+                undefined,
+              ).queuedTimeoutMs
+            : autoCommitPipeline.runtime.policyFor(workspaceId).queuedTimeoutMs;
         if (timeoutMs === null) continue;
         const cutoff = now - timeoutMs;
         // Batches first: their members become terminal, so the receipt-stamp
         // pass below can flip the owning receipts' webhook events in the
         // same sweep run.
         timedOutBatches.push(
-          ...(await autoCommitPipeline.store.timeoutStaleBatches(cutoff, workspaceId)),
+          ...(await autoCommitPipeline.store.timeoutStaleBatches(
+            cutoff,
+            workspaceId,
+          )),
         );
         timedOut.push(
-          ...(await autoCommitPipeline.store.timeoutStaleQueue(cutoff, now, workspaceId)),
+          ...(await autoCommitPipeline.store.timeoutStaleQueue(
+            cutoff,
+            now,
+            workspaceId,
+          )),
         );
       }
       // Mirror the batch outcome onto in-flight run markers so Recent Runs
       // surfaces the timeout instead of a stale analyzing row.
       if (store && timedOutBatches.length > 0) {
         for (const batch of timedOutBatches) {
-          await updateRunStatus(store, batch.runId, "timeout", { error: "queued_timeout", onlyIfActive: true })
-            .catch(() => undefined);
+          await updateRunStatus(store, batch.runId, "timeout", {
+            error: "queued_timeout",
+            onlyIfActive: true,
+          }).catch(() => undefined);
         }
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "auto-commit queue timeout sweep skipped stale batches",
-          batches: timedOutBatches.length,
-        }));
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "auto-commit queue timeout sweep skipped stale batches",
+            batches: timedOutBatches.length,
+          }),
+        );
       }
       if (store && timedOut.length > 0) {
         // Routing-stage intake events carry detail.routingId; the sweep's
@@ -4319,21 +6591,29 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
         const routingIds = await autoCommitPipeline.store
           .listRoutingIntakeIdsForReceipts(timedOut)
           .catch(() => [] as readonly string[]);
-        const events = await markWebhookEventsTimedOut(store, timedOut, routingIds);
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "auto-commit queue timeout sweep marked stale entries",
-          receipts: timedOut.length,
-          routingIntakes: routingIds.length,
-          events,
-        }));
+        const events = await markWebhookEventsTimedOut(
+          store,
+          timedOut,
+          routingIds,
+        );
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "auto-commit queue timeout sweep marked stale entries",
+            receipts: timedOut.length,
+            routingIntakes: routingIds.length,
+            events,
+          }),
+        );
       }
     } catch (error) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "auto-commit queue timeout sweep failed; retrying next interval",
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "auto-commit queue timeout sweep failed; retrying next interval",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     } finally {
       queuedTimeoutRunning = false;
     }
@@ -4349,17 +6629,61 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const authConfig = resolveAuthConfig(config);
 
   const triggerRetry = resolveTriggerRetryConfig(config);
-  const fileTriage = resolveIssueTriageOptions(config, triageModelOptionsResolver().llm, triageModelOptionsResolver().model);
+  const fileTriage = resolveIssueTriageOptions(
+    config,
+    triageModelOptionsResolver().llm,
+    triageModelOptionsResolver().model,
+  );
 
-  const concurrencyTimer = setInterval(() => executionConcurrency.refresh(), 1000);
+  const concurrencyTimer = setInterval(
+    () => executionConcurrency.refresh(),
+    1000,
+  );
   concurrencyTimer.unref();
+
+  // tgrep per-workspace search caches (architecture §3.17). One manager owns
+  // all long-lived `tgrep serve` processes; hourly sweep expires caches that
+  // have not been used past `search.tgrep.cleanup_after_days`.
+  const tgrepIndexManager = new TgrepIndexManager({
+    config: resolveSearchTgrepConfig(config.search),
+  });
+  const tgrepSweep = async (): Promise<void> => {
+    try {
+      await tgrepIndexManager.sweep();
+      await tgrepIndexManager.sweepWorkspacesRoot(
+        resolve(baseDir, currentConfig().workspaces.root ?? "workspaces"),
+      );
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "tgrep cache sweep failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  };
+  const tgrepSweepTimer = setInterval(
+    () => {
+      void tgrepSweep();
+    },
+    60 * 60 * 1000,
+  );
+  tgrepSweepTimer.unref();
+  void tgrepSweep();
 
   let imReviewTimer: ReturnType<typeof setInterval> | undefined;
   let imReviewRunning: Promise<void> | undefined;
-  const socialReadiness = new SocialImReadinessService({ getConfig: currentConfig, env: resolveEnv });
+  const socialReadiness = new SocialImReadinessService({
+    getConfig: currentConfig,
+    env: resolveEnv,
+  });
   let slackSockets: SlackSocketModeService | undefined;
   if (store) socialReadiness.start();
-  const adminReviews = new Map<string, { controller: AbortController; task: Promise<void> }>();
+  const adminReviews = new Map<
+    string,
+    { controller: AbortController; task: Promise<void> }
+  >();
   let draining: Promise<void> | undefined;
   const beginDrain = (): Promise<void> => {
     if (draining) return draining;
@@ -4369,9 +6693,21 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     if (sweepTimer) clearInterval(sweepTimer);
     clearInterval(concurrencyTimer);
     clearInterval(queuedTimeoutTimer);
+    clearInterval(tgrepSweepTimer);
+    void tgrepIndexManager.dispose();
     if (imReviewTimer) clearInterval(imReviewTimer);
-    for (const run of adminReviews.values()) run.controller.abort(new ReviewCancelledError());
-    draining = Promise.all([slackSockets?.stop(), sweepRunning, imReviewRunning, imReviewService?.stop(), ...[...adminReviews.values()].map(run => run.task), historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    for (const run of adminReviews.values())
+      run.controller.abort(new ReviewCancelledError());
+    draining = Promise.all([
+      slackSockets?.stop(),
+      sweepRunning,
+      imReviewRunning,
+      imReviewService?.stop(),
+      ...[...adminReviews.values()].map((run) => run.task),
+      historyMaintenance.stop(),
+      worker?.stop(),
+      autoCommitPipeline.scheduler.stopAndDrain(),
+    ]).then(() => {});
     return draining;
   };
 
@@ -4388,57 +6724,133 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   });
   let imReplyService: ImReplyService | undefined;
   if (store !== undefined) {
-    imReplyService = new ImReplyService({ store, getConfig: currentConfig, env: (name: string) => resolveEnv(name) });
+    imReplyService = new ImReplyService({
+      store,
+      getConfig: currentConfig,
+      env: (name: string) => resolveEnv(name),
+    });
     imReplyService.start();
     imReviewService = new ManualReviewService({
       store,
       namespace: configSources.database.namespace,
-      reauthorize: request => currentImRequestAuthorized(currentConfig(), request, imAuthorizationDirectory),
+      reauthorize: (request) =>
+        currentImRequestAuthorized(
+          currentConfig(),
+          request,
+          imAuthorizationDirectory,
+        ),
       canScan: () => executionConcurrency.available,
       blockedWorkspaceIds: () => executionConcurrency.blockedWorkspaceIds(),
       batchLimit: 10,
-      getConfig: async (snapshotId) => (await runtimeConfig.resolveGeneration(snapshotId === "file-only" ? null : snapshotId)).config,
+      getConfig: async (snapshotId) =>
+        (
+          await runtimeConfig.resolveGeneration(
+            snapshotId === "file-only" ? null : snapshotId,
+          )
+        ).config,
       createAdapter: async (pinnedConfig, request) => {
-        if (!pinnedConfig.triggers.some(trigger => trigger.name === request.sourceTrigger) ||
-          pinnedConfig.workspaces.instances[request.workspaceId] === undefined) return undefined;
-        const generation = await runtimeConfig.resolveGeneration(request.configSnapshotId === "file-only" ? null : request.configSnapshotId);
-        const event = createReviewEvent({ provider: "manual", workspaceId: request.workspaceId,
-          triggerName: request.sourceTrigger, targetKind: "commit", repoRef: request.repoRef,
-          headSha: request.requestedRevision, author: {}, reason: "im:command" });
-        const sourceRoot = generation.workspaceRuntime.layoutForEvent(event).sourceRoot;
+        if (
+          !pinnedConfig.triggers.some(
+            (trigger) => trigger.name === request.sourceTrigger,
+          ) ||
+          pinnedConfig.workspaces.instances[request.workspaceId] === undefined
+        )
+          return undefined;
+        const generation = await runtimeConfig.resolveGeneration(
+          request.configSnapshotId === "file-only"
+            ? null
+            : request.configSnapshotId,
+        );
+        const event = createReviewEvent({
+          provider: "manual",
+          workspaceId: request.workspaceId,
+          triggerName: request.sourceTrigger,
+          targetKind: "commit",
+          repoRef: request.repoRef,
+          headSha: request.requestedRevision,
+          author: {},
+          reason: "im:command",
+        });
+        const sourceRoot =
+          generation.workspaceRuntime.layoutForEvent(event).sourceRoot;
         const appTokens = await appTokenServicesFor(generation);
-        const token = await resolveGithubAppInstallationToken(pinnedConfig, appTokens, request.sourceTrigger, request.repoRef);
-        return createVcsAdapterFromConfig(pinnedConfig, sourceRoot, request.sourceTrigger, request.repoRef,
-          token !== undefined ? { resolvedToken: token } : undefined);
+        const token = await resolveGithubAppInstallationToken(
+          pinnedConfig,
+          appTokens,
+          request.sourceTrigger,
+          request.repoRef,
+        );
+        return createVcsAdapterFromConfig(
+          pinnedConfig,
+          sourceRoot,
+          request.sourceTrigger,
+          request.repoRef,
+          token !== undefined ? { resolvedToken: token } : undefined,
+        );
       },
-      dispatch: async handoff => {
+      dispatch: async (handoff) => {
         // Durable wake-up handoff (R10–R12): the job id dedups a re-dispatch
         // of the same dispatchSeq, and the version record captures the
         // REQUEST's generation — never the background current one.
         try {
-          const generation = await runtimeConfig.resolveGeneration(handoff.configSnapshotId === "file-only" ? null : handoff.configSnapshotId);
-          await runtimeConfig.withGeneration(generation, () => queue.enqueue(
-            { kind: "im_review" as const, requestId: handoff.requestId, dispatchSeq: handoff.dispatchSeq, configSnapshotId: handoff.configSnapshotId },
-            { id: handoff.jobId, workspaceId: handoff.workspaceId, triggerName: handoff.triggerName, maxAttempts: 1 },
-          ));
+          const generation = await runtimeConfig.resolveGeneration(
+            handoff.configSnapshotId === "file-only"
+              ? null
+              : handoff.configSnapshotId,
+          );
+          await runtimeConfig.withGeneration(generation, () =>
+            queue.enqueue(
+              {
+                kind: "im_review" as const,
+                requestId: handoff.requestId,
+                dispatchSeq: handoff.dispatchSeq,
+                configSnapshotId: handoff.configSnapshotId,
+              },
+              {
+                id: handoff.jobId,
+                workspaceId: handoff.workspaceId,
+                triggerName: handoff.triggerName,
+                maxAttempts: 1,
+              },
+            ),
+          );
         } catch (error) {
           // The request table owns retry truth: a failed wake-up enqueue only
           // costs promptness; the due scan re-drives the request.
-          console.warn(JSON.stringify({ msg: "im_wake_enqueue_failed", requestId: handoff.requestId, jobId: handoff.jobId, error: String(error) }));
+          console.warn(
+            JSON.stringify({
+              msg: "im_wake_enqueue_failed",
+              requestId: handoff.requestId,
+              jobId: handoff.jobId,
+              error: String(error),
+            }),
+          );
         }
         // R13: exactly one shared permit per execution — the queue worker
         // branch already holds it, the timer scan acquires it here.
         if (handoff.permitHeld) await handoff.execute();
-        else await executionConcurrency.run(handoff.workspaceId, handoff.execute);
+        else
+          await executionConcurrency.run(handoff.workspaceId, handoff.execute);
       },
       executeReview: createImReviewExecutor({ store, orchestrationOptions }),
     });
     const scanService = imReviewService;
     const scanImReviews = () => {
       if (imReviewRunning) return;
-      imReviewRunning = scanService.scan({ detached: true }).then(() => {}).catch(error => {
-        console.warn(JSON.stringify({ msg: "im_review_scan_failed", error: String(error) }));
-      }).finally(() => { imReviewRunning = undefined; });
+      imReviewRunning = scanService
+        .scan({ detached: true })
+        .then(() => {})
+        .catch((error) => {
+          console.warn(
+            JSON.stringify({
+              msg: "im_review_scan_failed",
+              error: String(error),
+            }),
+          );
+        })
+        .finally(() => {
+          imReviewRunning = undefined;
+        });
     };
     imReviewTimer = setInterval(scanImReviews, 10_000);
     imReviewTimer.unref();
@@ -4457,91 +6869,199 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   // composes the auto-commit scheduler abort, the IM worker abort, and the
   // store-side terminal transitions.
   const reviewCancellation = createReviewCancellationService({
-    cancelDeferred: matches => deferralManager.cancelPending((target, at) => matches(target.reviewEvent, at)),
+    cancelDeferred: (matches) =>
+      deferralManager.cancelPending((target, at) =>
+        matches(target.reviewEvent, at),
+      ),
     ...(store !== undefined ? { store } : {}),
-    ...(autoCommitPipeline ? { autoCommitStore: autoCommitPipeline.store } : {}),
-    cancelRunningBatch: (batchId) => autoCommitPipeline.scheduler.cancelRunningBatch(batchId),
+    ...(autoCommitPipeline
+      ? { autoCommitStore: autoCommitPipeline.store }
+      : {}),
+    cancelRunningBatch: (batchId) =>
+      autoCommitPipeline.scheduler.cancelRunningBatch(batchId),
     cancelRunningRun: (runId: string) => {
       const pending = adminReviews.get(runId);
       if (pending) pending.controller.abort(new ReviewCancelledError());
       return liveRunRegistry.cancel(runId) || pending !== undefined;
     },
     ...(imReviewService !== undefined
-      ? { cancelRunningImRequest: ((requestId: string) => (imReviewService as ManualReviewService).cancelRunning(requestId)) }
+      ? {
+          cancelRunningImRequest: (requestId: string) =>
+            (imReviewService as ManualReviewService).cancelRunning(requestId),
+        }
       : {}),
     imNamespace: configSources.database.namespace,
   });
-  const imCancellationHandler = createImCancelCommandHandler(reviewCancellation);
-  if (observability) observability = {
-    ...observability,
-    cancellation: reviewCancellation,
-    requeueBatch: async (batchId) => {
-      const outcome = await reviewCancellation.requeueBatch(batchId);
-      if (outcome.status === "requeued") autoCommitPipeline.scheduler.kick();
-      return outcome;
-    },
-    reReviewRun: async (sourceRunId) => {
-      if (store === undefined) return { status: "unavailable" as const, detail: "store unavailable" };
-      const row = await getReviewRunById(store, sourceRunId);
-      if (row === undefined || row.repoRef === null || row.triggerName === null) {
-        return { status: "not_found" as const, detail: `run ${sourceRunId} not found or lacks repo identity` };
-      }
-      if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(row.status)) {
-        return { status: "conflict" as const, detail: `run ${sourceRunId} is still in flight (${row.status})` };
-      }
-      const generation = runtimeConfig.current();
-      const trigger = generation.config.triggers.find(entry => entry.name === row.triggerName);
-      if (trigger === undefined) {
-        return { status: "unsupported" as const, detail: `trigger ${row.triggerName} no longer exists` };
-      }
-      let event: ReviewEvent | undefined;
-      try { event = adminReReviewEvent(row, trigger.kind); } catch {
-        return { status: "unsupported" as const, detail: "stored event is invalid" };
-      }
-      if (!event) return { status: "unsupported" as const, detail: "this historical run has no replayable event; submit a new review command" };
-      const replayEvent = event;
-      const freshRunId = randomUUID();
-      const controller = new AbortController();
-      const { insertReviewRunOnce } = await import("@aicr/store");
-      await insertReviewRunOnce(store, {
-        id: freshRunId, eventId: freshRunId, workspaceId: row.workspaceId, triggerName: row.triggerName,
-        repoRef: row.repoRef, provider: null, providerModel: null, status: "queued",
-        reviewEventJson: JSON.stringify(replayEvent), headSha: replayEvent.headSha ?? null,
-        targetKind: replayEvent.targetKind, targetUrl: replayEvent.url ?? null,
-      });
-      // Out-of-band execution through the shared admission so the re-review
-      // respects global/per-workspace concurrency like any other run.
-      const task = executionConcurrency.run(row.workspaceId, async () => {
-        const startMs = Date.now();
-        try {
-          const result = await runReviewOrchestration({
-            reviewEvent: replayEvent, payload: {}, provider: trigger.kind, eventName: "admin.rereview",
-            runId: freshRunId, runSource: "admin_rereview", signal: controller.signal, configSnapshotId: generation.snapshotId,
-          }, orchestrationOptions);
-          controller.signal.throwIfAborted();
-          await persistReviewRunToStore(store, freshRunId, replayEvent, summarizeReviewOrchestrationForWebhook(result), Date.now() - startMs, startMs);
-        } catch (error) {
-          await persistFailedRunToStore(store, freshRunId, replayEvent, Date.now() - startMs, startMs, error);
+  const imCancellationHandler =
+    createImCancelCommandHandler(reviewCancellation);
+  if (observability)
+    observability = {
+      ...observability,
+      cancellation: reviewCancellation,
+      requeueBatch: async (batchId) => {
+        const outcome = await reviewCancellation.requeueBatch(batchId);
+        if (outcome.status === "requeued") autoCommitPipeline.scheduler.kick();
+        return outcome;
+      },
+      reReviewRun: async (sourceRunId) => {
+        if (store === undefined)
+          return {
+            status: "unavailable" as const,
+            detail: "store unavailable",
+          };
+        const row = await getReviewRunById(store, sourceRunId);
+        if (
+          row === undefined ||
+          row.repoRef === null ||
+          row.triggerName === null
+        ) {
+          return {
+            status: "not_found" as const,
+            detail: `run ${sourceRunId} not found or lacks repo identity`,
+          };
         }
-      }, controller.signal).catch(async (error: unknown) => {
-        await persistFailedRunToStore(store, freshRunId, replayEvent, 0, Date.now(), error);
-        console.warn(JSON.stringify({ msg: "admin_rereview_failed", sourceRunId, runId: freshRunId, error: String(error) }));
-      }).finally(() => { adminReviews.delete(freshRunId); });
-      adminReviews.set(freshRunId, { controller, task });
-      return { status: "accepted" as const, detail: `re-review started for ${row.repoRef}`, runId: freshRunId };
-    },
-  };
+        if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(row.status)) {
+          return {
+            status: "conflict" as const,
+            detail: `run ${sourceRunId} is still in flight (${row.status})`,
+          };
+        }
+        const generation = runtimeConfig.current();
+        const trigger = generation.config.triggers.find(
+          (entry) => entry.name === row.triggerName,
+        );
+        if (trigger === undefined) {
+          return {
+            status: "unsupported" as const,
+            detail: `trigger ${row.triggerName} no longer exists`,
+          };
+        }
+        let event: ReviewEvent | undefined;
+        try {
+          event = adminReReviewEvent(row, trigger.kind);
+        } catch {
+          return {
+            status: "unsupported" as const,
+            detail: "stored event is invalid",
+          };
+        }
+        if (!event)
+          return {
+            status: "unsupported" as const,
+            detail:
+              "this historical run has no replayable event; submit a new review command",
+          };
+        const replayEvent = event;
+        const freshRunId = randomUUID();
+        const controller = new AbortController();
+        const { insertReviewRunOnce } = await import("@aicr/store");
+        await insertReviewRunOnce(store, {
+          id: freshRunId,
+          eventId: freshRunId,
+          workspaceId: row.workspaceId,
+          triggerName: row.triggerName,
+          repoRef: row.repoRef,
+          provider: null,
+          providerModel: null,
+          status: "queued",
+          reviewEventJson: JSON.stringify(replayEvent),
+          headSha: replayEvent.headSha ?? null,
+          targetKind: replayEvent.targetKind,
+          targetUrl: replayEvent.url ?? null,
+        });
+        // Out-of-band execution through the shared admission so the re-review
+        // respects global/per-workspace concurrency like any other run.
+        const task = executionConcurrency
+          .run(
+            row.workspaceId,
+            async () => {
+              const startMs = Date.now();
+              try {
+                const result = await runReviewOrchestration(
+                  {
+                    reviewEvent: replayEvent,
+                    payload: {},
+                    provider: trigger.kind,
+                    eventName: "admin.rereview",
+                    runId: freshRunId,
+                    runSource: "admin_rereview",
+                    signal: controller.signal,
+                    configSnapshotId: generation.snapshotId,
+                  },
+                  orchestrationOptions,
+                );
+                controller.signal.throwIfAborted();
+                await persistReviewRunToStore(
+                  store,
+                  freshRunId,
+                  replayEvent,
+                  summarizeReviewOrchestrationForWebhook(result),
+                  Date.now() - startMs,
+                  startMs,
+                );
+              } catch (error) {
+                await persistFailedRunToStore(
+                  store,
+                  freshRunId,
+                  replayEvent,
+                  Date.now() - startMs,
+                  startMs,
+                  error,
+                );
+              }
+            },
+            controller.signal,
+          )
+          .catch(async (error: unknown) => {
+            await persistFailedRunToStore(
+              store,
+              freshRunId,
+              replayEvent,
+              0,
+              Date.now(),
+              error,
+            );
+            console.warn(
+              JSON.stringify({
+                msg: "admin_rereview_failed",
+                sourceRunId,
+                runId: freshRunId,
+                error: String(error),
+              }),
+            );
+          })
+          .finally(() => {
+            adminReviews.delete(freshRunId);
+          });
+        adminReviews.set(freshRunId, { controller, task });
+        return {
+          status: "accepted" as const,
+          detail: `re-review started for ${row.repoRef}`,
+          runId: freshRunId,
+        };
+      },
+    };
 
   if (store) {
     slackSockets = new SlackSocketModeService({
-      store, namespace: configSources.database.namespace, getConfig: currentConfig,
+      store,
+      namespace: configSources.database.namespace,
+      getConfig: currentConfig,
       getConfigGeneration: () => {
         const generation = runtimeConfig.current();
-        return {config: generation.config, snapshotId: runtimeConfig.mode === "database" ? generation.snapshotId : null, fileDigest: generation.fileDigest ?? "unknown"};
+        return {
+          config: generation.config,
+          snapshotId:
+            runtimeConfig.mode === "database" ? generation.snapshotId : null,
+          fileDigest: generation.fileDigest ?? "unknown",
+        };
       },
       env: resolveEnv,
       socialClient: (config, name) => socialReadiness.client(config, name),
-      reviewReady: () => !draining && runtimeConfig.mode === "database" && imReviewService !== undefined,
+      reviewReady: () =>
+        !draining &&
+        runtimeConfig.mode === "database" &&
+        imReviewService !== undefined,
     });
     slackSockets.start();
   }
@@ -4557,18 +7077,41 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     p4: p4Configs,
     svn: svnConfigs,
     reviewOrchestration: orchestrationOptions,
-    issueTriage: runtimeConfig.mode === "file-only"
-      ? fileTriage && { ...fileTriage, modelOptionsResolver: triageModelOptionsResolver }
-      : (event: ReviewEvent) => {
-      const generation = runtimeConfig.current();
-      if (generation.config.workspaces.instances[event.workspaceId]?.triage?.enabled !== true) return undefined;
-      const analysis = resolveAnalysisSelection(generation.config, event.workspaceId, executionRoute(generation.config, event));
-      const route = getModelRouteFor(generation, analysis.triageModelChain, reviewMemoryScope(event));
-      return resolveIssueTriageOptions(generation.config, route.llm, route.model, event.triggerName);
-    },
+    issueTriage:
+      runtimeConfig.mode === "file-only"
+        ? fileTriage && {
+            ...fileTriage,
+            modelOptionsResolver: triageModelOptionsResolver,
+          }
+        : (event: ReviewEvent) => {
+            const generation = runtimeConfig.current();
+            if (
+              generation.config.workspaces.instances[event.workspaceId]?.triage
+                ?.enabled !== true
+            )
+              return undefined;
+            const analysis = resolveAnalysisSelection(
+              generation.config,
+              event.workspaceId,
+              executionRoute(generation.config, event),
+            );
+            const route = getModelRouteFor(
+              generation,
+              analysis.triageModelChain,
+              reviewMemoryScope(event),
+            );
+            return resolveIssueTriageOptions(
+              generation.config,
+              route.llm,
+              route.model,
+              event.triggerName,
+            );
+          },
     queue,
     ...(worker ? { worker } : {}),
-    ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),
+    ...(config.server.path_prefix
+      ? { pathPrefix: config.server.path_prefix }
+      : {}),
     ...(authConfig ? { auth: authConfig } : {}),
     asyncTriggers: true,
     deduplicator: createReviewDeduplicator(),
@@ -4598,16 +7141,23 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             adminAuth: adminAuthConfig,
             sessionStore: sessionStore ?? runtimeConfigStore,
             namespace: configSources.database.namespace,
-            fileConfig: (options.configDocument?.document ?? {}) as AppConfigInput,
+            fileConfig: (options.configDocument?.document ??
+              {}) as AppConfigInput,
             fileDigest: options.configDocument?.digest ?? "",
             formatVersion: 2,
             manager: runtimeConfig,
             envLookup: resolveEnv,
             builtinPrompts: [
-              { id: "code-reviewer", name: "Built-in code reviewer (prompts/system/code-reviewer.system.md)", document: baseSystemPrompt },
+              {
+                id: "code-reviewer",
+                name: "Built-in code reviewer (prompts/system/code-reviewer.system.md)",
+                document: baseSystemPrompt,
+              },
             ],
             builtinTemplatesBaseDir: resolve(baseDir, "templates", "builtin"),
-            ...(configSecretSealing ? { secretSealing: configSecretSealing } : {}),
+            ...(configSecretSealing
+              ? { secretSealing: configSecretSealing }
+              : {}),
           },
         }
       : {}),
@@ -4620,7 +7170,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
         const pullRequestSchedule = resolvePullRequestSchedule(
           generationConfig.review.pull_request,
           generationConfig.workspaces.defaults.review?.pull_request,
-          generationConfig.workspaces.instances[workspaceId]?.review?.pull_request,
+          generationConfig.workspaces.instances[workspaceId]?.review
+            ?.pull_request,
         );
         if (pullRequestSchedule) {
           return pullRequestSchedule;
@@ -4652,76 +7203,100 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // extattr/chat membership) from cached platform snapshots.
     ...(store
       ? {
-        ...(imAuthorizationDirectory !== undefined ? { imDirectory: imAuthorizationDirectory } : {}),
-        ...(imReplyService !== undefined ? { closeImReplies: () => imReplyService!.stop() } : {}),
-        imCallbacks: {
-          store,
-          namespace: configSources.database.namespace,
-          getConfig: currentConfig,
-          getConfigGeneration: () => {
-            const generation = runtimeConfig.current();
-            return { config: generation.config, snapshotId: runtimeConfig.mode === "database" ? generation.snapshotId : null, fileDigest: generation.fileDigest ?? "unknown" };
-          },
-          env: (name: string) => resolveEnv(name),
-          directory: imAuthorizationDirectory,
-          socialClient: (config, name) => socialReadiness.client(config, name),
-          reviewReady: () => !draining && runtimeConfig.mode === "database" && imReviewService !== undefined,
-          query: imQueryService,
-          cancellation: imCancellationHandler,
-        } satisfies ImCallbackRoutesOptions,
-      }
+          ...(imAuthorizationDirectory !== undefined
+            ? { imDirectory: imAuthorizationDirectory }
+            : {}),
+          ...(imReplyService !== undefined
+            ? { closeImReplies: () => imReplyService!.stop() }
+            : {}),
+          imCallbacks: {
+            store,
+            namespace: configSources.database.namespace,
+            getConfig: currentConfig,
+            getConfigGeneration: () => {
+              const generation = runtimeConfig.current();
+              return {
+                config: generation.config,
+                snapshotId:
+                  runtimeConfig.mode === "database"
+                    ? generation.snapshotId
+                    : null,
+                fileDigest: generation.fileDigest ?? "unknown",
+              };
+            },
+            env: (name: string) => resolveEnv(name),
+            directory: imAuthorizationDirectory,
+            socialClient: (config, name) =>
+              socialReadiness.client(config, name),
+            reviewReady: () =>
+              !draining &&
+              runtimeConfig.mode === "database" &&
+              imReviewService !== undefined,
+            query: imQueryService,
+            cancellation: imCancellationHandler,
+          } satisfies ImCallbackRoutesOptions,
+        }
       : {}),
     // IM long-connection WebSocket clients (start in background; the
     // service reconnects on disconnect and reconciles on config change).
     ...(store
       ? {
-        startImLongConnections: async () => {
-          const service = new ImLongConnectionService({
-            getConfig: currentConfig,
-            env: (name: string) => resolveEnv(name),
-            namespace: configSources.database.namespace,
-            onAdmitMessage: async (message) => {
-              const parse = parseImCommand(stripImMentionPrefix(message.text));
-              if (parse.kind === "invalid") {
-                await message.reply(invalidImCommandReply(parse.reason));
-                return;
-              }
-              if (parse.kind !== "command") return;
-              // help is self-contained: no binding required, reply directly.
-              if (parse.command.kind === "help") {
-                await message.reply(IM_HELP_TEXT);
-                return;
-              }
-              const generation = runtimeConfig.current();
-              const config = generation.config;
-              const result = await processImCommand({
-                store,
-                config,
-                namespace: configSources.database.namespace,
-                connectionName: message.connectionName,
-                connectionIdentity: imConnectionIdentityKey(message.connectionIdentity),
-                deliveryKey: message.deliveryKey,
-                payloadDigest: message.payloadDigest,
-                actor: message.actor,
-                conversation: message.conversation,
-                command: parse.command,
-                now: new Date(),
-                configSnapshotId: generation.snapshotId ?? "file-only",
-                configFileDigest: generation.fileDigest ?? "unknown",
-                ...(imAuthorizationDirectory !== undefined ? { directory: imAuthorizationDirectory } : {}),
-                query: imQueryService,
-                cancellation: imCancellationHandler,
-              });
-              if (result.replyText !== undefined) await message.reply(result.replyText);
-            },
-          });
-          await service.reconcile();
-          imReplyService?.setLongConnectionSender((name, chatId, text, isGroup) =>
-            service.sendWecomProactive(name, chatId, text, isGroup));
-          service.startPeriodicReconcile();
-          return service;
-        },
-      }
+          startImLongConnections: async () => {
+            const service = new ImLongConnectionService({
+              getConfig: currentConfig,
+              env: (name: string) => resolveEnv(name),
+              namespace: configSources.database.namespace,
+              onAdmitMessage: async (message) => {
+                const parse = parseImCommand(
+                  stripImMentionPrefix(message.text),
+                );
+                if (parse.kind === "invalid") {
+                  await message.reply(invalidImCommandReply(parse.reason));
+                  return;
+                }
+                if (parse.kind !== "command") return;
+                // help is self-contained: no binding required, reply directly.
+                if (parse.command.kind === "help") {
+                  await message.reply(IM_HELP_TEXT);
+                  return;
+                }
+                const generation = runtimeConfig.current();
+                const config = generation.config;
+                const result = await processImCommand({
+                  store,
+                  config,
+                  namespace: configSources.database.namespace,
+                  connectionName: message.connectionName,
+                  connectionIdentity: imConnectionIdentityKey(
+                    message.connectionIdentity,
+                  ),
+                  deliveryKey: message.deliveryKey,
+                  payloadDigest: message.payloadDigest,
+                  actor: message.actor,
+                  conversation: message.conversation,
+                  command: parse.command,
+                  now: new Date(),
+                  configSnapshotId: generation.snapshotId ?? "file-only",
+                  configFileDigest: generation.fileDigest ?? "unknown",
+                  ...(imAuthorizationDirectory !== undefined
+                    ? { directory: imAuthorizationDirectory }
+                    : {}),
+                  query: imQueryService,
+                  cancellation: imCancellationHandler,
+                });
+                if (result.replyText !== undefined)
+                  await message.reply(result.replyText);
+              },
+            });
+            await service.reconcile();
+            imReplyService?.setLongConnectionSender(
+              (name, chatId, text, isGroup) =>
+                service.sendWecomProactive(name, chatId, text, isGroup),
+            );
+            service.startPeriodicReconcile();
+            return service;
+          },
+        }
       : {}),
   };
 }
@@ -4740,15 +7315,17 @@ function resolveIssueTriageOptions(
   }
 
   const giteaTrigger = config.triggers.find(
-    (t) => (t.kind === "gitea" || t.kind === "forgejo") && (triggerName === undefined || t.name === triggerName),
+    (t) =>
+      (t.kind === "gitea" || t.kind === "forgejo") &&
+      (triggerName === undefined || t.name === triggerName),
   );
   if (!giteaTrigger) {
     return undefined;
   }
 
   const triggerConfig = giteaTrigger as Record<string, unknown>;
-  const baseUrl = (triggerConfig.base_url as string | undefined) ??
-    config.server.base_url;
+  const baseUrl =
+    (triggerConfig.base_url as string | undefined) ?? config.server.base_url;
   const token = resolveSecretField(triggerConfig, "token", "token_env");
 
   if (!baseUrl) {
@@ -4756,7 +7333,9 @@ function resolveIssueTriageOptions(
   }
 
   const workspacePolicies: Record<string, WorkspaceIssueTriagePolicy> = {};
-  for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
+  for (const [workspaceId, instance] of Object.entries(
+    config.workspaces.instances,
+  )) {
     const triageConfig = instance.triage;
     if (triageConfig?.enabled !== true) {
       continue;
@@ -4765,9 +7344,15 @@ function resolveIssueTriageOptions(
     workspacePolicies[workspaceId] = {
       ...(triageConfig.events ? { events: triageConfig.events } : {}),
       ...(triageConfig.actions ? { actions: triageConfig.actions } : {}),
-      ...(triageConfig.categories_close ? { categoriesClose: triageConfig.categories_close } : {}),
-      ...(triageConfig.dry_run !== undefined ? { dryRun: triageConfig.dry_run } : {}),
-      ...(triageConfig.custom_prompt ? { customPrompt: triageConfig.custom_prompt } : {}),
+      ...(triageConfig.categories_close
+        ? { categoriesClose: triageConfig.categories_close }
+        : {}),
+      ...(triageConfig.dry_run !== undefined
+        ? { dryRun: triageConfig.dry_run }
+        : {}),
+      ...(triageConfig.custom_prompt
+        ? { customPrompt: triageConfig.custom_prompt }
+        : {}),
     };
   }
 
@@ -4800,21 +7385,26 @@ async function createAutoCommitPipeline(deps: {
   readonly workspaceRuntime: WorkspaceRuntime;
   /** P4 generation source: policies, adapters, and profiles read the CURRENT generation. */
   readonly runtimeConfig: RuntimeConfigManager;
-  readonly appTokenServicesFor?: (generation: RuntimeConfigGeneration) => Promise<ReadonlyMap<string, GithubAppTokenService>>;
+  readonly appTokenServicesFor?: (
+    generation: RuntimeConfigGeneration,
+  ) => Promise<ReadonlyMap<string, GithubAppTokenService>>;
 }): Promise<{
   readonly runtime: AutoCommitRuntime;
   readonly scheduler: AutoCommitScheduler;
   readonly store: AutoCommitStore;
   readonly close: () => Promise<void>;
 }> {
-  const { config, orchestrationOptions, workspaceRuntime, runtimeConfig } = deps;
+  const { config, orchestrationOptions, workspaceRuntime, runtimeConfig } =
+    deps;
   const store = await createAutoCommitStoreFromConfig(config);
   if (config.queue.kind === "memory" || config.queue.kind === "rabbitmq") {
-    console.warn(JSON.stringify({
-      level: "warn",
-      msg: "auto-commit store is in-memory: a 202 receipt only proves this process accepted the event; receipts do not survive restart",
-      queueBackend: config.queue.kind,
-    }));
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "auto-commit store is in-memory: a 202 receipt only proves this process accepted the event; receipts do not survive restart",
+        queueBackend: config.queue.kind,
+      }),
+    );
   }
 
   const getPolicyLayers = (workspaceId: string) => {
@@ -4822,7 +7412,8 @@ async function createAutoCommitPipeline(deps: {
     return {
       global: generationConfig.review.auto_commit,
       defaults: generationConfig.workspaces.defaults.review?.auto_commit,
-      instance: generationConfig.workspaces.instances[workspaceId]?.review?.auto_commit,
+      instance:
+        generationConfig.workspaces.instances[workspaceId]?.review?.auto_commit,
     };
   };
 
@@ -4832,14 +7423,21 @@ async function createAutoCommitPipeline(deps: {
     getPolicyLayers,
     // H08: every receipt seals the admission generation's snapshot id.
     getConfigSnapshotId: () => runtimeConfig.current().snapshotId,
-    withAdmissionPin: (id, accept) => runtimeConfig.withAdmissionPin(id, accept),
-    onAccepted: () => runtimeConfig.withoutGeneration(() => schedulerHolder.scheduler?.kick()),
+    withAdmissionPin: (id, accept) =>
+      runtimeConfig.withAdmissionPin(id, accept),
+    onAccepted: () =>
+      runtimeConfig.withoutGeneration(() => schedulerHolder.scheduler?.kick()),
   });
 
   // Adapter caches are generation-scoped: a published revision must not
   // reuse an adapter bound to the previous config's trigger credentials.
-  const adapterCaches = new WeakMap<RuntimeConfigGeneration, Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>>();
-  const getAdapterCacheFor = (generation: RuntimeConfigGeneration): Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter> => {
+  const adapterCaches = new WeakMap<
+    RuntimeConfigGeneration,
+    Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>
+  >();
+  const getAdapterCacheFor = (
+    generation: RuntimeConfigGeneration,
+  ): Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter> => {
     let cache = adapterCaches.get(generation);
     if (cache === undefined) {
       cache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
@@ -4848,18 +7446,27 @@ async function createAutoCommitPipeline(deps: {
     return cache;
   };
 
-  const getAdapter = async (stream: StreamKeyInput, configSnapshotId?: string | null) => {
-    const generation = await runtimeConfig.resolveGeneration(configSnapshotId ?? null);
+  const getAdapter = async (
+    stream: StreamKeyInput,
+    configSnapshotId?: string | null,
+  ) => {
+    const generation = await runtimeConfig.resolveGeneration(
+      configSnapshotId ?? null,
+    );
     const generationConfig = generation.config;
     const generationWorkspaceRuntime = generation.workspaceRuntime;
-    const trigger = generationConfig.triggers.find((entry) => entry.name === stream.triggerName);
+    const trigger = generationConfig.triggers.find(
+      (entry) => entry.name === stream.triggerName,
+    );
     if (!trigger) {
       return undefined;
     }
     const adapterCache = getAdapterCacheFor(generation);
     // The namespace prefixes provider identity; the remainder is the
     // original-case repo/depot reference the adapter needs for remote URLs.
-    const repoRef = stream.sourceNamespace.slice(stream.sourceNamespace.indexOf(":") + 1);
+    const repoRef = stream.sourceNamespace.slice(
+      stream.sourceNamespace.indexOf(":") + 1,
+    );
     // The cache key must include the workspace: two workspaces watching the
     // same trigger+repo each get their own adapter bound to their own clone
     // directory �?sharing one adapter would clone workspace B's events into
@@ -4877,9 +7484,24 @@ async function createAutoCommitPipeline(deps: {
       // token expires after an hour and would break every later expansion.
       // Metadata queries precede admission and have no branch/template
       // context. Keep caches independent of event-dependent work_path.
-      const metadataDir = generationConfig.workspaces.instances[stream.workspaceId]?.match === undefined
-        ? generationWorkspaceRuntime.layoutForEvent({ triggerName: stream.triggerName, workspaceId: stream.workspaceId, repoRef }).sourceRoot
-        : resolve(generationWorkspaceRuntime.workspacesRoot, ".metadata", hashStructured([stream.triggerName, stream.workspaceId, stream.vcs, repoRef]));
+      const metadataDir =
+        generationConfig.workspaces.instances[stream.workspaceId]?.match ===
+        undefined
+          ? generationWorkspaceRuntime.layoutForEvent({
+              triggerName: stream.triggerName,
+              workspaceId: stream.workspaceId,
+              repoRef,
+            }).sourceRoot
+          : resolve(
+              generationWorkspaceRuntime.workspacesRoot,
+              ".metadata",
+              hashStructured([
+                stream.triggerName,
+                stream.workspaceId,
+                stream.vcs,
+                repoRef,
+              ]),
+            );
       adapter = createVcsAdapterFromConfig(
         generationConfig,
         metadataDir,
@@ -4888,7 +7510,9 @@ async function createAutoCommitPipeline(deps: {
         {
           alwaysFetch: true,
           tokenProvider: async () => {
-            const tokenServices = await (deps.appTokenServicesFor?.(generation) ?? Promise.resolve(deps.appTokenServices));
+            const tokenServices = await (deps.appTokenServicesFor?.(
+              generation,
+            ) ?? Promise.resolve(deps.appTokenServices));
             return resolveGithubAppInstallationToken(
               generationConfig,
               tokenServices,
@@ -4901,7 +7525,11 @@ async function createAutoCommitPipeline(deps: {
       adapterCache.set(cacheKey, adapter);
     }
     return typeof adapter.listCommitMetadataPage === "function"
-      ? (adapter as VcsAdapter & { listCommitMetadataPage: NonNullable<VcsAdapter["listCommitMetadataPage"]> })
+      ? (adapter as VcsAdapter & {
+          listCommitMetadataPage: NonNullable<
+            VcsAdapter["listCommitMetadataPage"]
+          >;
+        })
       : undefined;
   };
 
@@ -4909,7 +7537,10 @@ async function createAutoCommitPipeline(deps: {
   // into formal receipts during the scheduler tick. Adapter lookups are
   // cached per trigger �?the p4/svn metadata queries hit the server
   // directly, no per-scope adapter instances needed.
-  const routingAdapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
+  const routingAdapterCache = new Map<
+    string,
+    GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter
+  >();
   const routingResolver = new RoutingReceiptResolver({
     runtimeConfig,
     store,
@@ -4921,18 +7552,37 @@ async function createAutoCommitPipeline(deps: {
         return undefined;
       }
       const generation = runtimeConfig.current();
-      let adapter = routingAdapterCache.get(`${generation.snapshotId ?? ""} ${triggerName}`);
+      let adapter = routingAdapterCache.get(
+        `${generation.snapshotId ?? ""} ${triggerName}`,
+      );
       if (!adapter) {
-        const metadataDir = resolve(generation.workspaceRuntime.workspacesRoot, ".metadata", hashStructured(["routing", triggerName, provider]));
-        adapter = createVcsAdapterFromConfig(generation.config, metadataDir, triggerName, undefined, {});
-        routingAdapterCache.set(`${generation.snapshotId ?? ""} ${triggerName}`, adapter);
+        const metadataDir = resolve(
+          generation.workspaceRuntime.workspacesRoot,
+          ".metadata",
+          hashStructured(["routing", triggerName, provider]),
+        );
+        adapter = createVcsAdapterFromConfig(
+          generation.config,
+          metadataDir,
+          triggerName,
+          undefined,
+          {},
+        );
+        routingAdapterCache.set(
+          `${generation.snapshotId ?? ""} ${triggerName}`,
+          adapter,
+        );
       }
       return adapter;
     },
     profileFor: (triggerName, provider) => {
       const generation = runtimeConfig.current();
       if (provider === "p4") {
-        const profile = resolveP4TriggerConfigs(generation.config, triggerName, generation.workspaceRuntime)[0];
+        const profile = resolveP4TriggerConfigs(
+          generation.config,
+          triggerName,
+          generation.workspaceRuntime,
+        )[0];
         return profile
           ? {
               workspaceId: profile.workspaceId,
@@ -4942,12 +7592,18 @@ async function createAutoCommitPipeline(deps: {
           : undefined;
       }
       if (provider === "svn") {
-        const profile = resolveSvnTriggerConfigs(generation.config, triggerName, generation.workspaceRuntime)[0];
+        const profile = resolveSvnTriggerConfigs(
+          generation.config,
+          triggerName,
+          generation.workspaceRuntime,
+        )[0];
         return profile
           ? {
               workspaceId: profile.workspaceId,
               repositoryUrl: profile.repositoryUrl,
-              ...(profile.projectRoots ? { projectRoots: profile.projectRoots } : {}),
+              ...(profile.projectRoots
+                ? { projectRoots: profile.projectRoots }
+                : {}),
             }
           : undefined;
       }
@@ -4963,8 +7619,15 @@ async function createAutoCommitPipeline(deps: {
       if (!reviewStore) return;
       // One atomic dedup + write includes usage and rollup rows. A
       // recovered completed checkpoint can safely retry this accounting.
-      await persistReviewRunToStore(reviewStore, runId, result.reviewEvent, result.reviewRun,
-        result.durationMs, result.startedAt, { strict: true, idempotent: true });
+      await persistReviewRunToStore(
+        reviewStore,
+        runId,
+        result.reviewEvent,
+        result.reviewRun,
+        result.durationMs,
+        result.startedAt,
+        { strict: true, idempotent: true },
+      );
     },
   });
   const scheduler = new AutoCommitScheduler({
@@ -4991,8 +7654,10 @@ async function createAutoCommitPipeline(deps: {
     // `timeout` so Recent Runs and `aicr running` reflect reality.
     onBatchTimedOut: async (_batchId, runId) => {
       if (deps.reviewStore) {
-        await updateRunStatus(deps.reviewStore, runId, "timeout", { error: "queued_timeout", onlyIfActive: true })
-          .catch(() => undefined);
+        await updateRunStatus(deps.reviewStore, runId, "timeout", {
+          error: "queued_timeout",
+          onlyIfActive: true,
+        }).catch(() => undefined);
       }
     },
     onBatchCancelled: async (_batchId, runId) => {
@@ -5003,8 +7668,16 @@ async function createAutoCommitPipeline(deps: {
     },
     // H17: concurrency re-reads at the claim boundary from the current
     // generation; lowering the limit never cancels running batches.
-    globalConcurrency: () => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.workers?.concurrency ?? 4),
-    perWorkspaceConcurrency: () => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1),
+    globalConcurrency: () =>
+      runtimeConfig.withoutGeneration(
+        () => runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
+      ),
+    perWorkspaceConcurrency: () =>
+      runtimeConfig.withoutGeneration(
+        () =>
+          runtimeConfig.current().config.queue.workers
+            ?.per_workspace_concurrency ?? 1,
+      ),
   });
   schedulerHolder.scheduler = scheduler;
   // Boot-time queue-timeout pass BEFORE the scheduler starts: reclaiming the
@@ -5013,40 +7686,71 @@ async function createAutoCommitPipeline(deps: {
   // batches past each workspace's queued_timeout bound first, so the first
   // dispatch tick can only pick up work inside the bound.
   try {
-    const workspaceIds = Object.keys(config.workspaces?.instances ?? {}) as readonly string[];
-    const scopes: (string | undefined)[] = workspaceIds.length > 0 ? [...workspaceIds] : [undefined];
+    const workspaceIds = Object.keys(
+      config.workspaces?.instances ?? {},
+    ) as readonly string[];
+    const scopes: (string | undefined)[] =
+      workspaceIds.length > 0 ? [...workspaceIds] : [undefined];
     let skipped = 0;
     for (const workspaceId of scopes) {
-      const timeoutMs = workspaceId === undefined
-        ? resolveAutoCommitPolicy(
-            (config as unknown as { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } }).review?.auto_commit,
-            (config as unknown as { workspaces?: { defaults?: { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } } } }).workspaces?.defaults?.review?.auto_commit,
-            undefined,
-          ).queuedTimeoutMs
-        : runtime.policyFor(workspaceId).queuedTimeoutMs;
+      const timeoutMs =
+        workspaceId === undefined
+          ? resolveAutoCommitPolicy(
+              (
+                config as unknown as {
+                  review?: {
+                    auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0];
+                  };
+                }
+              ).review?.auto_commit,
+              (
+                config as unknown as {
+                  workspaces?: {
+                    defaults?: {
+                      review?: {
+                        auto_commit?: Parameters<
+                          typeof resolveAutoCommitPolicy
+                        >[0];
+                      };
+                    };
+                  };
+                }
+              ).workspaces?.defaults?.review?.auto_commit,
+              undefined,
+            ).queuedTimeoutMs
+          : runtime.policyFor(workspaceId).queuedTimeoutMs;
       if (timeoutMs === null) continue;
-      const stale = await store.timeoutStaleBatches(Date.now() - timeoutMs, workspaceId);
+      const stale = await store.timeoutStaleBatches(
+        Date.now() - timeoutMs,
+        workspaceId,
+      );
       skipped += stale.length;
       if (deps.reviewStore) {
         for (const batch of stale) {
-          await updateRunStatus(deps.reviewStore, batch.runId, "timeout", { error: "queued_timeout", onlyIfActive: true })
-            .catch(() => undefined);
+          await updateRunStatus(deps.reviewStore, batch.runId, "timeout", {
+            error: "queued_timeout",
+            onlyIfActive: true,
+          }).catch(() => undefined);
         }
       }
     }
     if (skipped > 0) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "auto-commit boot sweep skipped stale queued batches (queued_timeout)",
-        batches: skipped,
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "auto-commit boot sweep skipped stale queued batches (queued_timeout)",
+          batches: skipped,
+        }),
+      );
     }
   } catch (error) {
-    console.warn(JSON.stringify({
-      level: "warn",
-      msg: "auto-commit boot sweep failed; periodic sweep will retry",
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "auto-commit boot sweep failed; periodic sweep will retry",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
   }
   scheduler.start();
   return {

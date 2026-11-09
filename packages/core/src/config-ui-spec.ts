@@ -44,7 +44,12 @@ import {
   type SchemaFieldLeaf,
 } from "./config-components.js";
 import { ConfigError } from "./config-format.js";
-import { appConfigSchema, llmProviderObjectSchema, routingRuleSchema, triggerObjectSchema } from "./config.js";
+import {
+  appConfigSchema,
+  llmProviderObjectSchema,
+  routingRuleSchema,
+  triggerObjectSchema,
+} from "./config.js";
 import { IM_CONNECTION_KINDS } from "./im-config.js";
 import type {
   ConfigUiControlKind,
@@ -71,21 +76,45 @@ const OUTPUT_LANGUAGE_VALUES = ["zh-CN", "en-US"] as const;
 const MODEL_ROLE_VALUES = ["light", "heavy", "any"] as const;
 
 /** Mirrors SCHEDULE_WEEKDAYS in weekly-schedule.ts (test asserts parity). */
-const SCHEDULE_WEEKDAY_VALUES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+const SCHEDULE_WEEKDAY_VALUES = [
+  "mon",
+  "tue",
+  "wed",
+  "thu",
+  "fri",
+  "sat",
+  "sun",
+] as const;
 
 /** Mirrors reviewTargetKindSchema in review-event.ts (test asserts parity). */
-const REVIEW_TARGET_KIND_VALUES = ["pull_request", "push", "commit", "issue", "manual", "scheduled"] as const;
+const REVIEW_TARGET_KIND_VALUES = [
+  "pull_request",
+  "push",
+  "commit",
+  "issue",
+  "manual",
+  "scheduled",
+] as const;
 
 /** Mirrors the inline triageSchema enums in config.ts (test asserts parity). */
 const TRIAGE_ACTION_VALUES = ["close"] as const;
-const TRIAGE_CATEGORY_VALUES = ["spam", "invalid", "duplicate", "resolved", "out_of_scope", "stale"] as const;
+const TRIAGE_CATEGORY_VALUES = [
+  "spam",
+  "invalid",
+  "duplicate",
+  "resolved",
+  "out_of_scope",
+  "stale",
+] as const;
 const TRIAGE_EVENT_VALUES = ["issues"] as const;
 
 /** Scalar arm of the tool_choice union (record payloads stay free-form). */
 const TOOL_CHOICE_VALUES = ["auto", "none", "required"] as const;
 
 /** Static options keyed by canonical (chainOf-resolved) inventory path. */
-const STATIC_OPTIONS_BY_CANONICAL_PATH: Readonly<Record<string, readonly string[]>> = {
+const STATIC_OPTIONS_BY_CANONICAL_PATH: Readonly<
+  Record<string, readonly string[]>
+> = {
   "review.output_language": OUTPUT_LANGUAGE_VALUES,
   "review.auto_commit.schedule.rules[].days": SCHEDULE_WEEKDAY_VALUES,
   "review.pull_request.schedule.rules[].days": SCHEDULE_WEEKDAY_VALUES,
@@ -93,7 +122,9 @@ const STATIC_OPTIONS_BY_CANONICAL_PATH: Readonly<Record<string, readonly string[
 };
 
 /** Static options keyed by exact inventory path (no canonical twin). */
-const STATIC_OPTIONS_BY_EXACT_PATH: Readonly<Record<string, readonly string[]>> = {
+const STATIC_OPTIONS_BY_EXACT_PATH: Readonly<
+  Record<string, readonly string[]>
+> = {
   "outputs.channels[].kind": CHANNEL_KINDS,
   "workspaces.instances.*.triage.actions": TRIAGE_ACTION_VALUES,
   "workspaces.instances.*.triage.categories_close": TRIAGE_CATEGORY_VALUES,
@@ -102,7 +133,9 @@ const STATIC_OPTIONS_BY_EXACT_PATH: Readonly<Record<string, readonly string[]>> 
 };
 
 /** Static options keyed by routing leaf path (no inventory twin at all). */
-const STATIC_OPTIONS_BY_ROUTING_PATH: Readonly<Record<string, readonly string[]>> = {
+const STATIC_OPTIONS_BY_ROUTING_PATH: Readonly<
+  Record<string, readonly string[]>
+> = {
   "match.target_kinds": REVIEW_TARGET_KIND_VALUES,
 };
 
@@ -206,14 +239,35 @@ function readonlyReasonForRow(row: ConfigFieldSpec): string | undefined {
 // visibleWhen assignments (kept minimal per design §3)
 // ---------------------------------------------------------------------------
 
-const VISIBLE_WHEN_RULES: readonly { readonly page: string; readonly prefix: string; readonly field: string; readonly equals: string | boolean }[] = [
+const VISIBLE_WHEN_RULES: readonly {
+  readonly page: string;
+  readonly prefix: string;
+  readonly field: string;
+  readonly equals: string | boolean;
+}[] = [
   // Multiselect contains semantics: visible when providers CONTAINS "searxng".
-  { page: "agent", prefix: "agent.web_search.searxng.", field: "agent:web_search.providers", equals: "searxng" },
-  { page: "review", prefix: "review.reflection.memory.", field: "review:reflection.enabled", equals: true },
+  {
+    page: "agent",
+    prefix: "agent.web_search.searxng.",
+    field: "agent:web_search.providers",
+    equals: "searxng",
+  },
+  {
+    page: "review",
+    prefix: "review.reflection.memory.",
+    field: "review:reflection.enabled",
+    equals: true,
+  },
 ];
 
-function visibleWhenFor(pageId: string, displayPath: string): ConfigUiVisibleWhen | undefined {
-  const rule = VISIBLE_WHEN_RULES.find((candidate) => candidate.page === pageId && displayPath.startsWith(candidate.prefix));
+function visibleWhenFor(
+  pageId: string,
+  displayPath: string,
+): ConfigUiVisibleWhen | undefined {
+  const rule = VISIBLE_WHEN_RULES.find(
+    (candidate) =>
+      candidate.page === pageId && displayPath.startsWith(candidate.prefix),
+  );
   if (rule === undefined) {
     return undefined;
   }
@@ -252,20 +306,56 @@ function buildFieldKindLookup(
   return out;
 }
 
-const PROVIDER_FIELD_KINDS = buildFieldKindLookup(PROVIDER_KIND_FIELDS, { api_version: ["azure_openai"] });
-const TRIGGER_FIELD_KINDS = buildFieldKindLookup(TRIGGER_KIND_FIELDS, TRIGGER_DECLARED_KIND_FIELDS);
-const CHANNEL_FIELD_KINDS = buildFieldKindLookup(CHANNEL_KIND_FIELDS, CHANNEL_DECLARED_KIND_FIELDS);
+const PROVIDER_FIELD_KINDS = buildFieldKindLookup(PROVIDER_KIND_FIELDS, {
+  api_version: ["azure_openai"],
+});
+const TRIGGER_FIELD_KINDS = buildFieldKindLookup(
+  TRIGGER_KIND_FIELDS,
+  TRIGGER_DECLARED_KIND_FIELDS,
+);
+const CHANNEL_FIELD_KINDS = buildFieldKindLookup(
+  CHANNEL_KIND_FIELDS,
+  CHANNEL_DECLARED_KIND_FIELDS,
+);
 
 // IM connection fields per protocol kind: schema-verified applicability
 // (im-config.ts discriminated union); shared names come via the declared map.
 const IM_CONNECTION_FIELD_KINDS = buildFieldKindLookup(
   {
-    wecom_app: { corp_id: true, agent_id: true, app_secret: true, app_secret_env: true },
+    wecom_app: {
+      corp_id: true,
+      agent_id: true,
+      app_secret: true,
+      app_secret_env: true,
+    },
     wecom_aibot: { corp_id: true, aibot_id: true },
-    feishu_app: { app_id: true, app_secret: true, app_secret_env: true, base_url: true, tenant_key: true },
-    slack_app: { app_id: true, team_id: true, bot_user_id: true, "callback.signing_secret": true, "callback.signing_secret_env": true, "socket_mode.enabled": true, "socket_mode.app_token": true, "socket_mode.app_token_env": true },
-    discord_bot: { application_id: true, guild_id: true, "callback.public_key": true },
-    telegram_bot: { bot_id: true, "callback.secret_token": true, "callback.secret_token_env": true },
+    feishu_app: {
+      app_id: true,
+      app_secret: true,
+      app_secret_env: true,
+      base_url: true,
+      tenant_key: true,
+    },
+    slack_app: {
+      app_id: true,
+      team_id: true,
+      bot_user_id: true,
+      "callback.signing_secret": true,
+      "callback.signing_secret_env": true,
+      "socket_mode.enabled": true,
+      "socket_mode.app_token": true,
+      "socket_mode.app_token_env": true,
+    },
+    discord_bot: {
+      application_id: true,
+      guild_id: true,
+      "callback.public_key": true,
+    },
+    telegram_bot: {
+      bot_id: true,
+      "callback.secret_token": true,
+      "callback.secret_token_env": true,
+    },
   },
   {
     enabled: [...IM_CONNECTION_KINDS],
@@ -290,11 +380,20 @@ const IM_CONNECTION_FIELD_KINDS = buildFieldKindLookup(
   },
 );
 
-function lookupKinds(lookup: FieldKindLookup, relativePath: string): readonly string[] | undefined {
-  const withoutWildcard = relativePath.endsWith(".*") ? relativePath.slice(0, -2) : relativePath;
+function lookupKinds(
+  lookup: FieldKindLookup,
+  relativePath: string,
+): readonly string[] | undefined {
+  const withoutWildcard = relativePath.endsWith(".*")
+    ? relativePath.slice(0, -2)
+    : relativePath;
   const dot = withoutWildcard.indexOf(".");
   const parent = dot > 0 ? withoutWildcard.slice(0, dot) : withoutWildcard;
-  return lookup.get(relativePath) ?? lookup.get(withoutWildcard) ?? lookup.get(parent);
+  return (
+    lookup.get(relativePath) ??
+    lookup.get(withoutWildcard) ??
+    lookup.get(parent)
+  );
 }
 
 function kindOptionsForPage(pageId: string): readonly string[] {
@@ -316,13 +415,29 @@ interface FieldKindData {
 }
 
 const KIND_DATA_BY_PAGE: Readonly<Record<string, FieldKindData>> = {
-  providers: { lookup: PROVIDER_FIELD_KINDS, allKinds: kindOptionsForPage("providers") },
-  triggers: { lookup: TRIGGER_FIELD_KINDS, allKinds: kindOptionsForPage("triggers") },
-  channels: { lookup: CHANNEL_FIELD_KINDS, allKinds: kindOptionsForPage("channels") },
-  "im-connections": { lookup: IM_CONNECTION_FIELD_KINDS, allKinds: kindOptionsForPage("im-connections") },
+  providers: {
+    lookup: PROVIDER_FIELD_KINDS,
+    allKinds: kindOptionsForPage("providers"),
+  },
+  triggers: {
+    lookup: TRIGGER_FIELD_KINDS,
+    allKinds: kindOptionsForPage("triggers"),
+  },
+  channels: {
+    lookup: CHANNEL_FIELD_KINDS,
+    allKinds: kindOptionsForPage("channels"),
+  },
+  "im-connections": {
+    lookup: IM_CONNECTION_FIELD_KINDS,
+    allKinds: kindOptionsForPage("im-connections"),
+  },
 };
 
-function kindsForField(pageId: string, scope: "entity" | "globals", relativePath: string): readonly string[] | undefined {
+function kindsForField(
+  pageId: string,
+  scope: "entity" | "globals",
+  relativePath: string,
+): readonly string[] | undefined {
   if (scope !== "entity") {
     return undefined;
   }
@@ -345,16 +460,27 @@ function kindsForField(pageId: string, scope: "entity" | "globals", relativePath
 // Capability notes
 // ---------------------------------------------------------------------------
 
-function capabilityForRow(row: ConfigFieldSpec, pageId: string, scope: "entity" | "globals", relativePath: string): string | undefined {
+function capabilityForRow(
+  row: ConfigFieldSpec,
+  pageId: string,
+  scope: "entity" | "globals",
+  relativePath: string,
+): string | undefined {
   const parts: string[] = [];
   if (row.capability !== undefined) {
     parts.push(row.capability);
   }
-  if (pageId === "channels" && scope === "entity" && relativePath === "resolved_action") {
+  if (
+    pageId === "channels" &&
+    scope === "entity" &&
+    relativePath === "resolved_action"
+  ) {
     const perKind = Object.entries(CHANNEL_RESOLVED_ACTION_VALUES)
       .map(([kind, values]) => `${kind} allows ${values.join("/")}`)
       .join("; ");
-    parts.push(`resolved_action values per kind: ${perKind} (the server enforces the per-kind set)`);
+    parts.push(
+      `resolved_action values per kind: ${perKind} (the server enforces the per-kind set)`,
+    );
   }
   if (row.chainOf !== undefined) {
     parts.push(`inherits from ${row.chainOf}`);
@@ -374,7 +500,10 @@ function toOptions(values: readonly string[]): readonly ConfigUiOption[] {
 }
 
 /** Options for an inventory row: schema leaf enums → canonical statics → exact statics. */
-function optionsForRow(row: ConfigFieldSpec, leavesByPath: ReadonlyMap<string, SchemaFieldLeaf>): readonly ConfigUiOption[] | undefined {
+function optionsForRow(
+  row: ConfigFieldSpec,
+  leavesByPath: ReadonlyMap<string, SchemaFieldLeaf>,
+): readonly ConfigUiOption[] | undefined {
   const leaf = leavesByPath.get(row.path);
   if (leaf?.enumValues !== undefined) {
     return toOptions(leaf.enumValues);
@@ -391,7 +520,9 @@ function optionsForRow(row: ConfigFieldSpec, leavesByPath: ReadonlyMap<string, S
   return undefined;
 }
 
-function controlBasedOptionsSource(control: ConfigUiControlKind): string | undefined {
+function controlBasedOptionsSource(
+  control: ConfigUiControlKind,
+): string | undefined {
   if (control === "secret-ref") {
     return "secret_envs";
   }
@@ -401,7 +532,10 @@ function controlBasedOptionsSource(control: ConfigUiControlKind): string | undef
   return undefined;
 }
 
-function optionsSourceForRow(row: ConfigFieldSpec, control: ConfigUiControlKind): string | undefined {
+function optionsSourceForRow(
+  row: ConfigFieldSpec,
+  control: ConfigUiControlKind,
+): string | undefined {
   const canonical = row.chainOf ?? row.path;
   if (MODEL_GROUP_REF_CANONICALS[canonical] === true) {
     return "model_groups";
@@ -457,102 +591,414 @@ export interface ConfigUiPageLayout {
 const PROVIDER_CATALOG_MATCHES: readonly string[] = [
   "catalog_provider",
   "catalog_id",
-  ...MODEL_CATALOG_FIELD_ROWS.map(([suffix]) => (suffix === "model_links.*" ? "model_links" : suffix)),
+  ...MODEL_CATALOG_FIELD_ROWS.map(([suffix]) =>
+    suffix === "model_links.*" ? "model_links" : suffix,
+  ),
 ];
 
 export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
   {
     id: "providers",
     label: "Providers",
-    entity: { kind: "provider", collection: "providers", idField: "id", valueShape: "object", kindField: "kind" },
+    entity: {
+      kind: "provider",
+      collection: "providers",
+      idField: "id",
+      valueShape: "object",
+      kindField: "kind",
+    },
     sections: [
-      { id: "identity", label: "Identity", scope: "entity", match: ["id", "kind"] },
-      { id: "connection", label: "Connection", scope: "entity", match: ["base_url", "api_key_env", "api_key", "api_version", "organization", "http_proxy", "timeout_ms", "max_retries"] },
-      { id: "kind-specific", label: "Kind-specific", scope: "entity", match: ["vertex_", "aws_", "google_", "anthropic_", "cache_control"], collapsed: true },
-      { id: "catalog", label: "Catalog metadata", scope: "entity", match: PROVIDER_CATALOG_MATCHES, collapsed: true },
-      { id: "overrides", label: "Request overrides", scope: "entity", match: [""], collapsed: true },
+      {
+        id: "identity",
+        label: "Identity",
+        scope: "entity",
+        match: ["id", "kind"],
+      },
+      {
+        id: "connection",
+        label: "Connection",
+        scope: "entity",
+        match: [
+          "base_url",
+          "api_key_env",
+          "api_key",
+          "api_version",
+          "organization",
+          "http_proxy",
+          "timeout_ms",
+          "max_retries",
+        ],
+      },
+      {
+        id: "kind-specific",
+        label: "Kind-specific",
+        scope: "entity",
+        match: ["vertex_", "aws_", "google_", "anthropic_", "cache_control"],
+        collapsed: true,
+      },
+      {
+        id: "catalog",
+        label: "Catalog metadata",
+        scope: "entity",
+        match: PROVIDER_CATALOG_MATCHES,
+        collapsed: true,
+      },
+      {
+        id: "overrides",
+        label: "Request overrides",
+        scope: "entity",
+        match: [""],
+        collapsed: true,
+      },
     ],
   },
   {
     id: "model-groups",
     label: "Model groups",
-    entity: { kind: "model_group", collection: "model_groups", idField: null, valueShape: "array" },
+    entity: {
+      kind: "model_group",
+      collection: "model_groups",
+      idField: null,
+      valueShape: "array",
+    },
     globals: true,
     sections: [
       { id: "identity", label: "Group", scope: "entity", match: ["$name"] },
-      { id: "entries", label: "Model entries", scope: "entity", match: ["entries"] },
-      { id: "chains", label: "Model chains", scope: "globals", match: ["llm.default_model_chain", "llm.triage_model_chain", "llm.author_resolution_model_chain"] },
-      { id: "retry", label: "Retry & per-provider overrides", scope: "globals", match: ["llm.retry", "llm.per_provider_overrides"] },
-      { id: "budget", label: "Budget", scope: "globals", match: ["llm.budget"] },
-      { id: "catalog", label: "Model catalog", scope: "globals", match: ["llm.model_catalog"], collapsed: true },
+      {
+        id: "entries",
+        label: "Model entries",
+        scope: "entity",
+        match: ["entries"],
+      },
+      {
+        id: "chains",
+        label: "Model chains",
+        scope: "globals",
+        match: [
+          "llm.default_model_chain",
+          "llm.triage_model_chain",
+          "llm.author_resolution_model_chain",
+        ],
+      },
+      {
+        id: "retry",
+        label: "Retry & per-provider overrides",
+        scope: "globals",
+        match: ["llm.retry", "llm.per_provider_overrides"],
+      },
+      {
+        id: "budget",
+        label: "Budget",
+        scope: "globals",
+        match: ["llm.budget"],
+      },
+      {
+        id: "catalog",
+        label: "Model catalog",
+        scope: "globals",
+        match: ["llm.model_catalog"],
+        collapsed: true,
+      },
     ],
   },
   {
     id: "triggers",
     label: "Triggers",
-    entity: { kind: "trigger", collection: "triggers", idField: "name", valueShape: "object", kindField: "kind" },
+    entity: {
+      kind: "trigger",
+      collection: "triggers",
+      idField: "name",
+      valueShape: "object",
+      kindField: "kind",
+    },
     sections: [
-      { id: "identity", label: "Identity", scope: "entity", match: ["name", "kind", "enabled"] },
-      { id: "urls", label: "URL templates", scope: "entity", match: ["commit_url_template", "revision_url_template", "change_url_template"] },
-      { id: "filters", label: "File filters", scope: "entity", match: ["watch_path", "include_cr_file", "exclude_cr_file"], collapsed: true },
-      { id: "github", label: "GitHub App", scope: "entity", match: ["app"], collapsed: true },
-      { id: "git", label: "Git servers", scope: "entity", match: ["token_env", "token", "webhook_secret_env", "webhook_secret", "base_url", "repos"], collapsed: true },
-      { id: "p4", label: "Perforce", scope: "entity", match: ["port", "user_env", "user", "ticket_env", "ticket", "password_env", "password", "depot_path", "streams", "workspace"], collapsed: true },
-      { id: "svn", label: "Subversion", scope: "entity", match: ["repository_url", "trust_server_cert", "username"], collapsed: true },
+      {
+        id: "identity",
+        label: "Identity",
+        scope: "entity",
+        match: ["name", "kind", "enabled"],
+      },
+      {
+        id: "urls",
+        label: "URL templates",
+        scope: "entity",
+        match: [
+          "commit_url_template",
+          "revision_url_template",
+          "change_url_template",
+        ],
+      },
+      {
+        id: "filters",
+        label: "File filters",
+        scope: "entity",
+        match: ["watch_path", "include_cr_file", "exclude_cr_file"],
+        collapsed: true,
+      },
+      {
+        id: "github",
+        label: "GitHub App",
+        scope: "entity",
+        match: ["app"],
+        collapsed: true,
+      },
+      {
+        id: "git",
+        label: "Git servers",
+        scope: "entity",
+        match: [
+          "token_env",
+          "token",
+          "webhook_secret_env",
+          "webhook_secret",
+          "base_url",
+          "repos",
+        ],
+        collapsed: true,
+      },
+      {
+        id: "p4",
+        label: "Perforce",
+        scope: "entity",
+        match: [
+          "port",
+          "user_env",
+          "user",
+          "ticket_env",
+          "ticket",
+          "password_env",
+          "password",
+          "depot_path",
+          "streams",
+          "workspace",
+        ],
+        collapsed: true,
+      },
+      {
+        id: "svn",
+        label: "Subversion",
+        scope: "entity",
+        match: ["repository_url", "trust_server_cert", "username"],
+        collapsed: true,
+      },
     ],
   },
   {
     id: "channels",
     label: "Channels",
-    entity: { kind: "channel", collection: "channels", idField: "name", valueShape: "object", kindField: "kind" },
+    entity: {
+      kind: "channel",
+      collection: "channels",
+      idField: "name",
+      valueShape: "object",
+      kindField: "kind",
+    },
     globals: true,
     sections: [
-      { id: "identity", label: "Identity", scope: "entity", match: ["name", "kind", "trigger"] },
-      { id: "social-im", label: "Bot destination", scope: "entity", match: ["channel_id", "chat_id"] },
-      { id: "mentions", label: "Mentions", scope: "entity", match: ["mention_author", "mention_fallback"] },
-      { id: "feishu-app", label: "Feishu application", scope: "entity", match: ["app_id", "app_secret", "app_secret_env", "receive_id", "receive_id_type", "member_directory", "user_mappings", "guess_author"] },
-      { id: "policy", label: "Policies", scope: "entity", match: ["no_problems", "no_findings", "issue_link_card"] },
-      { id: "urls", label: "URL templates", scope: "entity", match: ["commit_url_template", "revision_url_template", "change_url_template"] },
-      { id: "templates", label: "Templates", scope: "entity", match: ["templates"], collapsed: true },
-      { id: "problem", label: "Problem issues", scope: "entity", match: ["marker_prefix", "marker_label", "label_ids", "labels", "issue_mode", "resolved_action", "assign_committer", "owners_file", "add_owners_as_assignees", "notify_feishu"], collapsed: true },
-      { id: "review", label: "PR review", scope: "entity", match: ["severity_label_prefix", "severity_label_colors", "review_mode", "review_event", "review_update_strategy"], collapsed: true },
-      { id: "delivery", label: "Delivery", scope: "entity", match: [""], collapsed: true },
-      { id: "rendering", label: "Rendering", scope: "globals", match: ["outputs.template_engine"] },
-      { id: "policy-globals", label: "No-problems policy", scope: "globals", match: ["outputs.no_problems", "outputs.no_findings"] },
-      { id: "authors", label: "Author resolution", scope: "globals", match: ["outputs.author_resolution"] },
-      { id: "routes", label: "Legacy routes", scope: "globals", match: ["outputs.routes"], collapsed: true },
+      {
+        id: "identity",
+        label: "Identity",
+        scope: "entity",
+        match: ["name", "kind", "trigger"],
+      },
+      {
+        id: "social-im",
+        label: "Bot destination",
+        scope: "entity",
+        match: ["channel_id", "chat_id"],
+      },
+      {
+        id: "mentions",
+        label: "Mentions",
+        scope: "entity",
+        match: ["mention_author", "mention_fallback"],
+      },
+      {
+        id: "feishu-app",
+        label: "Feishu application",
+        scope: "entity",
+        match: [
+          "app_id",
+          "app_secret",
+          "app_secret_env",
+          "receive_id",
+          "receive_id_type",
+          "member_directory",
+          "user_mappings",
+          "guess_author",
+        ],
+      },
+      {
+        id: "policy",
+        label: "Policies",
+        scope: "entity",
+        match: ["no_problems", "no_findings", "issue_link_card"],
+      },
+      {
+        id: "urls",
+        label: "URL templates",
+        scope: "entity",
+        match: [
+          "commit_url_template",
+          "revision_url_template",
+          "change_url_template",
+        ],
+      },
+      {
+        id: "templates",
+        label: "Templates",
+        scope: "entity",
+        match: ["templates"],
+        collapsed: true,
+      },
+      {
+        id: "problem",
+        label: "Problem issues",
+        scope: "entity",
+        match: [
+          "marker_prefix",
+          "marker_label",
+          "label_ids",
+          "labels",
+          "issue_mode",
+          "resolved_action",
+          "assign_committer",
+          "owners_file",
+          "add_owners_as_assignees",
+          "notify_feishu",
+        ],
+        collapsed: true,
+      },
+      {
+        id: "review",
+        label: "PR review",
+        scope: "entity",
+        match: [
+          "severity_label_prefix",
+          "severity_label_colors",
+          "review_mode",
+          "review_event",
+          "review_update_strategy",
+        ],
+        collapsed: true,
+      },
+      {
+        id: "delivery",
+        label: "Delivery",
+        scope: "entity",
+        match: [""],
+        collapsed: true,
+      },
+      {
+        id: "rendering",
+        label: "Rendering",
+        scope: "globals",
+        match: ["outputs.template_engine"],
+      },
+      {
+        id: "policy-globals",
+        label: "No-problems policy",
+        scope: "globals",
+        match: ["outputs.no_problems", "outputs.no_findings"],
+      },
+      {
+        id: "authors",
+        label: "Author resolution",
+        scope: "globals",
+        match: ["outputs.author_resolution"],
+      },
+      {
+        id: "routes",
+        label: "Legacy routes",
+        scope: "globals",
+        match: ["outputs.routes"],
+        collapsed: true,
+      },
     ],
   },
   {
     id: "routing",
     label: "Routing",
-    entity: { kind: "route", collection: "routes", idField: "id", valueShape: "object" },
+    entity: {
+      kind: "route",
+      collection: "routes",
+      idField: "id",
+      valueShape: "object",
+    },
     sections: [
-      { id: "rule", label: "Rule", scope: "entity", match: ["id", "enabled", "priority", "workspace"] },
+      {
+        id: "rule",
+        label: "Rule",
+        scope: "entity",
+        match: ["id", "enabled", "priority", "workspace"],
+      },
       { id: "match", label: "Match", scope: "entity", match: ["match"] },
-      { id: "analysis", label: "Analysis", scope: "entity", match: ["analysis.model_chain", "analysis.triage_model_chain"] },
-      { id: "compression", label: "Compression", scope: "entity", match: ["analysis.compression"], collapsed: true },
-      { id: "agent", label: "Agent & sandbox", scope: "entity", match: ["analysis.agent", "analysis.sandbox"], collapsed: true },
-      { id: "review", label: "Review overrides", scope: "entity", match: ["analysis.review"], collapsed: true },
+      {
+        id: "analysis",
+        label: "Analysis",
+        scope: "entity",
+        match: ["analysis.model_chain", "analysis.triage_model_chain"],
+      },
+      {
+        id: "compression",
+        label: "Compression",
+        scope: "entity",
+        match: ["analysis.compression"],
+        collapsed: true,
+      },
+      {
+        id: "agent",
+        label: "Agent & sandbox",
+        scope: "entity",
+        match: ["analysis.agent", "analysis.sandbox"],
+        collapsed: true,
+      },
+      {
+        id: "review",
+        label: "Review overrides",
+        scope: "entity",
+        match: ["analysis.review"],
+        collapsed: true,
+      },
       { id: "outputs", label: "Outputs", scope: "entity", match: ["outputs"] },
     ],
   },
   {
     id: "templates",
     label: "Templates",
-    entity: { kind: "template", collection: "templates", idField: null, valueShape: "string" },
+    entity: {
+      kind: "template",
+      collection: "templates",
+      idField: null,
+      valueShape: "string",
+    },
     sections: [
       { id: "identity", label: "Template", scope: "entity", match: ["$name"] },
-      { id: "document", label: "Template document", scope: "entity", match: [""] },
+      {
+        id: "document",
+        label: "Template document",
+        scope: "entity",
+        match: [""],
+      },
     ],
   },
   {
     id: "prompts",
     label: "Prompts",
-    entity: { kind: "prompt", collection: "prompts", idField: null, valueShape: "string" },
+    entity: {
+      kind: "prompt",
+      collection: "prompts",
+      idField: null,
+      valueShape: "string",
+    },
     sections: [
       { id: "identity", label: "Prompt", scope: "entity", match: ["$name"] },
-      { id: "document", label: "Prompt document", scope: "entity", match: [""] },
+      {
+        id: "document",
+        label: "Prompt document",
+        scope: "entity",
+        match: [""],
+      },
     ],
   },
   {
@@ -560,11 +1006,36 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     label: "Agent",
     globals: true,
     sections: [
-      { id: "general", label: "General", scope: "globals", match: ["agent.default", "agent.timeout_seconds", "agent.auto_approve"] },
-      { id: "sandbox", label: "Sandbox", scope: "globals", match: ["agent.sandbox"] },
-      { id: "compaction", label: "Context compaction", scope: "globals", match: ["agent.context_compaction"] },
-      { id: "search", label: "Web search", scope: "globals", match: ["agent.web_search"] },
-      { id: "compression", label: "Compression", scope: "globals", match: ["compression"] },
+      {
+        id: "general",
+        label: "General",
+        scope: "globals",
+        match: ["agent.default", "agent.timeout_seconds", "agent.auto_approve"],
+      },
+      {
+        id: "sandbox",
+        label: "Sandbox",
+        scope: "globals",
+        match: ["agent.sandbox"],
+      },
+      {
+        id: "compaction",
+        label: "Context compaction",
+        scope: "globals",
+        match: ["agent.context_compaction"],
+      },
+      {
+        id: "search",
+        label: "Web search",
+        scope: "globals",
+        match: ["agent.web_search"],
+      },
+      {
+        id: "compression",
+        label: "Compression",
+        scope: "globals",
+        match: ["compression"],
+      },
     ],
   },
   {
@@ -572,38 +1043,186 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     label: "Review",
     globals: true,
     sections: [
-      { id: "general", label: "General", scope: "globals", match: ["review.languages_auto_detect", "review.include", "review.exclude", "review.max_files", "review.max_patch_bytes", "review.incremental", "review.skip_lgtm", "review.output_language", "review.commit_strategy", "review.log_thinking"] },
-      { id: "auto-commit", label: "Auto commit", scope: "globals", match: ["review.auto_commit"], collapsed: true },
-      { id: "pull-request", label: "Pull requests", scope: "globals", match: ["review.pull_request"], collapsed: true },
+      {
+        id: "general",
+        label: "General",
+        scope: "globals",
+        match: [
+          "review.languages_auto_detect",
+          "review.include",
+          "review.exclude",
+          "review.max_files",
+          "review.max_patch_bytes",
+          "review.incremental",
+          "review.skip_lgtm",
+          "review.output_language",
+          "review.commit_strategy",
+          "review.log_thinking",
+        ],
+      },
+      {
+        id: "auto-commit",
+        label: "Auto commit",
+        scope: "globals",
+        match: ["review.auto_commit"],
+        collapsed: true,
+      },
+      {
+        id: "pull-request",
+        label: "Pull requests",
+        scope: "globals",
+        match: ["review.pull_request"],
+        collapsed: true,
+      },
       { id: "git", label: "Git", scope: "globals", match: ["review.git"] },
-      { id: "labels", label: "Labels", scope: "globals", match: ["review.labels"] },
-      { id: "problem", label: "Problem issues", scope: "globals", match: ["review.problem_issue"] },
-      { id: "fetch", label: "Fetch extra", scope: "globals", match: ["review.fetch_extra"] },
-      { id: "reflection", label: "Reflection", scope: "globals", match: ["review.reflection"] },
+      {
+        id: "labels",
+        label: "Labels",
+        scope: "globals",
+        match: ["review.labels"],
+      },
+      {
+        id: "problem",
+        label: "Problem issues",
+        scope: "globals",
+        match: ["review.problem_issue"],
+      },
+      {
+        id: "fetch",
+        label: "Fetch extra",
+        scope: "globals",
+        match: ["review.fetch_extra"],
+      },
+      {
+        id: "reflection",
+        label: "Reflection",
+        scope: "globals",
+        match: ["review.reflection"],
+      },
+      {
+        id: "code-search",
+        label: "Code search index",
+        scope: "globals",
+        match: ["search.tgrep"],
+      },
     ],
   },
   {
     id: "workspaces",
     label: "Workspaces",
-    entity: { kind: "workspace", collection: "workspaces", idField: null, valueShape: "object" },
+    entity: {
+      kind: "workspace",
+      collection: "workspaces",
+      idField: null,
+      valueShape: "object",
+    },
     globals: true,
     sections: [
-      { id: "layout", label: "Layout & cache", scope: "globals", match: ["workspaces.root", "workspaces.cache"] },
-      { id: "defaults", label: "Defaults", scope: "globals", match: ["workspaces.defaults.model_chain", "workspaces.defaults.triage_model_chain", "workspaces.defaults.author_resolution_model_chain", "workspaces.defaults.prompt"] },
-      { id: "defaults-review", label: "Default review", scope: "globals", match: ["workspaces.defaults.review"], collapsed: true },
-      { id: "defaults-agent", label: "Default agent & sandbox", scope: "globals", match: ["workspaces.defaults.agent", "workspaces.defaults.sandbox"], collapsed: true },
-      { id: "defaults-outputs", label: "Default outputs", scope: "globals", match: ["workspaces.defaults.outputs"], collapsed: true },
-      { id: "defaults-repos", label: "Default context repositories", scope: "globals", match: ["workspaces.defaults.context_repositories[]"], collapsed: true },
-      { id: "identity", label: "Identity", scope: "entity", match: ["$name", "enabled", "source_repo", "work_path"] },
-      { id: "models", label: "Models", scope: "entity", match: ["model_chain", "triage_model_chain", "author_resolution_model_chain", "agent.default"] },
-      { id: "match", label: "Match rules", scope: "entity", match: ["match[]"] },
-      { id: "triage", label: "Issue triage", scope: "entity", match: ["triage"], collapsed: true },
+      {
+        id: "layout",
+        label: "Layout & cache",
+        scope: "globals",
+        match: ["workspaces.root", "workspaces.cache"],
+      },
+      {
+        id: "defaults",
+        label: "Defaults",
+        scope: "globals",
+        match: [
+          "workspaces.defaults.model_chain",
+          "workspaces.defaults.triage_model_chain",
+          "workspaces.defaults.author_resolution_model_chain",
+          "workspaces.defaults.prompt",
+        ],
+      },
+      {
+        id: "defaults-review",
+        label: "Default review",
+        scope: "globals",
+        match: ["workspaces.defaults.review"],
+        collapsed: true,
+      },
+      {
+        id: "defaults-agent",
+        label: "Default agent & sandbox",
+        scope: "globals",
+        match: ["workspaces.defaults.agent", "workspaces.defaults.sandbox"],
+        collapsed: true,
+      },
+      {
+        id: "defaults-outputs",
+        label: "Default outputs",
+        scope: "globals",
+        match: ["workspaces.defaults.outputs"],
+        collapsed: true,
+      },
+      {
+        id: "defaults-repos",
+        label: "Default context repositories",
+        scope: "globals",
+        match: ["workspaces.defaults.context_repositories[]"],
+        collapsed: true,
+      },
+      {
+        id: "identity",
+        label: "Identity",
+        scope: "entity",
+        match: ["$name", "enabled", "source_repo", "work_path"],
+      },
+      {
+        id: "models",
+        label: "Models",
+        scope: "entity",
+        match: [
+          "model_chain",
+          "triage_model_chain",
+          "author_resolution_model_chain",
+          "agent.default",
+        ],
+      },
+      {
+        id: "match",
+        label: "Match rules",
+        scope: "entity",
+        match: ["match[]"],
+      },
+      {
+        id: "triage",
+        label: "Issue triage",
+        scope: "entity",
+        match: ["triage"],
+        collapsed: true,
+      },
       { id: "prompt", label: "Prompt", scope: "entity", match: ["prompt"] },
       { id: "auth", label: "Authentication", scope: "entity", match: ["auth"] },
-      { id: "review", label: "Review overrides", scope: "entity", match: ["review"], collapsed: true },
-      { id: "agent", label: "Agent & sandbox overrides", scope: "entity", match: ["agent", "sandbox"], collapsed: true },
-      { id: "outputs", label: "Output overrides", scope: "entity", match: ["outputs"], collapsed: true },
-      { id: "repos", label: "Context repositories", scope: "entity", match: ["context_repositories[]"], collapsed: true },
+      {
+        id: "review",
+        label: "Review overrides",
+        scope: "entity",
+        match: ["review"],
+        collapsed: true,
+      },
+      {
+        id: "agent",
+        label: "Agent & sandbox overrides",
+        scope: "entity",
+        match: ["agent", "sandbox"],
+        collapsed: true,
+      },
+      {
+        id: "outputs",
+        label: "Output overrides",
+        scope: "entity",
+        match: ["outputs"],
+        collapsed: true,
+      },
+      {
+        id: "repos",
+        label: "Context repositories",
+        scope: "entity",
+        match: ["context_repositories[]"],
+        collapsed: true,
+      },
     ],
   },
   {
@@ -611,35 +1230,127 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     label: "Queue",
     globals: true,
     sections: [
-      { id: "workers", label: "Workers", scope: "globals", match: ["queue.workers"] },
-      { id: "rate", label: "Rate limits", scope: "globals", match: ["queue.rate_limit"] },
+      {
+        id: "workers",
+        label: "Workers",
+        scope: "globals",
+        match: ["queue.workers"],
+      },
+      {
+        id: "rate",
+        label: "Rate limits",
+        scope: "globals",
+        match: ["queue.rate_limit"],
+      },
       { id: "retry", label: "Retry", scope: "globals", match: ["queue.retry"] },
-      { id: "dead-letter", label: "Dead letter", scope: "globals", match: ["queue.dead_letter"] },
-      { id: "backend", label: "Backend (read-only)", scope: "globals", match: ["queue.kind", "queue.sqlite"] },
+      {
+        id: "dead-letter",
+        label: "Dead letter",
+        scope: "globals",
+        match: ["queue.dead_letter"],
+      },
+      {
+        id: "backend",
+        label: "Backend (read-only)",
+        scope: "globals",
+        match: ["queue.kind", "queue.sqlite"],
+      },
     ],
   },
   {
     id: "im-connections",
     label: "IM connections",
-    entity: { kind: "im_connection", collection: "im_connections", idField: null, valueShape: "object", kindField: "kind" },
+    entity: {
+      kind: "im_connection",
+      collection: "im_connections",
+      idField: null,
+      valueShape: "object",
+      kindField: "kind",
+    },
     globals: true,
     sections: [
-      { id: "identity", label: "Identity", scope: "entity", match: ["$name", "kind", "enabled"] },
-      { id: "protocol", label: "Protocol identity", scope: "entity", match: ["corp_id", "agent_id", "aibot_id", "app_id", "base_url", "tenant_key", "app_secret", "app_secret_env", "secret", "secret_env", "team_id", "bot_user_id", "application_id", "guild_id", "bot_id", "token", "token_env"] },
-      { id: "callback", label: "Callback credentials", scope: "entity", match: ["callback"], collapsed: true },
-      { id: "socket-mode", label: "Socket Mode", scope: "entity", match: ["socket_mode"], collapsed: true },
+      {
+        id: "identity",
+        label: "Identity",
+        scope: "entity",
+        match: ["$name", "kind", "enabled"],
+      },
+      {
+        id: "protocol",
+        label: "Protocol identity",
+        scope: "entity",
+        match: [
+          "corp_id",
+          "agent_id",
+          "aibot_id",
+          "app_id",
+          "base_url",
+          "tenant_key",
+          "app_secret",
+          "app_secret_env",
+          "secret",
+          "secret_env",
+          "team_id",
+          "bot_user_id",
+          "application_id",
+          "guild_id",
+          "bot_id",
+          "token",
+          "token_env",
+        ],
+      },
+      {
+        id: "callback",
+        label: "Callback credentials",
+        scope: "entity",
+        match: ["callback"],
+        collapsed: true,
+      },
+      {
+        id: "socket-mode",
+        label: "Socket Mode",
+        scope: "entity",
+        match: ["socket_mode"],
+        collapsed: true,
+      },
     ],
   },
   {
     id: "im-bindings",
     label: "IM command bindings",
-    entity: { kind: "im_command_binding", collection: "im_command_bindings", idField: null, valueShape: "object" },
+    entity: {
+      kind: "im_command_binding",
+      collection: "im_command_bindings",
+      idField: null,
+      valueShape: "object",
+    },
     globals: true,
     sections: [
-      { id: "identity", label: "Identity", scope: "entity", match: ["$name", "enabled"] },
-      { id: "access", label: "Actors & conversations", scope: "entity", match: ["connection", "actors", "conversations", "commands"] },
-      { id: "repositories", label: "Repository aliases", scope: "entity", match: ["repositories", "allow_all_repositories"], collapsed: true },
-      { id: "policy", label: "Report policy", scope: "entity", match: ["report_policy"] },
+      {
+        id: "identity",
+        label: "Identity",
+        scope: "entity",
+        match: ["$name", "enabled"],
+      },
+      {
+        id: "access",
+        label: "Actors & conversations",
+        scope: "entity",
+        match: ["connection", "actors", "conversations", "commands"],
+      },
+      {
+        id: "repositories",
+        label: "Repository aliases",
+        scope: "entity",
+        match: ["repositories", "allow_all_repositories"],
+        collapsed: true,
+      },
+      {
+        id: "policy",
+        label: "Report policy",
+        scope: "entity",
+        match: ["report_policy"],
+      },
     ],
   },
   {
@@ -649,7 +1360,12 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     sections: [
       { id: "server", label: "Server", scope: "globals", match: ["server"] },
       { id: "admin", label: "Admin", scope: "globals", match: ["admin"] },
-      { id: "sources", label: "Config sources", scope: "globals", match: ["config_sources"] },
+      {
+        id: "sources",
+        label: "Config sources",
+        scope: "globals",
+        match: ["config_sources"],
+      },
       { id: "storage", label: "Storage", scope: "globals", match: ["storage"] },
     ],
   },
@@ -669,6 +1385,7 @@ const PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["outputs.", "channels"],
   ["prompts.", "prompts"],
   ["review.", "review"],
+  ["search.", "review"],
   ["agent.", "agent"],
   ["compression.", "agent"],
   ["workspaces.", "workspaces"],
@@ -798,7 +1515,9 @@ function humanize(token: string): string {
 
 /** English label from the last meaningful path token. */
 function labelFor(displayPath: string): string {
-  const tokens = tokensOf(displayPath).filter((token) => token !== "*" && token !== "[]");
+  const tokens = tokensOf(displayPath).filter(
+    (token) => token !== "*" && token !== "[]",
+  );
   // Every display path has at least one meaningful token (inventory/leaf paths).
   return humanize(tokens[tokens.length - 1]!);
 }
@@ -807,7 +1526,10 @@ function labelFor(displayPath: string): string {
 // Field builders
 // ---------------------------------------------------------------------------
 
-function mapValueKindFor(control: ConfigUiControlKind, valueKind: ConfigFieldSpec["valueKind"]): "string" | "number" | "record" | undefined {
+function mapValueKindFor(
+  control: ConfigUiControlKind,
+  valueKind: ConfigFieldSpec["valueKind"],
+): "string" | "number" | "record" | undefined {
   if (control !== "map") {
     return undefined;
   }
@@ -832,7 +1554,9 @@ interface InventoryFieldContext {
  * control pins the effective value shape; the spec valueKind follows the
  * control for scalar controls so validateUiSpec control parity holds.
  */
-const SCALAR_VALUE_KIND_BY_CONTROL: Readonly<Record<string, ConfigUiValueKind>> = {
+const SCALAR_VALUE_KIND_BY_CONTROL: Readonly<
+  Record<string, ConfigUiValueKind>
+> = {
   text: "string",
   document: "string",
   number: "number",
@@ -860,14 +1584,25 @@ const TRIGGER_REPOS_ITEM_FIELDS_BASE = [
   { key: "workspace", label: "Workspace", control: "select" as const },
 ];
 
-function buildInventoryField(row: ConfigFieldSpec, ctx: InventoryFieldContext): ConfigUiField {
+function buildInventoryField(
+  row: ConfigFieldSpec,
+  ctx: InventoryFieldContext,
+): ConfigUiField {
   // Scalar lists stay scalar arrays (design §2): ordered-list is for row objects.
-  const control = row.uiControl === "ordered-list" && row.valueKind !== "record" ? "multiselect" : row.uiControl;
+  const control =
+    row.uiControl === "ordered-list" && row.valueKind !== "record"
+      ? "multiselect"
+      : row.uiControl;
   const options = optionsForRow(row, ctx.leavesByPath);
   const optionsSource = optionsSourceForRow(row, control);
   const visibleWhen = visibleWhenFor(ctx.pageId, ctx.displayPath);
   const kinds = kindsForField(ctx.pageId, ctx.scope, ctx.displayPath);
-  const capability = capabilityForRow(row, ctx.pageId, ctx.scope, ctx.displayPath);
+  const capability = capabilityForRow(
+    row,
+    ctx.pageId,
+    ctx.scope,
+    ctx.displayPath,
+  );
   const readonlyReason = readonlyReasonForRow(row);
   const mapValueKind = mapValueKindFor(control, row.valueKind);
   const required = REQUIRED_ENTITY_KEYS[ctx.pageId];
@@ -882,8 +1617,15 @@ function buildInventoryField(row: ConfigFieldSpec, ctx: InventoryFieldContext): 
     // a stable label instead of humanizing the `*` marker.
     label: ctx.displayPath === "*" ? "Document" : labelFor(ctx.displayPath),
     section: ctx.sectionId,
-    optional: ctx.scope === "globals" || required === undefined || !required.includes(ctx.displayPath),
-    binding: row.inheritance.includes("defaults") || row.inheritance.includes("workspace") ? "inherit-or-override" : "value",
+    optional:
+      ctx.scope === "globals" ||
+      required === undefined ||
+      !required.includes(ctx.displayPath),
+    binding:
+      row.inheritance.includes("defaults") ||
+      row.inheritance.includes("workspace")
+        ? "inherit-or-override"
+        : "value",
     hasDefault: row.hasDefault,
     ...("defaultValue" in row ? { defaultValue: row.defaultValue } : {}),
     ...(options !== undefined ? { options } : {}),
@@ -893,11 +1635,15 @@ function buildInventoryField(row: ConfigFieldSpec, ctx: InventoryFieldContext): 
     ...(capability !== undefined ? { capability } : {}),
     ...(readonlyReason !== undefined ? { readonlyReason } : {}),
     ...(mapValueKind !== undefined ? { mapValueKind } : {}),
-    ...(isRepos ? { itemFields: buildTriggerReposItemFields(ctx.sectionId) } : {}),
+    ...(isRepos
+      ? { itemFields: buildTriggerReposItemFields(ctx.sectionId) }
+      : {}),
   };
 }
 
-function buildTriggerReposItemFields(sectionId: string): readonly ConfigUiField[] {
+function buildTriggerReposItemFields(
+  sectionId: string,
+): readonly ConfigUiField[] {
   return TRIGGER_REPOS_ITEM_FIELDS_BASE.map((base) => ({
     id: `trigger:repos[].${base.key}`,
     path: [base.key],
@@ -914,7 +1660,16 @@ function buildTriggerReposItemFields(sectionId: string): readonly ConfigUiField[
 }
 
 /** Synthetic map-collection name field (record key is the id; value holds no name). */
-function syntheticNameField(kind: "model_group" | "workspace" | "template" | "prompt" | "im_connection" | "im_command_binding", sectionId: string): ConfigUiField {
+function syntheticNameField(
+  kind:
+    | "model_group"
+    | "workspace"
+    | "template"
+    | "prompt"
+    | "im_connection"
+    | "im_command_binding",
+  sectionId: string,
+): ConfigUiField {
   return {
     id: `${kind}:$name`,
     path: [],
@@ -930,7 +1685,11 @@ function syntheticNameField(kind: "model_group" | "workspace" | "template" | "pr
 }
 
 const MODEL_CHAIN_ROW_PREFIX = "llm.model_chain.*[].";
-const MODEL_ENTRY_REQUIRED: Readonly<Record<string, true>> = { provider: true, model: true, role: true };
+const MODEL_ENTRY_REQUIRED: Readonly<Record<string, true>> = {
+  provider: true,
+  model: true,
+  role: true,
+};
 
 /** The single ordered-list field that IS the model_group record value (array). */
 function buildModelGroupEntriesField(
@@ -942,7 +1701,8 @@ function buildModelGroupEntriesField(
     const rel = row.path.slice(MODEL_CHAIN_ROW_PREFIX.length);
     const control = row.uiControl;
     const options = optionsForRow(row, leavesByPath);
-    const optionsSource = rel === "provider" ? "providers" : controlBasedOptionsSource(control);
+    const optionsSource =
+      rel === "provider" ? "providers" : controlBasedOptionsSource(control);
     const mapValueKind = mapValueKindFor(control, row.valueKind);
     return {
       id: `model_group:entries[].${rel}`,
@@ -1006,12 +1766,15 @@ function canonicalForRoutingPath(path: string): string | undefined {
 }
 
 /** Leaves that need a control the value kind alone cannot pick. */
-const ROUTING_CONTROL_OVERRIDES: Readonly<Record<string, ConfigUiControlKind>> = {
-  "match.source.repo_ref": "matcher",
-  workspace: "select",
-};
+const ROUTING_CONTROL_OVERRIDES: Readonly<Record<string, ConfigUiControlKind>> =
+  {
+    "match.source.repo_ref": "matcher",
+    workspace: "select",
+  };
 
-const DEFAULT_CONTROL_BY_VALUE_KIND: Readonly<Record<string, ConfigUiControlKind>> = {
+const DEFAULT_CONTROL_BY_VALUE_KIND: Readonly<
+  Record<string, ConfigUiControlKind>
+> = {
   boolean: "toggle",
   number: "number",
   enum: "select",
@@ -1022,9 +1785,15 @@ const DEFAULT_CONTROL_BY_VALUE_KIND: Readonly<Record<string, ConfigUiControlKind
   union: "matcher",
 };
 
-const ROUTE_REQUIRED_PATHS: Readonly<Record<string, true>> = { id: true, workspace: true };
+const ROUTE_REQUIRED_PATHS: Readonly<Record<string, true>> = {
+  id: true,
+  workspace: true,
+};
 
-function optionsForRoutingLeaf(leaf: SchemaFieldLeaf, canonical: string | undefined): readonly ConfigUiOption[] | undefined {
+function optionsForRoutingLeaf(
+  leaf: SchemaFieldLeaf,
+  canonical: string | undefined,
+): readonly ConfigUiOption[] | undefined {
   if (leaf.enumValues !== undefined) {
     return toOptions(leaf.enumValues);
   }
@@ -1041,14 +1810,24 @@ function optionsForRoutingLeaf(leaf: SchemaFieldLeaf, canonical: string | undefi
   return undefined;
 }
 
-function buildRoutingField(leaf: SchemaFieldLeaf, sectionId: string): ConfigUiField {
+function buildRoutingField(
+  leaf: SchemaFieldLeaf,
+  sectionId: string,
+): ConfigUiField {
   const valueKind = valueKindFromSchemaType(leaf.typeName);
   const canonical = canonicalForRoutingPath(leaf.path);
-  const canonicalRow = canonical === undefined ? undefined : CONFIG_FIELD_INVENTORY_BY_PATH.get(canonical);
+  const canonicalRow =
+    canonical === undefined
+      ? undefined
+      : CONFIG_FIELD_INVENTORY_BY_PATH.get(canonical);
   const control =
-    ROUTING_CONTROL_OVERRIDES[leaf.path] ?? canonicalRow?.uiControl ?? DEFAULT_CONTROL_BY_VALUE_KIND[valueKind] ?? "text";
+    ROUTING_CONTROL_OVERRIDES[leaf.path] ??
+    canonicalRow?.uiControl ??
+    DEFAULT_CONTROL_BY_VALUE_KIND[valueKind] ??
+    "text";
   const options = optionsForRoutingLeaf(leaf, canonical);
-  const optionsSource = ROUTING_OPTIONS_SOURCE[leaf.path] ?? controlBasedOptionsSource(control);
+  const optionsSource =
+    ROUTING_OPTIONS_SOURCE[leaf.path] ?? controlBasedOptionsSource(control);
   const tokens = concreteTokensOf(leaf.path);
   const capability = canonicalRow?.capability;
   return {
@@ -1060,7 +1839,9 @@ function buildRoutingField(leaf: SchemaFieldLeaf, sectionId: string): ConfigUiFi
     label: labelFor(leaf.path),
     section: sectionId,
     optional: leaf.hasDefault || ROUTE_REQUIRED_PATHS[leaf.path] !== true,
-    binding: leaf.path.startsWith("analysis.") ? "inherit-or-override" : "value",
+    binding: leaf.path.startsWith("analysis.")
+      ? "inherit-or-override"
+      : "value",
     hasDefault: leaf.hasDefault,
     ...("defaultValue" in leaf ? { defaultValue: leaf.defaultValue } : {}),
     ...(options !== undefined ? { options } : {}),
@@ -1087,20 +1868,38 @@ interface MutableSection {
   readonly fields: ConfigUiField[];
 }
 
-function buildEntityMeta(pageId: string, layout: ConfigUiEntityLayout): NonNullable<ConfigUiPage["entity"]> {
+function buildEntityMeta(
+  pageId: string,
+  layout: ConfigUiEntityLayout,
+): NonNullable<ConfigUiPage["entity"]> {
   return {
     kind: layout.kind,
     collection: layout.collection,
     idField: layout.idField,
     valueShape: layout.valueShape,
-    ...(layout.kindField !== undefined ? { kindField: layout.kindField, kindOptions: kindOptionsForPage(pageId) } : {}),
+    ...(layout.kindField !== undefined
+      ? { kindField: layout.kindField, kindOptions: kindOptionsForPage(pageId) }
+      : {}),
   };
 }
 
-function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage {
-  const sections: MutableSection[] = layout.sections.map((section) => ({ ...section, fields: [] }));
-  const place = (scope: "entity" | "globals", displayPath: string): MutableSection =>
-    sections.find((section) => section.scope === scope && section.match.some((prefix) => displayPath.startsWith(prefix)))!;
+function buildPage(
+  layout: ConfigUiPageLayout,
+  ctx: BuildContext,
+): ConfigUiPage {
+  const sections: MutableSection[] = layout.sections.map((section) => ({
+    ...section,
+    fields: [],
+  }));
+  const place = (
+    scope: "entity" | "globals",
+    displayPath: string,
+  ): MutableSection =>
+    sections.find(
+      (section) =>
+        section.scope === scope &&
+        section.match.some((prefix) => displayPath.startsWith(prefix)),
+    )!;
 
   if (layout.entity?.kind === "route") {
     for (const leaf of ctx.routingLeaves) {
@@ -1112,16 +1911,28 @@ function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage 
       if (pageIdForRow(row) !== layout.id) {
         continue;
       }
-      if (layout.id === "model-groups" && row.path.startsWith(MODEL_CHAIN_ROW_PREFIX)) {
+      if (
+        layout.id === "model-groups" &&
+        row.path.startsWith(MODEL_CHAIN_ROW_PREFIX)
+      ) {
         continue; // materialized as itemFields of the entries ordered-list
       }
       const entity = layout.entity;
       const scope: "entity" | "globals" =
-        entity !== undefined && row.entityKind === entity.kind && !isBootstrapReadonly(row) ? "entity" : "globals";
-      const displayPath = scope === "entity" ? row.path.slice(ENTITY_PATH_PREFIX[layout.id]!.length) : row.path;
+        entity !== undefined &&
+        row.entityKind === entity.kind &&
+        !isBootstrapReadonly(row)
+          ? "entity"
+          : "globals";
+      const displayPath =
+        scope === "entity"
+          ? row.path.slice(ENTITY_PATH_PREFIX[layout.id]!.length)
+          : row.path;
       const tokens = tokensOf(row.path);
       const fieldId =
-        scope === "entity" ? `${entity!.kind}:${displayPath}` : `${tokens[0]!}:${dotted(tokens.slice(1))}`;
+        scope === "entity"
+          ? `${entity!.kind}:${displayPath}`
+          : `${tokens[0]!}:${dotted(tokens.slice(1))}`;
       const section = place(scope, displayPath);
       section.fields.push(
         buildInventoryField(row, {
@@ -1130,17 +1941,30 @@ function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage 
           scope,
           displayPath,
           fieldId,
-          pathTokens: scope === "entity" ? concreteTokensOf(displayPath) : concreteTokensOf(row.path),
+          pathTokens:
+            scope === "entity"
+              ? concreteTokensOf(displayPath)
+              : concreteTokensOf(row.path),
           sectionId: section.id,
         }),
       );
     }
     if (layout.id === "model-groups") {
       const nameSection = place("entity", "$name");
-      nameSection.fields.push(syntheticNameField("model_group", nameSection.id));
-      const entryRows = CONFIG_FIELD_INVENTORY.filter((row) => row.path.startsWith(MODEL_CHAIN_ROW_PREFIX));
+      nameSection.fields.push(
+        syntheticNameField("model_group", nameSection.id),
+      );
+      const entryRows = CONFIG_FIELD_INVENTORY.filter((row) =>
+        row.path.startsWith(MODEL_CHAIN_ROW_PREFIX),
+      );
       const entriesSection = place("entity", "entries");
-      entriesSection.fields.push(buildModelGroupEntriesField(entryRows, ctx.leavesByPath, entriesSection.id));
+      entriesSection.fields.push(
+        buildModelGroupEntriesField(
+          entryRows,
+          ctx.leavesByPath,
+          entriesSection.id,
+        ),
+      );
     }
     if (layout.id === "workspaces") {
       const nameSection = place("entity", "$name");
@@ -1156,11 +1980,15 @@ function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage 
     }
     if (layout.id === "im-connections") {
       const nameSection = place("entity", "$name");
-      nameSection.fields.push(syntheticNameField("im_connection", nameSection.id));
+      nameSection.fields.push(
+        syntheticNameField("im_connection", nameSection.id),
+      );
     }
     if (layout.id === "im-bindings") {
       const nameSection = place("entity", "$name");
-      nameSection.fields.push(syntheticNameField("im_command_binding", nameSection.id));
+      nameSection.fields.push(
+        syntheticNameField("im_command_binding", nameSection.id),
+      );
     }
   }
 
@@ -1173,14 +2001,19 @@ function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage 
   return {
     id: layout.id,
     label: layout.label,
-    ...(layout.entity !== undefined ? { entity: buildEntityMeta(layout.id, layout.entity) } : {}),
+    ...(layout.entity !== undefined
+      ? { entity: buildEntityMeta(layout.id, layout.entity) }
+      : {}),
     ...(layout.globals === true ? { globals: true } : {}),
     sections: finalSections,
   };
 }
 
 /** Turn schema family paths into actual array/map controls, retaining every leaf id. */
-function nestCollectionFields(fields: readonly ConfigUiField[], prefix = ""): ConfigUiField[] {
+function nestCollectionFields(
+  fields: readonly ConfigUiField[],
+  prefix = "",
+): ConfigUiField[] {
   const result: ConfigUiField[] = [];
   const groups = new Map<string, { marker: string; fields: ConfigUiField[] }>();
   for (const field of fields) {
@@ -1188,10 +2021,18 @@ function nestCollectionFields(fields: readonly ConfigUiField[], prefix = ""): Co
     const match = /\[\]\.|\.\*\./u.exec(relative);
     if (!match) {
       // A wildcard leaf edits the entire map, e.g. workspace match.source.*.
-      result.push(field.id.endsWith(".*") && field.control !== "map" ? {
-        ...field, control: "map", valueKind: "record",
-        mapValueKind: field.id.endsWith("web_search.credentials.*") ? "credential" : "record",
-      } : field);
+      result.push(
+        field.id.endsWith(".*") && field.control !== "map"
+          ? {
+              ...field,
+              control: "map",
+              valueKind: "record",
+              mapValueKind: field.id.endsWith("web_search.credentials.*")
+                ? "credential"
+                : "record",
+            }
+          : field,
+      );
       continue;
     }
     const id = prefix + relative.slice(0, match.index);
@@ -1203,16 +2044,32 @@ function nestCollectionFields(fields: readonly ConfigUiField[], prefix = ""): Co
     const first = group.fields[0]!;
     const relative = id.slice(prefix.length).replace(/^[^:]+:/u, "");
     const childPrefix = id + group.marker;
-    const path = first.path.slice(0, first.path.length - concreteTokensOf(first.id.slice(childPrefix.length)).length);
+    const path = first.path.slice(
+      0,
+      first.path.length -
+        concreteTokensOf(first.id.slice(childPrefix.length)).length,
+    );
     result.push({
-      id, path, label: labelFor(relative), labelKey: id, section: first.section,
-      control: group.marker === "[]." ? "ordered-list" : "map", valueKind: "record",
-      optional: true, binding: first.binding, hasDefault: false,
+      id,
+      path,
+      label: labelFor(relative),
+      labelKey: id,
+      section: first.section,
+      control: group.marker === "[]." ? "ordered-list" : "map",
+      valueKind: "record",
+      optional: true,
+      binding: first.binding,
+      hasDefault: false,
       ...(first.readonlyReason ? { readonlyReason: first.readonlyReason } : {}),
       ...(group.marker === ".*." ? { mapValueKind: "record" as const } : {}),
-      itemFields: nestCollectionFields(group.fields.map(field => ({
-        ...field, path: concreteTokensOf(field.id.slice(childPrefix.length)), binding: "value" as const,
-      })), childPrefix),
+      itemFields: nestCollectionFields(
+        group.fields.map((field) => ({
+          ...field,
+          path: concreteTokensOf(field.id.slice(childPrefix.length)),
+          binding: "value" as const,
+        })),
+        childPrefix,
+      ),
     });
   }
   return result;
@@ -1233,7 +2090,9 @@ export function buildConfigUiSpec(): ConfigUiSpec {
     collectSchemaFieldPaths(appConfigSchema).map((leaf) => [leaf.path, leaf]),
   );
   const routingLeaves = collectSchemaFieldPaths(routingRuleSchema);
-  const unassigned = CONFIG_FIELD_INVENTORY.filter((row) => pageIdForRow(row) === undefined);
+  const unassigned = CONFIG_FIELD_INVENTORY.filter(
+    (row) => pageIdForRow(row) === undefined,
+  );
   /* v8 ignore next -- builder-side guard (design §3); unreachable while PAGE_ASSIGNMENT covers the inventory */
   if (unassigned.length > 0) {
     throw new ConfigError(

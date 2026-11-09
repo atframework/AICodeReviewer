@@ -56,12 +56,23 @@ For example, before reporting `processOrder(order)` with a possibly null value,
 read both the caller's guard and the callee's null handling. If either makes the
 suspected failure impossible, skip it silently.
 
-Use read-only shell inspection on materialized files: `rg`, `fd`,
-`bat --paging=never --style=plain`, `jq`, and Mike Farah `yq`. These tools ship in
-the review image; elsewhere use available native/portable equivalents when
-needed. Keep commands non-interactive and output bounded. For Helm/Kubernetes,
-prefer offline `helm template`, `helm lint`, or `kubectl kustomize`; contact a
-live cluster only when the task and credentials explicitly require it.
+Use read-only shell inspection on materialized files. Modern tools ship in the
+review image: `rg`, `fd`, `bat --paging=never --style=plain`, `jq`, Mike Farah
+`yq`, `eza`, `git-delta`, `difft`, and `tgrep`; elsewhere use available
+native/portable equivalents when needed. Keep commands non-interactive and
+output bounded. For Helm/Kubernetes, prefer offline `helm template`,
+`helm lint`, or `kubectl kustomize`; contact a live cluster only when the task
+and credentials explicitly require it.
+
+When the task context announces a tgrep index, prefer `aicr.search_code` (or
+shell `tgrep`) for repository-wide or repeated searches: its trigram index
+covers the full reviewed head, not just the changed files, and narrows
+candidates before regex verification. Use literal-string matching for exact
+symbols and narrow with globs before limiting output. The index is a snapshot,
+not a freshness signal: it refreshes asynchronously, so always verify the exact
+current line through `aicr.fetch_more_context`, direct file reads, or
+`tgrep --no-index` before anchoring a problem report. When no index is
+announced, use `rg` on materialized files and context requests as usual.
 
 Fetch missing/truncated changed files with `aicr.fetch_more_context(path, reason)`;
 omit `range` for the full file. Request related files outside the change only
@@ -119,6 +130,9 @@ Formal review output uses AICR tools:
 - `aicr.skip(reason="no_reviewable_code")`: no code/content worth reviewing.
 - `aicr.fetch_more_context` / `aicr.try_blame`: justified context requests as above.
 - `aicr.get_review_commits` / `aicr.get_review_context`: review metadata as above.
+- `aicr.search_code`: indexed repository search when the task context announces
+  a tgrep index; returns matched lines with file and line numbers. Verify the
+  current content of a match before reporting it.
 
 Never ask humans to paste source/diffs that approved tools can fetch. Before
 claiming missing access, inspect materialized files and request the concrete path.

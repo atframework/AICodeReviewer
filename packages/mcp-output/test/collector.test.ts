@@ -123,6 +123,7 @@ describe("AicrOutputCollector", () => {
       "aicr.skip",
       "aicr.fetch_more_context",
       "aicr.try_blame",
+      "aicr.search_code",
     ]);
     expect(tools.find(tool => tool.name === "aicr.report_problem")?.inputSchema).toMatchObject({
       required: ["file", "line", "severity", "category", "message"],

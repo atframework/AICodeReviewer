@@ -118,7 +118,7 @@ a different version.
 | `NPM_STRICT_SSL` | `true` | Set to `false` when using an HTTP mirror |
 | `PIP_INDEX_URL` | `https://pypi.org/simple` | pip simple index URL |
 | `KUBERNETES_APT_REPO_BASE` | `https://pkgs.k8s.io/core:/stable:` | kubectl APT repo base (must end in `core:/stable:`) |
-| `KUBERNETES_APT_REPO_VERSION` | `v1.36` | Kubernetes minor repo for kubectl |
+| `KUBERNETES_APT_REPO_VERSION` | `v1.37` | Kubernetes minor repo for kubectl |
 | `HELM_APT_REPO` | `https://packages.buildkite.com/helm-linux/helm-debian/any/` | Helm Debian package repo |
 | `HELM_APT_KEY_URL` | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | Helm repo signing key |
 | `YQ_VERSION` | `v4.53.2` | Mike Farah `yq` release version |

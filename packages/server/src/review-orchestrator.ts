@@ -1,7 +1,22 @@
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
@@ -30,10 +45,24 @@ import {
   type ScrubMatch,
   type WorkspaceLayout,
 } from "@aicr/core";
-import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions, AgentWebSearchOptions } from "@aicr/agents";
-import { materializeRuntimeBundle, OMP_AGENT_DIR_NAME, PI_AGENT_DIR_NAME } from "@aicr/agents";
+import type {
+  AgentAdapter,
+  AgentCompactionOptions,
+  AgentSpawnOptions,
+  AgentWebSearchOptions,
+} from "@aicr/agents";
+import {
+  materializeRuntimeBundle,
+  OMP_AGENT_DIR_NAME,
+  PI_AGENT_DIR_NAME,
+} from "@aicr/agents";
 import { createReviewDataHandler } from "./review-data.js";
-import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
+import type {
+  RuntimeBundleInstruction,
+  RuntimeBundleMcpServer,
+  RuntimeBundleMcpTool,
+  RuntimeBundleSkill,
+} from "@aicr/agents";
 import {
   type ChatCompletionClient,
   type ChatCompletionResult,
@@ -51,6 +80,7 @@ import {
 import {
   AicrOutputCollector,
   createAicrOutputToolRegistry,
+  executeTgrepSearch,
   type AicrOutputToolDefinition,
   type AicrOutputToolName,
   type AicrOutputState,
@@ -59,6 +89,11 @@ import {
   type ReportProblemInput,
   type TryBlameInput,
 } from "@aicr/mcp-output";
+import {
+  buildTgrepGuidance,
+  type TgrepPrepareInput,
+  type TgrepSearchHandle,
+} from "./tgrep-index.js";
 import {
   buildAtMentions,
   buildTemplateTargetContext,
@@ -70,8 +105,16 @@ import {
   type TemplateResolver,
   type MentionChannelKind,
 } from "@aicr/outputs";
-import type { DispatchResult, PublicationJournal, ReviewProblem } from "@aicr/outputs";
-import type { SandboxBackend, SandboxMountSpec, SandboxSpawnResult } from "@aicr/sandbox";
+import type {
+  DispatchResult,
+  PublicationJournal,
+  ReviewProblem,
+} from "@aicr/outputs";
+import type {
+  SandboxBackend,
+  SandboxMountSpec,
+  SandboxSpawnResult,
+} from "@aicr/sandbox";
 import {
   materializeContextRepositories,
   type AttributionRequest,
@@ -84,12 +127,19 @@ import {
   type VcsAdapter,
 } from "@aicr/vcs";
 
-import type { LiveRunMetrics, LiveRunRegistry, LiveRunSource } from "./live-runs.js";
+import type {
+  LiveRunMetrics,
+  LiveRunRegistry,
+  LiveRunSource,
+} from "./live-runs.js";
 import { ReviewCancelledError } from "./live-runs.js";
 import { applyReviewCommitPolicy } from "./review-commit-policy.js";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
-  diff?(range: ChangeRange, options?: { readonly contextLines?: number }): Promise<ParsedDiff>;
+  diff?(
+    range: ChangeRange,
+    options?: { readonly contextLines?: number },
+  ): Promise<ParsedDiff>;
 }
 
 export type ReviewDispatchResult = DispatchResult | readonly DispatchResult[];
@@ -108,22 +158,26 @@ export interface ReviewOutputPublisher {
   readonly reconcilesManagedIssues?: boolean;
   readonly noProblemsAction?: "publish" | "suppress" | "publish_if_summary";
   publishProblem?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
-  publishSummary?(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<ReviewDispatchResult>;
+  publishSummary?(
+    summary: string,
+    problems?: readonly ReviewProblem[],
+    options?: ReviewSummaryPublishOptions,
+  ): Promise<ReviewDispatchResult>;
 }
 
 export interface ReviewSummaryPublishOptions {
-	/** Internal recovery boundary: earlier summaries do not confirm the channel. */
-	readonly finalForChannel?: boolean;
-	readonly bypassNoProblemsPolicy?: boolean;
-	readonly skipReconcile?: boolean;
-	readonly title?: string;
-	readonly reviewedFiles?: readonly string[];
-	/**
-	 * URL of the full report already published to an issue-recording platform in
-	 * the same run. Feishu, Slack, Discord and Telegram use it to send brief notifications
-	 * instead of duplicating the full analysis.
-	 */
-	readonly summaryIssueUrl?: string;
+  /** Internal recovery boundary: earlier summaries do not confirm the channel. */
+  readonly finalForChannel?: boolean;
+  readonly bypassNoProblemsPolicy?: boolean;
+  readonly skipReconcile?: boolean;
+  readonly title?: string;
+  readonly reviewedFiles?: readonly string[];
+  /**
+   * URL of the full report already published to an issue-recording platform in
+   * the same run. Feishu, Slack, Discord and Telegram use it to send brief notifications
+   * instead of duplicating the full analysis.
+   */
+  readonly summaryIssueUrl?: string;
 }
 
 export type ReviewOutputPublisherResolver = (
@@ -164,7 +218,11 @@ export interface ReviewOrchestrationContext {
     readonly remote?: PublicationJournal;
     readonly skipChannels?: readonly string[];
     readonly onChannelStart?: (channel: string) => void | Promise<void>;
-    readonly onChannelResult?: (result: DispatchResult, phase: "problem" | "summary", finalForChannel?: boolean) => void | Promise<void>;
+    readonly onChannelResult?: (
+      result: DispatchResult,
+      phase: "problem" | "summary",
+      finalForChannel?: boolean,
+    ) => void | Promise<void>;
   };
 }
 
@@ -172,24 +230,48 @@ export interface ServerReviewOrchestrationOptions {
   readonly signal?: AbortSignal | undefined;
   readonly executionConcurrency?: ExecutionConcurrency;
   /** Hold the task's generation lease across options resolution and execution. */
-  readonly executionScope?: (<T>(context: ReviewOrchestrationContext, run: () => Promise<T>) => Promise<T>) | undefined;
+  readonly executionScope?:
+    | (<T>(
+        context: ReviewOrchestrationContext,
+        run: () => Promise<T>,
+      ) => Promise<T>)
+    | undefined;
   readonly baseSystemPrompt: string;
-  readonly baseSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
+  readonly baseSystemPromptResolver?: (
+    workspaceId: string,
+  ) => Promise<string | undefined> | string | undefined;
   /**
    * Workspace extra system prompt (named prompts.system reference), appended
    * after the resolved base prompt — built-in or workspace override alike.
    */
-  readonly extraSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
-  readonly forceSkillsResolver?: (workspaceId: string) => readonly string[] | undefined;
+  readonly extraSystemPromptResolver?: (
+    workspaceId: string,
+  ) => Promise<string | undefined> | string | undefined;
+  readonly forceSkillsResolver?: (
+    workspaceId: string,
+  ) => readonly string[] | undefined;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
+  /**
+   * Optional tgrep index provider (architecture §3.17). Called once per git
+   * review with the workspace layout and head revision; undefined disables
+   * indexed search (the tool then returns a degraded guidance message).
+   */
+  readonly tgrepSearch?: (
+    input: TgrepPrepareInput,
+  ) => Promise<TgrepSearchHandle | undefined>;
   /**
    * Explicit workspace layout resolver (P1b). When present, its layout wins
    * over the source-dir-name inference (deriveWorkspaceRoot) so isolated_v2
    * instances never rely on path-shape conventions.
    */
-  readonly runtimeDirsResolver?: (reviewEvent: ReviewEvent) => WorkspaceLayout | undefined;
+  readonly runtimeDirsResolver?: (
+    reviewEvent: ReviewEvent,
+  ) => WorkspaceLayout | undefined;
   readonly vcs: DiffCapableVcsAdapter;
-  readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => Promise<DiffCapableVcsAdapter> | DiffCapableVcsAdapter;
+  readonly vcsFactory?: (
+    sourceRoot: string,
+    context: ReviewOrchestrationContext,
+  ) => Promise<DiffCapableVcsAdapter> | DiffCapableVcsAdapter;
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
   /** Ordered models available to agent-backed reviews; the first entry is the normal route. */
@@ -197,9 +279,16 @@ export interface ServerReviewOrchestrationOptions {
   readonly beforeAgentCall?: (model: ModelSpec) => Promise<void>;
   readonly onAgentCost?: (costUsd: number) => void;
   /** Resolve once per run; all model-dependent options belong to that workspace. */
-  readonly modelOptionsResolver?: (workspaceId: string) => Pick<
+  readonly modelOptionsResolver?: (
+    workspaceId: string,
+  ) => Pick<
     ServerReviewOrchestrationOptions,
-    "llm" | "model" | "agentModelChain" | "compression" | "summarizeModel" | "summarizeClient"
+    | "llm"
+    | "model"
+    | "agentModelChain"
+    | "compression"
+    | "summarizeModel"
+    | "summarizeClient"
   >;
   /**
    * Resolve once per run (P4 execution plan): returns per-task overrides for
@@ -211,7 +300,9 @@ export interface ServerReviewOrchestrationOptions {
    */
   readonly optionsResolver?: (
     context: ReviewOrchestrationContext,
-  ) => Promise<Partial<ServerReviewOrchestrationOptions>> | Partial<ServerReviewOrchestrationOptions>;
+  ) =>
+    | Promise<Partial<ServerReviewOrchestrationOptions>>
+    | Partial<ServerReviewOrchestrationOptions>;
   readonly outputPublisher?: ReviewOutputPublisher;
   readonly outputPublisherResolver?: ReviewOutputPublisherResolver;
   /**
@@ -231,18 +322,29 @@ export interface ServerReviewOrchestrationOptions {
    * starts. Used by the auto-commit executor to durably record the
    * publishable payload and per-channel intent before any remote call.
    */
-  readonly onAnalysisComplete?: (outputState: AicrOutputState, analysis?: ReviewAnalysisSnapshot) => void | Promise<void>;
-  readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
+  readonly onAnalysisComplete?: (
+    outputState: AicrOutputState,
+    analysis?: ReviewAnalysisSnapshot,
+  ) => void | Promise<void>;
+  readonly changedPathsResolver?: (
+    context: ReviewOrchestrationContext,
+  ) => readonly string[] | undefined;
   readonly operatorOverrides?: readonly string[];
   readonly memoryHints?: readonly string[];
-  readonly memoryHintsResolver?: (workspaceId: string) => Promise<readonly string[]> | readonly string[];
-  readonly postRunCallback?: (result: ReviewOrchestrationResult, context: ReviewOrchestrationContext) => Promise<void>;
+  readonly memoryHintsResolver?: (
+    workspaceId: string,
+  ) => Promise<readonly string[]> | readonly string[];
+  readonly postRunCallback?: (
+    result: ReviewOrchestrationResult,
+    context: ReviewOrchestrationContext,
+  ) => Promise<void>;
   readonly maxPromptTokens?: number;
   readonly diffContextLines?: number;
   readonly dryRun?: boolean;
   readonly sandbox?: SandboxBackend;
   /** One stateful backend per orchestration; a native-llm generation clears this factory. */
-  readonly sandboxFactory?: (() => Promise<SandboxBackend> | SandboxBackend) | undefined;
+  readonly sandboxFactory?:
+    (() => Promise<SandboxBackend> | SandboxBackend) | undefined;
   readonly agentAdapter?: AgentAdapter | undefined;
   readonly agentTimeoutMs?: number;
   readonly agentAutoApprove?: boolean;
@@ -288,7 +390,9 @@ export interface ServerReviewOrchestrationOptions {
    * layered resolution in bootstrap. Returned policy must already be the
    * global → defaults → instance merge (resolveAnalysisSelection).
    */
-  readonly reviewPolicyResolver?: (workspaceId: string) => ReviewPathPolicy | undefined;
+  readonly reviewPolicyResolver?: (
+    workspaceId: string,
+  ) => ReviewPathPolicy | undefined;
   readonly outputLanguage?: string;
   readonly logThinking?: boolean;
   /**
@@ -303,11 +407,16 @@ export interface ServerReviewOrchestrationOptions {
    * reads the database, never process memory). The completion path replaces
    * the marker row with the full terminal record.
    */
-  readonly onExecutionStart?: ((info: {
-    readonly runId: string;
-    readonly reviewEvent: ReviewEvent;
-    readonly model: { readonly providerId: string; readonly modelId: string };
-  }) => Promise<void>) | undefined;
+  readonly onExecutionStart?:
+    | ((info: {
+        readonly runId: string;
+        readonly reviewEvent: ReviewEvent;
+        readonly model: {
+          readonly providerId: string;
+          readonly modelId: string;
+        };
+      }) => Promise<void>)
+    | undefined;
 }
 
 export interface ReviewOrchestrationResult {
@@ -371,7 +480,8 @@ export interface ReviewOrchestrationWebhookUsage {
  * `promptTokenEstimate` remains a separate planning metric and must not be presented
  * as billable usage.
  */
-export type ReviewOrchestrationUsageSource = "llm_gateway" | "agent_stdout" | "mixed";
+export type ReviewOrchestrationUsageSource =
+  "llm_gateway" | "agent_stdout" | "mixed";
 
 export interface ReviewOrchestrationWebhookSummary {
   readonly configVersion?: ExecutionConfigVersion;
@@ -465,7 +575,10 @@ interface ReviewCompletionResult {
   readonly fallbackCount?: number;
 }
 
-type ConcreteReviewUsageSource = Exclude<ReviewOrchestrationUsageSource, "mixed">;
+type ConcreteReviewUsageSource = Exclude<
+  ReviewOrchestrationUsageSource,
+  "mixed"
+>;
 
 interface ReviewRunMetricsAccumulator {
   promptTokens: number;
@@ -521,7 +634,9 @@ function createReviewRunMetricsAccumulator(): ReviewRunMetricsAccumulator {
 }
 
 function finiteNonNegativeMetric(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 /**
@@ -540,12 +655,17 @@ function accumulateReviewCompletionMetrics(
     const promptTokens = finiteNonNegativeMetric(usage.promptTokens);
     const completionTokens = finiteNonNegativeMetric(usage.completionTokens);
     const reportedTotalTokens = finiteNonNegativeMetric(usage.totalTokens);
-    const totalTokens = reportedTotalTokens
-      ?? (promptTokens !== undefined || completionTokens !== undefined
+    const totalTokens =
+      reportedTotalTokens ??
+      (promptTokens !== undefined || completionTokens !== undefined
         ? (promptTokens ?? 0) + (completionTokens ?? 0)
         : undefined);
-    const cachedPromptTokens = finiteNonNegativeMetric(usage.cachedPromptTokens);
-    const cacheCreationTokens = finiteNonNegativeMetric(usage.cacheCreationTokens);
+    const cachedPromptTokens = finiteNonNegativeMetric(
+      usage.cachedPromptTokens,
+    );
+    const cacheCreationTokens = finiteNonNegativeMetric(
+      usage.cacheCreationTokens,
+    );
 
     if (promptTokens !== undefined) {
       accumulator.promptTokens += promptTokens;
@@ -568,13 +688,15 @@ function accumulateReviewCompletionMetrics(
       accumulator.hasCacheCreationTokens = true;
     }
     if (
-      promptTokens !== undefined
-      || completionTokens !== undefined
-      || totalTokens !== undefined
-      || cachedPromptTokens !== undefined
-      || cacheCreationTokens !== undefined
+      promptTokens !== undefined ||
+      completionTokens !== undefined ||
+      totalTokens !== undefined ||
+      cachedPromptTokens !== undefined ||
+      cacheCreationTokens !== undefined
     ) {
-      accumulator.usageSources.add(completion.agentResult ? "agent_stdout" : "llm_gateway");
+      accumulator.usageSources.add(
+        completion.agentResult ? "agent_stdout" : "llm_gateway",
+      );
     }
   }
 
@@ -584,7 +706,9 @@ function accumulateReviewCompletionMetrics(
     readonly fallbackCount?: unknown;
   };
   const estimatedCostUsd = finiteNonNegativeMetric(
-    completion.agentResult ? completion.estimatedCostUsd : gatewayResult.estimatedCostUsd,
+    completion.agentResult
+      ? completion.estimatedCostUsd
+      : gatewayResult.estimatedCostUsd,
   );
   if (estimatedCostUsd !== undefined) {
     accumulator.estimatedCostUsd += estimatedCostUsd;
@@ -593,7 +717,8 @@ function accumulateReviewCompletionMetrics(
 
   if (completion.agentResult) {
     const requestCount = finiteNonNegativeMetric(completion.requestCount);
-    if (requestCount !== undefined) accumulator.requestCount += Math.trunc(requestCount);
+    if (requestCount !== undefined)
+      accumulator.requestCount += Math.trunc(requestCount);
     const fallbackCount = finiteNonNegativeMetric(completion.fallbackCount);
     if (fallbackCount !== undefined) {
       accumulator.fallbackCount += Math.trunc(fallbackCount);
@@ -617,35 +742,62 @@ function accumulateReviewCompletionMetrics(
   }
 }
 
-function finalizeReviewRunMetrics(accumulator: ReviewRunMetricsAccumulator): ReviewRunMetrics {
-  const hasUsage = accumulator.hasPromptTokens
-    || accumulator.hasCompletionTokens
-    || accumulator.hasTotalTokens
-    || accumulator.hasCachedPromptTokens
-    || accumulator.hasCacheCreationTokens;
-  const usageSource: ReviewOrchestrationUsageSource | undefined = accumulator.usageSources.size > 1
-    ? "mixed"
-    : accumulator.usageSources.values().next().value;
+function finalizeReviewRunMetrics(
+  accumulator: ReviewRunMetricsAccumulator,
+): ReviewRunMetrics {
+  const hasUsage =
+    accumulator.hasPromptTokens ||
+    accumulator.hasCompletionTokens ||
+    accumulator.hasTotalTokens ||
+    accumulator.hasCachedPromptTokens ||
+    accumulator.hasCacheCreationTokens;
+  const usageSource: ReviewOrchestrationUsageSource | undefined =
+    accumulator.usageSources.size > 1
+      ? "mixed"
+      : accumulator.usageSources.values().next().value;
 
   return {
-    ...(hasUsage ? {
-      usage: {
-        ...(accumulator.hasPromptTokens ? { promptTokens: accumulator.promptTokens } : {}),
-        ...(accumulator.hasCompletionTokens ? { completionTokens: accumulator.completionTokens } : {}),
-        ...(accumulator.hasTotalTokens ? { totalTokens: accumulator.totalTokens } : {}),
-        ...(accumulator.hasCachedPromptTokens ? { cachedPromptTokens: accumulator.cachedPromptTokens } : {}),
-        ...(accumulator.hasCacheCreationTokens ? { cacheCreationTokens: accumulator.cacheCreationTokens } : {}),
-      },
-    } : {}),
+    ...(hasUsage
+      ? {
+          usage: {
+            ...(accumulator.hasPromptTokens
+              ? { promptTokens: accumulator.promptTokens }
+              : {}),
+            ...(accumulator.hasCompletionTokens
+              ? { completionTokens: accumulator.completionTokens }
+              : {}),
+            ...(accumulator.hasTotalTokens
+              ? { totalTokens: accumulator.totalTokens }
+              : {}),
+            ...(accumulator.hasCachedPromptTokens
+              ? { cachedPromptTokens: accumulator.cachedPromptTokens }
+              : {}),
+            ...(accumulator.hasCacheCreationTokens
+              ? { cacheCreationTokens: accumulator.cacheCreationTokens }
+              : {}),
+          },
+        }
+      : {}),
     ...(usageSource ? { usageSource } : {}),
-    ...(accumulator.hasEstimatedCostUsd ? { estimatedCostUsd: accumulator.estimatedCostUsd } : {}),
-    ...(accumulator.requestCount > 0 ? { requestCount: accumulator.requestCount } : {}),
-    ...(accumulator.hasRetryCount ? { retryCount: accumulator.retryCount } : {}),
-    ...(accumulator.hasFallbackCount ? { fallbackCount: accumulator.fallbackCount } : {}),
+    ...(accumulator.hasEstimatedCostUsd
+      ? { estimatedCostUsd: accumulator.estimatedCostUsd }
+      : {}),
+    ...(accumulator.requestCount > 0
+      ? { requestCount: accumulator.requestCount }
+      : {}),
+    ...(accumulator.hasRetryCount
+      ? { retryCount: accumulator.retryCount }
+      : {}),
+    ...(accumulator.hasFallbackCount
+      ? { fallbackCount: accumulator.fallbackCount }
+      : {}),
   };
 }
 
-function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: string }): string {
+function formatFilePath(file: {
+  readonly oldPath?: string;
+  readonly newPath?: string;
+}): string {
   if (file.oldPath && file.newPath && file.oldPath !== file.newPath) {
     return `${file.oldPath} -> ${file.newPath}`;
   }
@@ -653,7 +805,9 @@ function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: st
   return file.newPath ?? file.oldPath ?? "(unknown)";
 }
 
-export function formatParsedDiffForPrompt(diff: ParsedDiff | undefined): string {
+export function formatParsedDiffForPrompt(
+  diff: ParsedDiff | undefined,
+): string {
   if (!diff || diff.files.length === 0) {
     return "Diff: (not available)";
   }
@@ -666,14 +820,20 @@ export function formatParsedDiffForPrompt(diff: ParsedDiff | undefined): string 
     lines.push(`- ${file.status}: ${formatFilePath(file)}`);
     for (const hunk of file.hunks) {
       const section = hunk.section ? ` ${hunk.section}` : "";
-      lines.push(`  @@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@${section}`);
+      lines.push(
+        `  @@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@${section}`,
+      );
       for (const line of hunk.lines) {
         if (line.kind === "add") {
           lines.push(`  +${line.newLine ?? "?"}: ${line.content}`);
         } else if (line.kind === "delete") {
-          lines.push(`  -${line.oldLine ?? "?"}: ${line.content}  [deleted old code; not current]`);
+          lines.push(
+            `  -${line.oldLine ?? "?"}: ${line.content}  [deleted old code; not current]`,
+          );
         } else if (line.kind === "context") {
-          lines.push(`   ${line.newLine ?? line.oldLine ?? "?"}: ${line.content}`);
+          lines.push(
+            `   ${line.newLine ?? line.oldLine ?? "?"}: ${line.content}`,
+          );
         }
       }
     }
@@ -733,10 +893,15 @@ function buildTaskContext(
 
 function deriveWorkspaceRoot(sourceRoot: string): string {
   const sourceParent = dirname(sourceRoot);
-  return basename(sourceParent) === "source" ? dirname(sourceParent) : sourceRoot;
+  return basename(sourceParent) === "source"
+    ? dirname(sourceParent)
+    : sourceRoot;
 }
 
-function deriveWorkspaceRuntimeDirs(sourceRoot: string): { agentDir: string; tmpDir: string } {
+function deriveWorkspaceRuntimeDirs(sourceRoot: string): {
+  agentDir: string;
+  tmpDir: string;
+} {
   const workspaceRoot = deriveWorkspaceRoot(sourceRoot);
 
   return {
@@ -757,14 +922,21 @@ async function materializeWorkspaceContextRepos(
     return [];
   }
 
-  const materializer = options.contextRepoMaterializer ?? materializeContextRepositories;
+  const materializer =
+    options.contextRepoMaterializer ?? materializeContextRepositories;
   return materializer({
-    contextReposRoot: contextReposDir ?? runtimeDirs?.contextReposDir ?? join(deriveWorkspaceRoot(sourceRoot), "context-repos"),
+    contextReposRoot:
+      contextReposDir ??
+      runtimeDirs?.contextReposDir ??
+      join(deriveWorkspaceRoot(sourceRoot), "context-repos"),
     repos,
   });
 }
 
-function contextRepoSandboxPath(mount: ContextRepoMaterialization, sandbox?: SandboxBackend): string {
+function contextRepoSandboxPath(
+  mount: ContextRepoMaterialization,
+  sandbox?: SandboxBackend,
+): string {
   return !sandbox || sandbox.kind === "native"
     ? mount.hostDir
     : `/workspace/context-repos/${mount.alias}`;
@@ -780,8 +952,9 @@ function buildContextReposPromptSection(
 
   const lines = [
     "Auxiliary context repositories (read-only reference copies configured by the operator):",
-    ...mounts.map((mount) =>
-      `- ${mount.alias} (${mount.kind}${mount.resolvedRevision ? `, revision ${mount.resolvedRevision}` : ""}): ${contextRepoSandboxPath(mount, sandbox)}`
+    ...mounts.map(
+      (mount) =>
+        `- ${mount.alias} (${mount.kind}${mount.resolvedRevision ? `, revision ${mount.resolvedRevision}` : ""}): ${contextRepoSandboxPath(mount, sandbox)}`,
     ),
     "Inspect them with read-only shell tools (rg, bat) when a change depends on their API, types, or contracts. " +
       "Reported problems must still reference files changed in this review; cite auxiliary repositories only as supporting evidence.",
@@ -795,7 +968,11 @@ const CONTEXT_OVERFLOW_RE =
 export class AgentContextOverflowError extends Error {
   readonly agentKind: string;
 
-  constructor(agentKind: string, innerMessage: string, details?: { contextWindow?: number; requestedTokens?: number }) {
+  constructor(
+    agentKind: string,
+    innerMessage: string,
+    details?: { contextWindow?: number; requestedTokens?: number },
+  ) {
     const detailParts: string[] = [];
     if (details?.contextWindow !== undefined) {
       detailParts.push(`model limit: ${details.contextWindow}`);
@@ -803,7 +980,8 @@ export class AgentContextOverflowError extends Error {
     if (details?.requestedTokens !== undefined) {
       detailParts.push(`requested: ${details.requestedTokens}`);
     }
-    const detailStr = detailParts.length > 0 ? ` (${detailParts.join(", ")})` : "";
+    const detailStr =
+      detailParts.length > 0 ? ` (${detailParts.join(", ")})` : "";
     super(
       `Agent ${agentKind} hit a context window overflow${detailStr}: ${innerMessage}\n` +
         `Actionable guidance: enable llm.model_catalog (or set context_window in llm.model_catalog.overrides) ` +
@@ -816,7 +994,10 @@ export class AgentContextOverflowError extends Error {
   }
 }
 
-function detectContextOverflowDetails(message: string): { contextWindow?: number; requestedTokens?: number } {
+function detectContextOverflowDetails(message: string): {
+  contextWindow?: number;
+  requestedTokens?: number;
+} {
   const details: { contextWindow?: number; requestedTokens?: number } = {};
   const limitMatch = /limit:?\s*(\d+)/iu.exec(message);
   if (limitMatch?.[1]) {
@@ -833,18 +1014,23 @@ function isContextOverflowMessage(message: string): boolean {
   return CONTEXT_OVERFLOW_RE.test(message);
 }
 
-function resolveEnvPlaceholders(envVars: Readonly<Record<string, string>>): Record<string, string> {
+function resolveEnvPlaceholders(
+  envVars: Readonly<Record<string, string>>,
+): Record<string, string> {
   const resolved: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(envVars)) {
     const envRef = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/u.exec(value);
-    resolved[key] = envRef ? process.env[envRef[1]!] ?? "" : value;
+    resolved[key] = envRef ? (process.env[envRef[1]!] ?? "") : value;
   }
 
   return resolved;
 }
 
-function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string): string {
+function agentWorkingDirForSandbox(
+  sandbox: SandboxBackend,
+  hostAgentDir: string,
+): string {
   return sandbox.kind === "native" ? hostAgentDir : "/workspace/agent";
 }
 
@@ -855,7 +1041,14 @@ function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string
  * bundle context instead.
  */
 function resolveNativeMcpOutputServerScript(): string {
-  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "mcp-output", "dist", "server.js");
+  return resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "mcp-output",
+    "dist",
+    "server.js",
+  );
 }
 
 /**
@@ -865,26 +1058,41 @@ function resolveNativeMcpOutputServerScript(): string {
  * start and the agent silently loses its native MCP surface (falling back to the
  * stdout JSON contract), so point it at the real module-relative script instead.
  */
+/** Read-only mount path of the indexed full checkout in container sandboxes. */
+export const TGREP_SANDBOX_MOUNT_PATH = "/workspace/tgrep-cache";
+
 function adaptMcpServersForSandbox(
   servers: readonly RuntimeBundleMcpServer[] | undefined,
   sandbox: SandboxBackend,
   outputStatePath: string,
+  tgrepHandle?: TgrepSearchHandle,
 ): readonly RuntimeBundleMcpServer[] | undefined {
   if (!servers) return undefined;
-  const nativeServerScript = sandbox.kind === "native" ? resolveNativeMcpOutputServerScript() : undefined;
+  const nativeServerScript =
+    sandbox.kind === "native"
+      ? resolveNativeMcpOutputServerScript()
+      : undefined;
   if (nativeServerScript !== undefined && !existsSync(nativeServerScript)) {
-    console.warn(JSON.stringify({
-      level: "warn",
-      msg: "native sandbox aicr-output MCP server script missing; agent MCP surface will fail to start",
-      path: nativeServerScript,
-    }));
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "native sandbox aicr-output MCP server script missing; agent MCP surface will fail to start",
+        path: nativeServerScript,
+      }),
+    );
   }
   return servers.map((server) => {
     if (server.name !== "aicr-output") return server;
     const config = { ...server.config } as Record<string, unknown>;
-    const command = Array.isArray(config.command) ? [...config.command] : undefined;
+    const command = Array.isArray(config.command)
+      ? [...config.command]
+      : undefined;
     if (nativeServerScript !== undefined && command !== undefined) {
-      const scriptIndex = command.findIndex((part) => typeof part === "string" && /mcp-output\/dist\/server\.js$/u.test(part));
+      const scriptIndex = command.findIndex(
+        (part) =>
+          typeof part === "string" &&
+          /mcp-output\/dist\/server\.js$/u.test(part),
+      );
       if (scriptIndex >= 0) {
         command[scriptIndex] = nativeServerScript;
         config.command = command;
@@ -895,8 +1103,21 @@ function adaptMcpServersForSandbox(
       config: {
         ...config,
         environment: {
-          ...(config.environment as Readonly<Record<string, string>> | undefined),
+          ...(config.environment as
+            Readonly<Record<string, string>> | undefined),
           AICR_OUTPUT_STATE_PATH: outputStatePath,
+          ...(tgrepHandle?.state === "ready"
+            ? {
+                AICR_TGREP_INDEX_DIR:
+                  sandbox.kind === "native"
+                    ? tgrepHandle.indexDir
+                    : `${TGREP_SANDBOX_MOUNT_PATH}/index`,
+                AICR_TGREP_SOURCE_DIR:
+                  sandbox.kind === "native"
+                    ? tgrepHandle.checkoutDir
+                    : `${TGREP_SANDBOX_MOUNT_PATH}/checkout`,
+              }
+            : {}),
         },
       },
     };
@@ -928,18 +1149,34 @@ function agentConfigDirEnvVars(
   sandboxIsNative: boolean,
 ): Record<string, string> {
   const joinPath = (segment: string): string =>
-    sandboxIsNative ? join(sandboxAgentDir, segment) : `${sandboxAgentDir}/${segment}`;
+    sandboxIsNative
+      ? join(sandboxAgentDir, segment)
+      : `${sandboxAgentDir}/${segment}`;
   const isolated = {
-    HOME: joinPath(".aicr-home"), USERPROFILE: joinPath(".aicr-home"),
-    APPDATA: joinPath(".aicr-appdata"), LOCALAPPDATA: joinPath(".aicr-localappdata"),
-    XDG_CONFIG_HOME: joinPath(".aicr-xdg-config"), XDG_DATA_HOME: joinPath(".aicr-xdg-data"),
-    XDG_CACHE_HOME: joinPath(".aicr-xdg-cache"), XDG_STATE_HOME: joinPath(".aicr-xdg-state"),
+    HOME: joinPath(".aicr-home"),
+    USERPROFILE: joinPath(".aicr-home"),
+    APPDATA: joinPath(".aicr-appdata"),
+    LOCALAPPDATA: joinPath(".aicr-localappdata"),
+    XDG_CONFIG_HOME: joinPath(".aicr-xdg-config"),
+    XDG_DATA_HOME: joinPath(".aicr-xdg-data"),
+    XDG_CACHE_HOME: joinPath(".aicr-xdg-cache"),
+    XDG_STATE_HOME: joinPath(".aicr-xdg-state"),
     XDG_RUNTIME_DIR: joinPath(".aicr-xdg-runtime"),
   };
   if (kind === "pi" || kind === "oh-my-pi") {
-    return { ...isolated, PI_CODING_AGENT_DIR: joinPath(kind === "pi" ? PI_AGENT_DIR_NAME : OMP_AGENT_DIR_NAME) };
+    return {
+      ...isolated,
+      PI_CODING_AGENT_DIR: joinPath(
+        kind === "pi" ? PI_AGENT_DIR_NAME : OMP_AGENT_DIR_NAME,
+      ),
+    };
   }
-  return { ...isolated, ...(kind === "claude-code" ? { CLAUDE_CONFIG_DIR: joinPath(".aicr-claude") } : {}) };
+  return {
+    ...isolated,
+    ...(kind === "claude-code"
+      ? { CLAUDE_CONFIG_DIR: joinPath(".aicr-claude") }
+      : {}),
+  };
 }
 
 interface AgentBundleContext {
@@ -965,43 +1202,77 @@ function createAgentUsageObserver(
   progress: ReviewProgress,
 ): (chunk: string) => void {
   const accumulator = createReviewRunMetricsAccumulator();
-  const agentResult: SandboxSpawnResult = { stdout: "", stderr: "", exitCode: null, timedOut: false, durationMs: 0 };
+  const agentResult: SandboxSpawnResult = {
+    stdout: "",
+    stderr: "",
+    exitCode: null,
+    timedOut: false,
+    durationMs: 0,
+  };
   let pending = "";
   let droppingLine = false;
   return (chunk) => {
     const lines = (pending + chunk).split("\n");
     pending = lines.pop() ?? "";
     for (const line of lines) {
-      if (droppingLine) { droppingLine = false; continue; }
+      if (droppingLine) {
+        droppingLine = false;
+        continue;
+      }
       if (line.length > 1_048_576) continue;
       try {
         const event = JSON.parse(line) as Record<string, unknown> | null;
         if (!event) continue;
         const kilo = kind === "kilo" || kind === "opencode";
-        if (kilo ? event.type !== "step_finish" && event.type !== "step-finish"
-          : event.type !== "message_end") continue;
-        const extraction = kilo ? extractKiloJsonStreamContent(line) : extractPiJsonStreamContent(line);
+        if (
+          kilo
+            ? event.type !== "step_finish" && event.type !== "step-finish"
+            : event.type !== "message_end"
+        )
+          continue;
+        const extraction = kilo
+          ? extractKiloJsonStreamContent(line)
+          : extractPiJsonStreamContent(line);
         if (extraction.stepCount === 0) continue;
         accumulateReviewCompletionMetrics(accumulator, {
           agentResult,
-          llmResult: { providerId: model.providerId, modelId: model.modelId, content: "", raw: null,
-            ...(extraction.usage ? { usage: extraction.usage } : {}) },
+          llmResult: {
+            providerId: model.providerId,
+            modelId: model.modelId,
+            content: "",
+            raw: null,
+            ...(extraction.usage ? { usage: extraction.usage } : {}),
+          },
           requestCount: extraction.stepCount,
-          ...(extraction.costUsd !== undefined ? { estimatedCostUsd: extraction.costUsd } : {}),
+          ...(extraction.costUsd !== undefined
+            ? { estimatedCostUsd: extraction.costUsd }
+            : {}),
         });
         const metrics = finalizeReviewRunMetrics(accumulator);
         progress.agentUsage({
           agentResult,
-          llmResult: { providerId: model.providerId, modelId: model.modelId, content: "", raw: null,
-            ...(metrics.usage ? { usage: metrics.usage } : {}) },
-          ...(metrics.requestCount !== undefined ? { requestCount: metrics.requestCount } : {}),
-          ...(metrics.estimatedCostUsd !== undefined ? { estimatedCostUsd: metrics.estimatedCostUsd } : {}),
+          llmResult: {
+            providerId: model.providerId,
+            modelId: model.modelId,
+            content: "",
+            raw: null,
+            ...(metrics.usage ? { usage: metrics.usage } : {}),
+          },
+          ...(metrics.requestCount !== undefined
+            ? { requestCount: metrics.requestCount }
+            : {}),
+          ...(metrics.estimatedCostUsd !== undefined
+            ? { estimatedCostUsd: metrics.estimatedCostUsd }
+            : {}),
         });
       } catch {
         // Partial/invalid telemetry is advisory; final output parsing remains authoritative.
       }
     }
-    if (pending.length > 1_048_576) { pending = ""; droppingLine = true; }
+    if (pending.length > 1_048_576) {
+      pending = "";
+      droppingLine = true;
+    }
   };
 }
 
@@ -1022,7 +1293,8 @@ interface KiloStreamExtractionResult {
  * Returns undefined for missing/non-numeric values so the caller can skip aggregation.
  */
 function readKiloTokenCount(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+    return undefined;
   return Math.trunc(value);
 }
 
@@ -1062,7 +1334,8 @@ function accumulateKiloStepFinishUsage(
   // Current kilo wraps token data inside event.part; older flat format had it on event
   // directly. Try both so we accept either shape.
   const part = event.part as Record<string, unknown> | undefined;
-  const tokens = (part?.tokens ?? event.tokens) as Record<string, unknown> | undefined;
+  const tokens = (part?.tokens ?? event.tokens) as
+    Record<string, unknown> | undefined;
   if (!tokens || typeof tokens !== "object") return false;
   const input = readKiloTokenCount(tokens.input);
   const output = readKiloTokenCount(tokens.output);
@@ -1072,32 +1345,55 @@ function accumulateKiloStepFinishUsage(
   const cacheRead = readKiloTokenCount(cache?.read);
   const cacheWrite = readKiloTokenCount(cache?.write);
   if (
-    input === undefined && output === undefined && reasoning === undefined && total === undefined
-    && cacheRead === undefined && cacheWrite === undefined
+    input === undefined &&
+    output === undefined &&
+    reasoning === undefined &&
+    total === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined
   ) {
     return false;
   }
   if (input !== undefined) totals.input += input;
   if (output !== undefined) totals.output += output;
   if (reasoning !== undefined) totals.reasoning += reasoning;
-  totals.total += total ?? (input ?? 0) + (output ?? 0) + (reasoning ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  totals.total +=
+    total ??
+    (input ?? 0) +
+      (output ?? 0) +
+      (reasoning ?? 0) +
+      (cacheRead ?? 0) +
+      (cacheWrite ?? 0);
   if (cacheRead !== undefined) totals.cacheRead += cacheRead;
   if (cacheWrite !== undefined) totals.cacheWrite += cacheWrite;
   // cost is a USD amount (float), not a token count — validate as a non-negative finite number.
   // Current kilo puts cost on `event.part.cost`; older flat format had it on `event.cost`.
   const eventCost = part?.cost ?? event.cost;
-  if (typeof eventCost === "number" && Number.isFinite(eventCost) && eventCost >= 0) {
+  if (
+    typeof eventCost === "number" &&
+    Number.isFinite(eventCost) &&
+    eventCost >= 0
+  ) {
     costAccumulator.cost += eventCost;
     costAccumulator.observed = true;
   }
   return true;
 }
 
-function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResult {
+function extractKiloJsonStreamContent(
+  stdout: string,
+): KiloStreamExtractionResult {
   const textParts: string[] = [];
   const toolCallEvents: ToolCallEnvelope[] = [];
   const eventCounts: Record<string, number> = {};
-  const tokenTotals: KiloTokenTotals = { input: 0, output: 0, reasoning: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
+  const tokenTotals: KiloTokenTotals = {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    total: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  };
   const costTotal = { cost: 0, observed: false };
   let stepCount = 0;
 
@@ -1110,26 +1406,34 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
       eventCounts[eventType] = (eventCounts[eventType] ?? 0) + 1;
       if (event.type === "text") {
         const part = event.part as Record<string, unknown> | undefined;
-        const text = typeof event.text === "string"
-          ? event.text
-          : typeof part?.text === "string"
-            ? part.text
-            : typeof event.content === "string"
-              ? event.content
-              : undefined;
+        const text =
+          typeof event.text === "string"
+            ? event.text
+            : typeof part?.text === "string"
+              ? part.text
+              : typeof event.content === "string"
+                ? event.content
+                : undefined;
         if (text) {
           textParts.push(text);
         }
-      } else if (event.type === "assistant" && typeof event.content === "string") {
+      } else if (
+        event.type === "assistant" &&
+        typeof event.content === "string"
+      ) {
         textParts.push(event.content);
       } else if (event.type === "error") {
         const errorData = event.error as Record<string, unknown> | undefined;
-        const message = typeof errorData?.message === "string" ? errorData.message : JSON.stringify(event.error);
+        const message =
+          typeof errorData?.message === "string"
+            ? errorData.message
+            : JSON.stringify(event.error);
         throw new Error(`Agent stream error: ${message}`);
       } else if (
-        event.type === "step-finish"
-        || event.type === "step_finish"
-        || (event.part as Record<string, unknown> | undefined)?.type === "step-finish"
+        event.type === "step-finish" ||
+        event.type === "step_finish" ||
+        (event.part as Record<string, unknown> | undefined)?.type ===
+          "step-finish"
       ) {
         if (accumulateKiloStepFinishUsage(event, tokenTotals, costTotal)) {
           stepCount += 1;
@@ -1138,9 +1442,9 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
         // kilo (>=7.x) emits tool calls as `tool` events with the tool name under `event.tool`
         // and the input under `event.state.input`; older kilo/opencode used `tool_call`/`tool_use`
         // with the name under `event.name` and input under `event.input`. Support both shapes.
-        event.type === "tool"
-        && typeof event.tool === "string"
-        && event.state !== undefined
+        event.type === "tool" &&
+        typeof event.tool === "string" &&
+        event.state !== undefined
       ) {
         const state = event.state as Record<string, unknown> | undefined;
         const input = state?.input ?? event.input;
@@ -1154,25 +1458,31 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
         // older OpenCode/Kilo streams used top-level `name` and `input` fields.
         const part = event.part as Record<string, unknown> | undefined;
         const state = part?.state as Record<string, unknown> | undefined;
-        const toolName = typeof event.name === "string"
-          ? event.name
-          : typeof part?.tool === "string"
-            ? part.tool
-            : undefined;
+        const toolName =
+          typeof event.name === "string"
+            ? event.name
+            : typeof part?.tool === "string"
+              ? part.tool
+              : undefined;
         const input = event.input ?? state?.input;
         if (!toolName || input === undefined) continue;
         try {
           toolCallEvents.push({ name: normalizeToolName(toolName), input });
         } catch {
-          console.warn(JSON.stringify({
-            level: "warn",
-            msg: "agent stream tool call has unsupported name",
-            toolName,
-          }));
+          console.warn(
+            JSON.stringify({
+              level: "warn",
+              msg: "agent stream tool call has unsupported name",
+              toolName,
+            }),
+          );
         }
       }
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith("Agent stream error:")) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Agent stream error:")
+      ) {
         throw error;
       }
     }
@@ -1184,24 +1494,36 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
   // `promptTokens + completionTokens == kilo total` and `nonCachedInput = promptTokens
   // - cachedPromptTokens - cacheCreationTokens == kilo input`, so the gateway cost model and
   // dashboard breakdown stay consistent across the direct and agent paths.
-  const promptTokens = tokenTotals.input + tokenTotals.cacheRead + tokenTotals.cacheWrite;
+  const promptTokens =
+    tokenTotals.input + tokenTotals.cacheRead + tokenTotals.cacheWrite;
   const completionTokens = tokenTotals.output + tokenTotals.reasoning;
-  const hasUsage = stepCount > 0
-    || promptTokens > 0
-    || completionTokens > 0
-    || tokenTotals.total > 0;
+  const hasUsage =
+    stepCount > 0 ||
+    promptTokens > 0 ||
+    completionTokens > 0 ||
+    tokenTotals.total > 0;
   const usage: ChatCompletionUsage | undefined = hasUsage
     ? {
-      promptTokens,
-      completionTokens,
-      totalTokens: tokenTotals.total > 0 ? tokenTotals.total : promptTokens + completionTokens,
-      ...(tokenTotals.cacheRead > 0 ? { cachedPromptTokens: tokenTotals.cacheRead } : {}),
-      ...(tokenTotals.cacheWrite > 0 ? { cacheCreationTokens: tokenTotals.cacheWrite } : {}),
-    }
+        promptTokens,
+        completionTokens,
+        totalTokens:
+          tokenTotals.total > 0
+            ? tokenTotals.total
+            : promptTokens + completionTokens,
+        ...(tokenTotals.cacheRead > 0
+          ? { cachedPromptTokens: tokenTotals.cacheRead }
+          : {}),
+        ...(tokenTotals.cacheWrite > 0
+          ? { cacheCreationTokens: tokenTotals.cacheWrite }
+          : {}),
+      }
     : undefined;
 
   return {
-    content: textParts.length > 0 ? textParts.join("\n") : tailCapUtf8(stdout, RAW_STDOUT_FALLBACK_MAX_BYTES),
+    content:
+      textParts.length > 0
+        ? textParts.join("\n")
+        : tailCapUtf8(stdout, RAW_STDOUT_FALLBACK_MAX_BYTES),
     toolCallEvents,
     eventCounts,
     ...(usage ? { usage } : {}),
@@ -1272,8 +1594,9 @@ function tailCapUtf8(text: string, maxBytes: number): string {
 }
 
 function readPiUsageCount(value: unknown): number | undefined {
-
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
 }
 
 /**
@@ -1318,7 +1641,11 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
       const blocks = Array.isArray(message.content) ? message.content : [];
       for (const block of blocks) {
         const b = block as Record<string, unknown> | undefined;
-        if (b?.type === "text" && typeof b.text === "string" && b.text.length > 0) {
+        if (
+          b?.type === "text" &&
+          typeof b.text === "string" &&
+          b.text.length > 0
+        ) {
           textParts.push(b.text);
         }
       }
@@ -1330,14 +1657,15 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
         const cacheWrite = readPiUsageCount(usage.cacheWrite);
         const total = readPiUsageCount(usage.totalTokens);
         if (
-          input !== undefined
-          || output !== undefined
-          || cacheRead !== undefined
-          || cacheWrite !== undefined
-          || total !== undefined
+          input !== undefined ||
+          output !== undefined ||
+          cacheRead !== undefined ||
+          cacheWrite !== undefined ||
+          total !== undefined
         ) {
           usageObserved = true;
-          const computedTotal = (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+          const computedTotal =
+            (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
           totals.input += input ?? 0;
           totals.output += output ?? 0;
           totals.cacheRead += cacheRead ?? 0;
@@ -1348,20 +1676,29 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
         }
         const cost = usage.cost as Record<string, unknown> | undefined;
         const costTotal = cost?.total;
-        if (typeof costTotal === "number" && Number.isFinite(costTotal) && costTotal >= 0) {
+        if (
+          typeof costTotal === "number" &&
+          Number.isFinite(costTotal) &&
+          costTotal >= 0
+        ) {
           costObserved = true;
           costUsd += costTotal;
         }
       }
-      lastStopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
-      lastErrorMessage = lastStopReason === "error" && typeof message.errorMessage === "string"
-        ? message.errorMessage
-        : undefined;
+      lastStopReason =
+        typeof message.stopReason === "string" ? message.stopReason : undefined;
+      lastErrorMessage =
+        lastStopReason === "error" && typeof message.errorMessage === "string"
+          ? message.errorMessage
+          : undefined;
     } else if (eventType === "tool_execution_start") {
       const toolName = event.toolName;
       if (typeof toolName === "string") {
         try {
-          toolCallEvents.push({ name: normalizeToolName(toolName), input: event.args });
+          toolCallEvents.push({
+            name: normalizeToolName(toolName),
+            input: event.args,
+          });
         } catch {
           // Built-in pi/omp tools (read/bash/edit/...) are not review outputs; ignore.
         }
@@ -1373,23 +1710,32 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
   // surface it so context-overflow classification and retries work like kilo's
   // top-level `error` event.
   if (lastStopReason === "error") {
-    throw new Error(`Agent stream error: ${lastErrorMessage ?? "assistant message ended with stopReason=error"}`);
+    throw new Error(
+      `Agent stream error: ${lastErrorMessage ?? "assistant message ended with stopReason=error"}`,
+    );
   }
 
   const promptTokens = totals.input + totals.cacheRead + totals.cacheWrite;
   const completionTokens = totals.output;
   const usage: ChatCompletionUsage | undefined = usageObserved
     ? {
-      promptTokens,
-      completionTokens,
-      totalTokens: totals.total,
-      ...(totals.cacheRead > 0 ? { cachedPromptTokens: totals.cacheRead } : {}),
-      ...(totals.cacheWrite > 0 ? { cacheCreationTokens: totals.cacheWrite } : {}),
-    }
+        promptTokens,
+        completionTokens,
+        totalTokens: totals.total,
+        ...(totals.cacheRead > 0
+          ? { cachedPromptTokens: totals.cacheRead }
+          : {}),
+        ...(totals.cacheWrite > 0
+          ? { cacheCreationTokens: totals.cacheWrite }
+          : {}),
+      }
     : undefined;
 
   return {
-    content: textParts.length > 0 ? textParts.join("\n") : tailCapUtf8(stdout, RAW_STDOUT_FALLBACK_MAX_BYTES),
+    content:
+      textParts.length > 0
+        ? textParts.join("\n")
+        : tailCapUtf8(stdout, RAW_STDOUT_FALLBACK_MAX_BYTES),
     toolCallEvents,
     eventCounts,
     ...(usage ? { usage } : {}),
@@ -1436,36 +1782,45 @@ function extractClaudeJsonResult(stdout: string): ClaudeResultExtraction {
   const usageRaw = envelope.usage as Record<string, unknown> | undefined;
   const readTokens = (key: string): number => {
     const value = usageRaw?.[key];
-    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.trunc(value)
+      : 0;
   };
   const input = readTokens("input_tokens");
   const output = readTokens("output_tokens");
   const cacheRead = readTokens("cache_read_input_tokens");
   const cacheCreation = readTokens("cache_creation_input_tokens");
   const promptTokens = input + cacheRead + cacheCreation;
-  const usage: ChatCompletionUsage | undefined = promptTokens > 0 || output > 0
-    ? {
-      promptTokens,
-      completionTokens: output,
-      totalTokens: promptTokens + output,
-      ...(cacheRead > 0 ? { cachedPromptTokens: cacheRead } : {}),
-      ...(cacheCreation > 0 ? { cacheCreationTokens: cacheCreation } : {}),
-    }
-    : undefined;
+  const usage: ChatCompletionUsage | undefined =
+    promptTokens > 0 || output > 0
+      ? {
+          promptTokens,
+          completionTokens: output,
+          totalTokens: promptTokens + output,
+          ...(cacheRead > 0 ? { cachedPromptTokens: cacheRead } : {}),
+          ...(cacheCreation > 0 ? { cacheCreationTokens: cacheCreation } : {}),
+        }
+      : undefined;
 
-  const numTurns = typeof envelope.num_turns === "number" && Number.isFinite(envelope.num_turns)
-    ? Math.trunc(envelope.num_turns)
-    : undefined;
-  const costUsd = typeof envelope.total_cost_usd === "number" && Number.isFinite(envelope.total_cost_usd)
-    ? envelope.total_cost_usd
-    : undefined;
+  const numTurns =
+    typeof envelope.num_turns === "number" &&
+    Number.isFinite(envelope.num_turns)
+      ? Math.trunc(envelope.num_turns)
+      : undefined;
+  const costUsd =
+    typeof envelope.total_cost_usd === "number" &&
+    Number.isFinite(envelope.total_cost_usd)
+      ? envelope.total_cost_usd
+      : undefined;
 
   return {
     content: envelope.result,
     ...(usage ? { usage } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
     ...(numTurns !== undefined ? { numTurns } : {}),
-    ...(typeof envelope.session_id === "string" ? { sessionId: envelope.session_id } : {}),
+    ...(typeof envelope.session_id === "string"
+      ? { sessionId: envelope.session_id }
+      : {}),
   };
 }
 
@@ -1487,10 +1842,27 @@ async function runAgentReview(
   contextRepoMounts?: readonly ContextRepoMaterialization[],
   runDirs?: RunDirs,
   containmentRoot?: string,
-): Promise<ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }> {
-  const dirs = runDirs ?? computeRunDirs(undefined, sourceRoot,
-    (bundleContext?.runId ?? randomUUID()).replace(/[^A-Za-z0-9._-]+/gu, "_"));
-  return runAgentReviewInDirs(sourceRoot, task, options, dirs, bundleContext, contextRepoMounts, containmentRoot);
+  tgrepHandle?: TgrepSearchHandle,
+): Promise<
+  ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }
+> {
+  const dirs =
+    runDirs ??
+    computeRunDirs(
+      undefined,
+      sourceRoot,
+      (bundleContext?.runId ?? randomUUID()).replace(/[^A-Za-z0-9._-]+/gu, "_"),
+    );
+  return runAgentReviewInDirs(
+    sourceRoot,
+    task,
+    options,
+    dirs,
+    bundleContext,
+    contextRepoMounts,
+    containmentRoot,
+    tgrepHandle,
+  );
 }
 
 // L12: directory mtime does not track writes to nested files. Reap only
@@ -1508,12 +1880,17 @@ interface RunDirs {
   readonly contextReposDir: string;
 }
 
-function computeRunDirs(runtimeDirs: WorkspaceLayout | undefined, sourceRoot: string, runScope: string): RunDirs {
+function computeRunDirs(
+  runtimeDirs: WorkspaceLayout | undefined,
+  sourceRoot: string,
+  runScope: string,
+): RunDirs {
   // L09 (architecture §3.10): every run writes source/agent/tmp/context-repos under
   // `runs/<runId>/`; the repo cache may be shared, mutable checkouts never.
-  const root = runtimeDirs !== undefined
-    ? join(runtimeDirs.instanceRoot, "runs", runScope)
-    : join(deriveWorkspaceRuntimeDirs(sourceRoot).agentDir, "runs", runScope);
+  const root =
+    runtimeDirs !== undefined
+      ? join(runtimeDirs.instanceRoot, "runs", runScope)
+      : join(deriveWorkspaceRuntimeDirs(sourceRoot).agentDir, "runs", runScope);
   return {
     root,
     sourceDir: join(root, "source"),
@@ -1538,8 +1915,15 @@ async function isRunDirOwnerAlive(runRoot: string): Promise<boolean> {
     return false;
   }
   try {
-    const owner = JSON.parse(await readFile(join(runRoot, RUN_OWNER_FILE), "utf8")) as { host?: unknown; pid?: unknown };
-    if (owner.host !== hostname() || typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+    const owner = JSON.parse(
+      await readFile(join(runRoot, RUN_OWNER_FILE), "utf8"),
+    ) as { host?: unknown; pid?: unknown };
+    if (
+      owner.host !== hostname() ||
+      typeof owner.pid !== "number" ||
+      !Number.isInteger(owner.pid) ||
+      owner.pid <= 0
+    ) {
       return false;
     }
     try {
@@ -1568,8 +1952,16 @@ async function reapStaleRunDirs(runsDir: string): Promise<void> {
     try {
       const info = await stat(dir);
       if (now - info.mtimeMs < RUN_DIR_STALE_MS) continue;
-      const owner = JSON.parse(await readFile(join(dir, RUN_OWNER_FILE), "utf8")) as { host?: unknown; pid?: unknown };
-      if (owner.host !== hostname() || typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) continue;
+      const owner = JSON.parse(
+        await readFile(join(dir, RUN_OWNER_FILE), "utf8"),
+      ) as { host?: unknown; pid?: unknown };
+      if (
+        owner.host !== hostname() ||
+        typeof owner.pid !== "number" ||
+        !Number.isInteger(owner.pid) ||
+        owner.pid <= 0
+      )
+        continue;
       try {
         process.kill(owner.pid, 0);
         continue;
@@ -1578,7 +1970,8 @@ async function reapStaleRunDirs(runsDir: string): Promise<void> {
       }
       const realParent = await realpathContaining(runsDir);
       const realDir = await realpathContaining(dir);
-      if (!isWithinRoot(realParent, realDir) || realParent === realDir) continue;
+      if (!isWithinRoot(realParent, realDir) || realParent === realDir)
+        continue;
       await rm(dir, { recursive: true, force: true });
     } catch {
       // best effort: a racing creator or permission issue must not fail reviews
@@ -1593,7 +1986,9 @@ async function realpathContaining(path: string): Promise<string> {
   for (;;) {
     try {
       const resolved = await realpath(current);
-      return suffix.length === 0 ? resolved : join(resolved, ...suffix.reverse());
+      return suffix.length === 0
+        ? resolved
+        : join(resolved, ...suffix.reverse());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const parent = dirname(current);
@@ -1605,27 +2000,44 @@ async function realpathContaining(path: string): Promise<string> {
 }
 
 function isWithinRoot(root: string, target: string): boolean {
-  const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const fold = (value: string) =>
+    process.platform === "win32" ? value.toLowerCase() : value;
   const rel = relative(fold(root), fold(target));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 async function assertWorkspaceLayoutContained(layout: {
-  readonly instanceRoot: string; readonly agentDir: string; readonly tmpDir: string;
-  readonly contextReposDir: string; readonly templatesDir: string;
-  readonly sourceRoot?: string; readonly workspacesRoot?: string;
+  readonly instanceRoot: string;
+  readonly agentDir: string;
+  readonly tmpDir: string;
+  readonly contextReposDir: string;
+  readonly templatesDir: string;
+  readonly sourceRoot?: string;
+  readonly workspacesRoot?: string;
 }): Promise<void> {
   const root = await realpathContaining(layout.instanceRoot);
-  if (layout.workspacesRoot && !isWithinRoot(await realpathContaining(layout.workspacesRoot), root)) {
-    throw new Error(`workspace instanceRoot escapes workspacesRoot via symlink/junction: ${layout.instanceRoot}`);
+  if (
+    layout.workspacesRoot &&
+    !isWithinRoot(await realpathContaining(layout.workspacesRoot), root)
+  ) {
+    throw new Error(
+      `workspace instanceRoot escapes workspacesRoot via symlink/junction: ${layout.instanceRoot}`,
+    );
   }
   for (const [name, dir] of [
     ["sourceRoot", layout.sourceRoot],
-    ["agentDir", layout.agentDir], ["tmpDir", layout.tmpDir],
-    ["contextReposDir", layout.contextReposDir], ["templatesDir", layout.templatesDir],
+    ["agentDir", layout.agentDir],
+    ["tmpDir", layout.tmpDir],
+    ["contextReposDir", layout.contextReposDir],
+    ["templatesDir", layout.templatesDir],
   ] as const) {
-    if (dir !== undefined && !isWithinRoot(root, await realpathContaining(dir))) {
-      throw new Error(`workspace layout ${name} escapes instanceRoot via symlink/junction: ${dir}`);
+    if (
+      dir !== undefined &&
+      !isWithinRoot(root, await realpathContaining(dir))
+    ) {
+      throw new Error(
+        `workspace layout ${name} escapes instanceRoot via symlink/junction: ${dir}`,
+      );
     }
   }
 }
@@ -1638,28 +2050,52 @@ async function runAgentReviewInDirs(
   bundleContext?: AgentBundleContext,
   contextRepoMounts?: readonly ContextRepoMaterialization[],
   containmentRoot?: string,
-): Promise<ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }> {
+  tgrepHandle?: TgrepSearchHandle,
+): Promise<
+  ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }
+> {
   const sandbox = options.sandbox;
   const agentAdapter = options.agentAdapter;
   if (!sandbox || !agentAdapter) {
-    throw new TypeError("Agent review requires both sandbox and agentAdapter options.");
+    throw new TypeError(
+      "Agent review requires both sandbox and agentAdapter options.",
+    );
   }
 
   bundleContext?.progress?.modelStarted(options.model, agentAdapter.kind);
-  const streamsUsage = ["kilo", "opencode", "pi", "oh-my-pi"].includes(agentAdapter.kind);
-  const onStdout = bundleContext?.progress && streamsUsage
-    ? createAgentUsageObserver(agentAdapter.kind, options.model, bundleContext.progress)
-    : undefined;
+  const streamsUsage = ["kilo", "opencode", "pi", "oh-my-pi"].includes(
+    agentAdapter.kind,
+  );
+  const onStdout =
+    bundleContext?.progress && streamsUsage
+      ? createAgentUsageObserver(
+          agentAdapter.kind,
+          options.model,
+          bundleContext.progress,
+        )
+      : undefined;
 
   let agentResult: SandboxSpawnResult | undefined;
   let hostAgentDir: string | undefined;
 
   try {
-    const extraMounts: SandboxMountSpec[] = (contextRepoMounts ?? []).map((mount) => ({
-      hostPath: mount.hostDir,
-      containerPath: `/workspace/context-repos/${mount.alias}`,
-      readOnly: true,
-    }));
+    const extraMounts: SandboxMountSpec[] = (contextRepoMounts ?? []).map(
+      (mount) => ({
+        hostPath: mount.hostDir,
+        containerPath: `/workspace/context-repos/${mount.alias}`,
+        readOnly: true,
+      }),
+    );
+    // Read-only tgrep cache (full checkout + index). Container sandboxes only;
+    // native sandboxes address the host paths directly. The tgrep server runs
+    // on the host; sandboxed clients read the shared on-disk index.
+    if (tgrepHandle?.state === "ready" && sandbox.kind !== "native") {
+      extraMounts.push({
+        hostPath: tgrepHandle.cacheRoot,
+        containerPath: TGREP_SANDBOX_MOUNT_PATH,
+        readOnly: true,
+      });
+    }
     const materializedFs = await sandbox.materializeFs({
       sourceDir: sourceRoot,
       agentDir: dirs.agentDir,
@@ -1668,9 +2104,15 @@ async function runAgentReviewInDirs(
     });
     if (containmentRoot) {
       // L08 re-verify: a symlink swapped in between check and creation is caught here.
-      for (const [name, dir] of [["sourceDir", sourceRoot], ["agentDir", materializedFs.agentDir], ["tmpDir", materializedFs.tmpDir]] as const) {
+      for (const [name, dir] of [
+        ["sourceDir", sourceRoot],
+        ["agentDir", materializedFs.agentDir],
+        ["tmpDir", materializedFs.tmpDir],
+      ] as const) {
         if (!isWithinRoot(containmentRoot, await realpathContaining(dir))) {
-          throw new Error(`materialized ${name} escapes instanceRoot via symlink/junction: ${dir}`);
+          throw new Error(
+            `materialized ${name} escapes instanceRoot via symlink/junction: ${dir}`,
+          );
         }
       }
     }
@@ -1679,28 +2121,45 @@ async function runAgentReviewInDirs(
     // aicr-output server lands it in the shared agent workspace regardless of the
     // cwd the host CLI spawns MCP servers with (kilo/opencode inherit the session
     // cwd; Claude Code and Copilot CLI do not guarantee that).
-    const sandboxAgentDir = agentWorkingDirForSandbox(sandbox, materializedFs.agentDir);
-    const outputStatePath = sandbox.kind === "native"
-      ? join(sandboxAgentDir, ".aicr-output-state.json")
-      : `${sandboxAgentDir}/.aicr-output-state.json`;
+    const sandboxAgentDir = agentWorkingDirForSandbox(
+      sandbox,
+      materializedFs.agentDir,
+    );
+    const outputStatePath =
+      sandbox.kind === "native"
+        ? join(sandboxAgentDir, ".aicr-output-state.json")
+        : `${sandboxAgentDir}/.aicr-output-state.json`;
     const configDirEnvVars = agentConfigDirEnvVars(
       agentAdapter.kind,
       sandboxAgentDir,
       sandbox.kind === "native",
     );
-    for (const dir of Object.values(agentConfigDirEnvVars(agentAdapter.kind, materializedFs.agentDir, true))) {
+    for (const dir of Object.values(
+      agentConfigDirEnvVars(agentAdapter.kind, materializedFs.agentDir, true),
+    )) {
       await mkdir(dir, { recursive: true, mode: 0o700 });
     }
     // A file reference, not a directory to create above. Only the generated
     // bundle is trusted; translate to the container path before spawning.
     if (agentAdapter.kind === "kilo") {
-      configDirEnvVars.KILO_CONFIG = sandbox.kind === "native"
-        ? join(sandboxAgentDir, ".kilo/kilo.json")
-        : `${sandboxAgentDir}/.kilo/kilo.json`;
+      configDirEnvVars.KILO_CONFIG =
+        sandbox.kind === "native"
+          ? join(sandboxAgentDir, ".kilo/kilo.json")
+          : `${sandboxAgentDir}/.kilo/kilo.json`;
     }
-    const sandboxTmpDir = sandbox.kind === "native" ? materializedFs.tmpDir : "/workspace/tmp";
-    Object.assign(configDirEnvVars, { TMPDIR: sandboxTmpDir, TMP: sandboxTmpDir, TEMP: sandboxTmpDir });
-    const mcpServers = adaptMcpServersForSandbox(bundleContext?.mcpServers, sandbox, outputStatePath);
+    const sandboxTmpDir =
+      sandbox.kind === "native" ? materializedFs.tmpDir : "/workspace/tmp";
+    Object.assign(configDirEnvVars, {
+      TMPDIR: sandboxTmpDir,
+      TMP: sandboxTmpDir,
+      TEMP: sandboxTmpDir,
+    });
+    const mcpServers = adaptMcpServersForSandbox(
+      bundleContext?.mcpServers,
+      sandbox,
+      outputStatePath,
+      tgrepHandle,
+    );
     let effectiveTask = task;
     const useTaskFile = shouldUseAgentTaskFile(
       task,
@@ -1709,9 +2168,10 @@ async function runAgentReviewInDirs(
     );
     let sandboxTaskPath: string | undefined;
     if (useTaskFile) {
-      sandboxTaskPath = sandbox.kind === "native"
-        ? join(sandboxAgentDir, TASK_HANDOFF_FILE_NAME)
-        : `${sandboxAgentDir}/${TASK_HANDOFF_FILE_NAME}`;
+      sandboxTaskPath =
+        sandbox.kind === "native"
+          ? join(sandboxAgentDir, TASK_HANDOFF_FILE_NAME)
+          : `${sandboxAgentDir}/${TASK_HANDOFF_FILE_NAME}`;
       effectiveTask = [
         `The full review task exceeded the maximum command-line argument size and was written to ${sandboxTaskPath}.`,
         "Read that file completely before doing anything else, then follow its instructions exactly.",
@@ -1721,35 +2181,49 @@ async function runAgentReviewInDirs(
       adapter: agentAdapter,
       model: options.model,
       workingDir: materializedFs.agentDir,
-      ...(bundleContext?.instructions ? { instructions: bundleContext.instructions } : {}),
+      ...(bundleContext?.instructions
+        ? { instructions: bundleContext.instructions }
+        : {}),
       ...(bundleContext?.skills ? { skills: bundleContext.skills } : {}),
       ...(bundleContext?.mcpTools ? { mcpTools: bundleContext.mcpTools } : {}),
       ...(mcpServers ? { mcpServers } : {}),
-      ...(Object.keys(configDirEnvVars).length > 0 ? { extraEnvVars: configDirEnvVars } : {}),
-      ...(bundleContext?.compaction ? { compaction: bundleContext.compaction } : {}),
-      ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
+      ...(Object.keys(configDirEnvVars).length > 0
+        ? { extraEnvVars: configDirEnvVars }
+        : {}),
+      ...(bundleContext?.compaction
+        ? { compaction: bundleContext.compaction }
+        : {}),
+      ...(bundleContext?.webSearch
+        ? { webSearch: bundleContext.webSearch }
+        : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
     const taskFilePath = join(materializedFs.agentDir, TASK_HANDOFF_FILE_NAME);
     await rm(taskFilePath, { force: true });
     if (useTaskFile && sandboxTaskPath) {
       await writeFile(taskFilePath, task, "utf8");
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "task exceeds safe argv size; handing the full task off via a workspace file",
-        agent: agentAdapter.kind,
-        taskBytes: utf8ByteLength(task),
-        taskFile: sandboxTaskPath,
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "task exceeds safe argv size; handing the full task off via a workspace file",
+          agent: agentAdapter.kind,
+          taskBytes: utf8ByteLength(task),
+          taskFile: sandboxTaskPath,
+        }),
+      );
     }
     const agentSpawnOptions: AgentSpawnOptions = {
       workingDir: agentWorkingDirForSandbox(sandbox, bundle.workingDir),
-      ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
+      ...(options.agentTimeoutMs !== undefined
+        ? { timeoutMs: options.agentTimeoutMs }
+        : {}),
       model: options.model,
       autoApprove: options.agentAutoApprove ?? true,
       task: effectiveTask,
       ...(mcpServers ? { mcpServers } : {}),
-      ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
+      ...(bundleContext?.webSearch
+        ? { webSearch: bundleContext.webSearch }
+        : {}),
     };
     const command = agentAdapter.buildCommand(effectiveTask, agentSpawnOptions);
     const stdin = agentAdapter.buildStdin
@@ -1757,14 +2231,18 @@ async function runAgentReviewInDirs(
       : effectiveTask;
     const env = resolveEnvPlaceholders(bundle.envVars);
 
-    await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });
+    await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), {
+      force: true,
+    });
 
     agentResult = await sandbox.spawn({
       ...(options.signal ? { signal: options.signal } : {}),
       command,
       cwd: materializedFs.agentDir,
       ...(Object.keys(env).length > 0 ? { env } : {}),
-      ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
+      ...(options.agentTimeoutMs !== undefined
+        ? { timeoutMs: options.agentTimeoutMs }
+        : {}),
       stdin,
       ...(onStdout ? { onStdout } : {}),
     });
@@ -1776,8 +2254,10 @@ async function runAgentReviewInDirs(
   // opencode fork), so both go through the shared stream extraction. pi and oh-my-pi
   // emit the pi-family NDJSON event stream (`--mode json`; omp is a pi fork).
   // claude-code emits a single JSON result envelope from `claude -p --output-format json`.
-  const isNdjsonStreamAgent = agentAdapter.kind === "kilo" || agentAdapter.kind === "opencode";
-  const isPiStreamAgent = agentAdapter.kind === "pi" || agentAdapter.kind === "oh-my-pi";
+  const isNdjsonStreamAgent =
+    agentAdapter.kind === "kilo" || agentAdapter.kind === "opencode";
+  const isPiStreamAgent =
+    agentAdapter.kind === "pi" || agentAdapter.kind === "oh-my-pi";
   const isClaudeEnvelopeAgent = agentAdapter.kind === "claude-code";
 
   // A timeout is only fatal when the agent never finished its output stream.
@@ -1787,7 +2267,9 @@ async function runAgentReviewInDirs(
   // stream-parsing branch below, which checks the terminal marker. Other kinds
   // keep failing fast — their streams carry no authoritative end marker.
   if (agentResult.timedOut && !isPiStreamAgent) {
-    throw new Error(`Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`);
+    throw new Error(
+      `Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`,
+    );
   }
 
   if (!agentResult.timedOut && agentResult.exitCode !== 0) {
@@ -1829,24 +2311,32 @@ async function runAgentReviewInDirs(
     agentUsage = extraction.usage;
     agentCostUsd = extraction.costUsd;
     agentStepCount = extraction.stepCount;
-    if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0 || agentStepCount > 0) {
+    if (
+      Object.keys(extraction.eventCounts).length > 0 ||
+      kiloToolCalls.length > 0 ||
+      agentStepCount > 0
+    ) {
       if (options.logThinking !== false) {
-        console.info(JSON.stringify({
-          level: "info",
-          msg: "agent stream stats",
-          agent: agentAdapter.kind,
-          eventCounts: extraction.eventCounts,
-          streamToolCallCount: kiloToolCalls.length,
-          usageCaptured: agentUsage !== undefined,
-          stepCount: agentStepCount,
-          ...(agentUsage ? {
-            tokensIn: agentUsage.promptTokens,
-            tokensOut: agentUsage.completionTokens,
-            tokensTotal: agentUsage.totalTokens,
-          } : {}),
-          stdoutLength: rawStdout.length,
-          extractedContentLength: content.length,
-        }));
+        console.info(
+          JSON.stringify({
+            level: "info",
+            msg: "agent stream stats",
+            agent: agentAdapter.kind,
+            eventCounts: extraction.eventCounts,
+            streamToolCallCount: kiloToolCalls.length,
+            usageCaptured: agentUsage !== undefined,
+            stepCount: agentStepCount,
+            ...(agentUsage
+              ? {
+                  tokensIn: agentUsage.promptTokens,
+                  tokensOut: agentUsage.completionTokens,
+                  tokensTotal: agentUsage.totalTokens,
+                }
+              : {}),
+            stdoutLength: rawStdout.length,
+            extractedContentLength: content.length,
+          }),
+        );
       }
     }
   } else if (isPiStreamAgent) {
@@ -1872,37 +2362,49 @@ async function runAgentReviewInDirs(
     if (agentResult.timedOut) {
       const agentEndSeen = (extraction.eventCounts["agent_end"] ?? 0) > 0;
       if (!agentEndSeen) {
-        throw new Error(`Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`);
+        throw new Error(
+          `Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`,
+        );
       }
       if (options.logThinking !== false) {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "agent process lingered past timeout after completing its output stream; accepting captured output",
-          agent: agentAdapter.kind,
-          durationMs: agentResult.durationMs,
-          stdoutLength: rawStdout.length,
-          extractedContentLength: content.length,
-        }));
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "agent process lingered past timeout after completing its output stream; accepting captured output",
+            agent: agentAdapter.kind,
+            durationMs: agentResult.durationMs,
+            stdoutLength: rawStdout.length,
+            extractedContentLength: content.length,
+          }),
+        );
       }
     }
-    if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0 || agentStepCount > 0) {
+    if (
+      Object.keys(extraction.eventCounts).length > 0 ||
+      kiloToolCalls.length > 0 ||
+      agentStepCount > 0
+    ) {
       if (options.logThinking !== false) {
-        console.info(JSON.stringify({
-          level: "info",
-          msg: "agent stream stats",
-          agent: agentAdapter.kind,
-          eventCounts: extraction.eventCounts,
-          streamToolCallCount: kiloToolCalls.length,
-          usageCaptured: agentUsage !== undefined,
-          stepCount: agentStepCount,
-          ...(agentUsage ? {
-            tokensIn: agentUsage.promptTokens,
-            tokensOut: agentUsage.completionTokens,
-            tokensTotal: agentUsage.totalTokens,
-          } : {}),
-          stdoutLength: rawStdout.length,
-          extractedContentLength: content.length,
-        }));
+        console.info(
+          JSON.stringify({
+            level: "info",
+            msg: "agent stream stats",
+            agent: agentAdapter.kind,
+            eventCounts: extraction.eventCounts,
+            streamToolCallCount: kiloToolCalls.length,
+            usageCaptured: agentUsage !== undefined,
+            stepCount: agentStepCount,
+            ...(agentUsage
+              ? {
+                  tokensIn: agentUsage.promptTokens,
+                  tokensOut: agentUsage.completionTokens,
+                  tokensTotal: agentUsage.totalTokens,
+                }
+              : {}),
+            stdoutLength: rawStdout.length,
+            extractedContentLength: content.length,
+          }),
+        );
       }
     }
   } else if (isClaudeEnvelopeAgent) {
@@ -1926,20 +2428,26 @@ async function runAgentReviewInDirs(
     agentStepCount = extraction.numTurns ?? 0;
     if (agentUsage || agentStepCount > 0) {
       if (options.logThinking !== false) {
-        console.info(JSON.stringify({
-          level: "info",
-          msg: "agent result envelope stats",
-          agent: agentAdapter.kind,
-          usageCaptured: agentUsage !== undefined,
-          numTurns: agentStepCount,
-          ...(extraction.sessionId ? { sessionId: extraction.sessionId } : {}),
-          ...(agentUsage ? {
-            tokensIn: agentUsage.promptTokens,
-            tokensOut: agentUsage.completionTokens,
-            tokensTotal: agentUsage.totalTokens,
-          } : {}),
-          stdoutLength: rawStdout.length,
-        }));
+        console.info(
+          JSON.stringify({
+            level: "info",
+            msg: "agent result envelope stats",
+            agent: agentAdapter.kind,
+            usageCaptured: agentUsage !== undefined,
+            numTurns: agentStepCount,
+            ...(extraction.sessionId
+              ? { sessionId: extraction.sessionId }
+              : {}),
+            ...(agentUsage
+              ? {
+                  tokensIn: agentUsage.promptTokens,
+                  tokensOut: agentUsage.completionTokens,
+                  tokensTotal: agentUsage.totalTokens,
+                }
+              : {}),
+            stdoutLength: rawStdout.length,
+          }),
+        );
       }
     }
   } else {
@@ -1956,20 +2464,30 @@ async function runAgentReviewInDirs(
         mcpState = {
           problems: Array.isArray(parsed.problems) ? parsed.problems : [],
           summaries: Array.isArray(parsed.summaries) ? parsed.summaries : [],
-          contextRequests: Array.isArray(parsed.contextRequests) ? parsed.contextRequests : [],
-          ...(Array.isArray(parsed.attributionRequests) ? { attributionRequests: parsed.attributionRequests } : {}),
-          ...(Array.isArray(parsed.reviewDataRequests) ? { reviewDataRequests: parsed.reviewDataRequests } : {}),
-          ...(typeof parsed.skipReason === "string" ? { skipReason: parsed.skipReason } : {}),
+          contextRequests: Array.isArray(parsed.contextRequests)
+            ? parsed.contextRequests
+            : [],
+          ...(Array.isArray(parsed.attributionRequests)
+            ? { attributionRequests: parsed.attributionRequests }
+            : {}),
+          ...(Array.isArray(parsed.reviewDataRequests)
+            ? { reviewDataRequests: parsed.reviewDataRequests }
+            : {}),
+          ...(typeof parsed.skipReason === "string"
+            ? { skipReason: parsed.skipReason }
+            : {}),
         };
         if (options.logThinking !== false) {
-          console.info(JSON.stringify({
-            level: "info",
-            msg: "read MCP output state from agent workspace",
-            problemCount: mcpState.problems.length,
-            summaryCount: mcpState.summaries.length,
-            contextRequestCount: mcpState.contextRequests.length,
-            hasSkipReason: mcpState.skipReason !== undefined,
-          }));
+          console.info(
+            JSON.stringify({
+              level: "info",
+              msg: "read MCP output state from agent workspace",
+              problemCount: mcpState.problems.length,
+              summaryCount: mcpState.summaries.length,
+              contextRequestCount: mcpState.contextRequests.length,
+              hasSkipReason: mcpState.skipReason !== undefined,
+            }),
+          );
         }
       }
     } catch {
@@ -1982,11 +2500,12 @@ async function runAgentReviewInDirs(
   // materializes as 0, which the CLI faithfully echoes). A zero/absent report
   // with real parsed usage therefore falls back to AICR's own estimate so
   // llm_usage.cost_usd never records a billed run as free.
-  const reportableCostUsd = agentCostUsd !== undefined && agentCostUsd > 0
-    ? agentCostUsd
-    : agentUsage
-      ? estimateCost(agentUsage, extractModelPricing(options.model))
-      : agentCostUsd;
+  const reportableCostUsd =
+    agentCostUsd !== undefined && agentCostUsd > 0
+      ? agentCostUsd
+      : agentUsage
+        ? estimateCost(agentUsage, extractModelPricing(options.model))
+        : agentCostUsd;
 
   return {
     llmResult: {
@@ -2008,7 +2527,9 @@ async function runAgentReviewInDirs(
     // Cost/request-count flow alongside llmResult.usage; they are not part of the
     // ChatCompletionResult type, so they live here and the summary extractor reads them
     // from the orchestration result rather than from llmResult.
-    ...(reportableCostUsd !== undefined ? { estimatedCostUsd: reportableCostUsd } : {}),
+    ...(reportableCostUsd !== undefined
+      ? { estimatedCostUsd: reportableCostUsd }
+      : {}),
     ...(agentStepCount > 0 ? { requestCount: agentStepCount } : {}),
     ...(mcpState ? { mcpState } : {}),
     ...(kiloToolCalls.length > 0 ? { toolCallEvents: kiloToolCalls } : {}),
@@ -2024,6 +2545,7 @@ async function requestReviewCompletion(
   contextRepoMounts?: readonly ContextRepoMaterialization[],
   runDirs?: RunDirs,
   containmentRoot?: string,
+  tgrepHandle?: TgrepSearchHandle,
 ): Promise<ReviewCompletionResult> {
   if (options.sandbox && options.agentAdapter) {
     const task = followUp
@@ -2034,29 +2556,53 @@ async function requestReviewCompletion(
           // The task travels as one positional argv string for pi-family agents;
           // an uncapped prior output (e.g. a raw-stdout fallback) would exceed
           // MAX_ARG_STRLEN and the repair spawn would fail with E2BIG.
-          tailCapUtf8(followUp.previousOutput, FOLLOW_UP_PREVIOUS_OUTPUT_MAX_BYTES),
+          tailCapUtf8(
+            followUp.previousOutput,
+            FOLLOW_UP_PREVIOUS_OUTPUT_MAX_BYTES,
+          ),
           "",
           followUp.prompt,
         ].join("\n")
       : systemPrompt;
-    return runAgentReviewWithQuotaFallback(sourceRoot, task, options, bundleContext, contextRepoMounts, runDirs, containmentRoot);
+    return runAgentReviewWithQuotaFallback(
+      sourceRoot,
+      task,
+      options,
+      bundleContext,
+      contextRepoMounts,
+      runDirs,
+      containmentRoot,
+      tgrepHandle,
+    );
   }
 
-  return requestDirectLlmCompletion(systemPrompt, options, followUp, bundleContext?.progress);
+  return requestDirectLlmCompletion(
+    systemPrompt,
+    options,
+    followUp,
+    bundleContext?.progress,
+  );
 }
 
 function isSameModel(left: ModelSpec, right: ModelSpec): boolean {
   return left.providerId === right.providerId && left.modelId === right.modelId;
 }
 
-function resolveAgentModelCandidates(options: ServerReviewOrchestrationOptions): readonly ModelSpec[] {
+function resolveAgentModelCandidates(
+  options: ServerReviewOrchestrationOptions,
+): readonly ModelSpec[] {
   const configured = options.agentModelChain;
   if (!configured || configured.length === 0) return [options.model];
 
-  const currentIndex = configured.findIndex((candidate) => isSameModel(candidate, options.model));
+  const currentIndex = configured.findIndex((candidate) =>
+    isSameModel(candidate, options.model),
+  );
   if (currentIndex >= 0) return configured.slice(currentIndex);
 
-  return [options.model, ...configured.filter((candidate) => !isSameModel(candidate, options.model))];
+  return [
+    options.model,
+    ...configured.filter((candidate) => !isSameModel(candidate, options.model)),
+  ];
 }
 
 async function runAgentReviewWithQuotaFallback(
@@ -2067,6 +2613,7 @@ async function runAgentReviewWithQuotaFallback(
   contextRepoMounts?: readonly ContextRepoMaterialization[],
   runDirs?: RunDirs,
   containmentRoot?: string,
+  tgrepHandle?: TgrepSearchHandle,
 ): Promise<ReviewCompletionResult> {
   const candidates = resolveAgentModelCandidates(options);
   const attemptedModels: ModelSpec[] = [];
@@ -2084,8 +2631,10 @@ async function runAgentReviewWithQuotaFallback(
         contextRepoMounts,
         runDirs,
         containmentRoot,
+        tgrepHandle,
       );
-      if (completion.estimatedCostUsd !== undefined) options.onAgentCost?.(completion.estimatedCostUsd);
+      if (completion.estimatedCostUsd !== undefined)
+        options.onAgentCost?.(completion.estimatedCostUsd);
       return index > 0 ? { ...completion, fallbackCount: index } : completion;
     } catch (error) {
       if (!isLlmQuotaExhaustedError(error)) throw error;
@@ -2096,20 +2645,25 @@ async function runAgentReviewWithQuotaFallback(
         throw new LlmFallbackExhaustedError(error, attemptedModels);
       }
 
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "agent model quota exhausted; switching to next configured model",
-        agent: options.agentAdapter?.kind,
-        fromProvider: currentModel.providerId,
-        fromModel: currentModel.modelId,
-        toProvider: nextModel.providerId,
-        toModel: nextModel.modelId,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "agent model quota exhausted; switching to next configured model",
+          agent: options.agentAdapter?.kind,
+          fromProvider: currentModel.providerId,
+          fromModel: currentModel.modelId,
+          toProvider: nextModel.providerId,
+          toModel: nextModel.modelId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
 
-  throw new LlmFallbackExhaustedError(new Error("Agent model chain was empty."), attemptedModels);
+  throw new LlmFallbackExhaustedError(
+    new Error("Agent model chain was empty."),
+    attemptedModels,
+  );
 }
 
 async function requestDirectLlmCompletion(
@@ -2184,13 +2738,13 @@ function extractBalancedJsonPayload(content: string): unknown | null {
           escaped = false;
         } else if (char === "\\") {
           escaped = true;
-        } else if (char === "\"") {
+        } else if (char === '"') {
           inString = false;
         }
         continue;
       }
 
-      if (char === "\"") {
+      if (char === '"') {
         inString = true;
         continue;
       }
@@ -2219,7 +2773,11 @@ function extractJsonPayload(content: string): unknown {
     return null;
   }
 
-  return parseJsonCandidate(trimmed) ?? extractFencedJsonPayload(trimmed) ?? extractBalancedJsonPayload(trimmed);
+  return (
+    parseJsonCandidate(trimmed) ??
+    extractFencedJsonPayload(trimmed) ??
+    extractBalancedJsonPayload(trimmed)
+  );
 }
 
 const KILO_MCP_TOOL_NAME_RE = /^(?:[a-z0-9_-]+)_aicr[_]([a-z_]+)$/iu;
@@ -2273,13 +2831,16 @@ function problemToToolInput(value: unknown): ReportProblemInput {
     category: value.category,
     message: value.message,
     ...(value.suggestion !== undefined ? { suggestion: value.suggestion } : {}),
-    ...(value.fingerprint !== undefined ? { fingerprint: value.fingerprint } : {}),
+    ...(value.fingerprint !== undefined
+      ? { fingerprint: value.fingerprint }
+      : {}),
   } as ReportProblemInput;
 }
 
 function parseXmlToolCalls(content: string): ToolCallEnvelope[] | null {
   const calls: ToolCallEnvelope[] = [];
-  const regex = /<tool_call\s+name\s*=\s*"([^"]+)"\s*>([\s\S]*?)<\/tool_call>/gu;
+  const regex =
+    /<tool_call\s+name\s*=\s*"([^"]+)"\s*>([\s\S]*?)<\/tool_call>/gu;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(content)) !== null) {
     try {
@@ -2349,8 +2910,15 @@ function structuredPayloadToToolCalls(payload: Record<string, unknown>): {
   }
 
   if (typeof payload.summary === "string" && payload.summary.trim()) {
-    calls.push({ name: "aicr.publish_summary", input: { markdown: payload.summary } });
-  } else if (isPlainObject(payload.summary) && typeof payload.summary.markdown === "string" && payload.summary.markdown.trim()) {
+    calls.push({
+      name: "aicr.publish_summary",
+      input: { markdown: payload.summary },
+    });
+  } else if (
+    isPlainObject(payload.summary) &&
+    typeof payload.summary.markdown === "string" &&
+    payload.summary.markdown.trim()
+  ) {
     calls.push({
       name: "aicr.publish_summary",
       input: {
@@ -2366,15 +2934,21 @@ function structuredPayloadToToolCalls(payload: Record<string, unknown>): {
 
   return {
     calls,
-    hasKnownField: hasProblemsField || "summary" in payload || "skipReason" in payload,
+    hasKnownField:
+      hasProblemsField || "summary" in payload || "skipReason" in payload,
   };
 }
 
-function parseToolCalls(content: string, options: ParseToolCallOptions = {}): ToolCallEnvelope[] {
-  const allowNaturalLanguageSummary = options.allowNaturalLanguageSummary ?? true;
+function parseToolCalls(
+  content: string,
+  options: ParseToolCallOptions = {},
+): ToolCallEnvelope[] {
+  const allowNaturalLanguageSummary =
+    options.allowNaturalLanguageSummary ?? true;
   const toolContent = stripReasoningBlocks(content);
   const xmlCalls = parseXmlToolCalls(toolContent) ?? [];
-  const jsonCandidateContent = xmlCalls.length > 0 ? stripXmlToolCalls(toolContent) : toolContent;
+  const jsonCandidateContent =
+    xmlCalls.length > 0 ? stripXmlToolCalls(toolContent) : toolContent;
 
   const payload = extractJsonPayload(jsonCandidateContent);
   if (payload === null || !isPlainObject(payload)) {
@@ -2396,7 +2970,11 @@ function parseToolCalls(content: string, options: ParseToolCallOptions = {}): To
   }
 
   const structured = structuredPayloadToToolCalls(payload);
-  if (structured.calls.length > 0 || structured.hasKnownField || xmlCalls.length > 0) {
+  if (
+    structured.calls.length > 0 ||
+    structured.hasKnownField ||
+    xmlCalls.length > 0
+  ) {
     return [...xmlCalls, ...structured.calls];
   }
 
@@ -2411,8 +2989,13 @@ function parseToolCalls(content: string, options: ParseToolCallOptions = {}): To
 }
 
 function isContextToolName(name: AicrOutputToolName): boolean {
-  return name === "aicr.fetch_more_context" || name === "aicr.try_blame" ||
-    name === "aicr.get_review_commits" || name === "aicr.get_review_context";
+  return (
+    name === "aicr.fetch_more_context" ||
+    name === "aicr.try_blame" ||
+    name === "aicr.get_review_commits" ||
+    name === "aicr.get_review_context" ||
+    name === "aicr.search_code"
+  );
 }
 
 function emptyToolExecutionResult(): ToolCallExecutionResult {
@@ -2433,10 +3016,18 @@ function mergeToolExecutionResults(
     (merged, current) => ({
       toolCallCount: merged.toolCallCount + current.toolCallCount,
       reviewOutputCount: merged.reviewOutputCount + current.reviewOutputCount,
-      contextResponses: [...merged.contextResponses, ...current.contextResponses],
-      invalidContextRequestCount: merged.invalidContextRequestCount + current.invalidContextRequestCount,
-      invalidReviewOutputCount: merged.invalidReviewOutputCount + current.invalidReviewOutputCount,
-      invalidReviewOutputs: [...merged.invalidReviewOutputs, ...current.invalidReviewOutputs],
+      contextResponses: [
+        ...merged.contextResponses,
+        ...current.contextResponses,
+      ],
+      invalidContextRequestCount:
+        merged.invalidContextRequestCount + current.invalidContextRequestCount,
+      invalidReviewOutputCount:
+        merged.invalidReviewOutputCount + current.invalidReviewOutputCount,
+      invalidReviewOutputs: [
+        ...merged.invalidReviewOutputs,
+        ...current.invalidReviewOutputs,
+      ],
     }),
     emptyToolExecutionResult(),
   );
@@ -2466,34 +3057,41 @@ async function executeAicrToolCalls(
         const input = isPlainObject(toolCall.input) ? toolCall.input : {};
         contextResponses.push({
           path: typeof input.path === "string" ? input.path : toolCall.name,
-          ...(isPlainObject(result) && typeof result.content === "string" ? { content: result.content } : {}),
+          ...(isPlainObject(result) && typeof result.content === "string"
+            ? { content: result.content }
+            : {}),
         });
       } else {
         reviewOutputCount += 1;
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       if (isContextToolName(toolCall.name)) {
         invalidContextRequestCount += 1;
         contextResponses.push({ error: errorMessage });
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: `ignored invalid ${toolCall.name.slice("aicr.".length)} tool call`,
-          toolName: toolCall.name,
-          error: errorMessage,
-        }));
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: `ignored invalid ${toolCall.name.slice("aicr.".length)} tool call`,
+            toolName: toolCall.name,
+            error: errorMessage,
+          }),
+        );
         continue;
       }
 
       if (toolCall.name === "aicr.publish_summary") {
         invalidReviewOutputCount += 1;
         invalidReviewOutputs.push({ name: toolCall.name, error: errorMessage });
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "ignored invalid review output tool call",
-          toolName: toolCall.name,
-          error: errorMessage,
-        }));
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "ignored invalid review output tool call",
+            toolName: toolCall.name,
+            error: errorMessage,
+          }),
+        );
         continue;
       }
 
@@ -2519,46 +3117,65 @@ async function callAicrTools(
   return executeAicrToolCalls(parseToolCalls(content, options), tools);
 }
 
-function contextRequestsToToolCalls(requests: readonly FetchMoreContextInput[]): readonly ToolCallEnvelope[] {
-  return requests.map((request) => ({ name: "aicr.fetch_more_context", input: request }));
+function contextRequestsToToolCalls(
+  requests: readonly FetchMoreContextInput[],
+): readonly ToolCallEnvelope[] {
+  return requests.map((request) => ({
+    name: "aicr.fetch_more_context",
+    input: request,
+  }));
 }
 
-function attributionRequestsToToolCalls(requests: readonly TryBlameInput[]): readonly ToolCallEnvelope[] {
-  return requests.map((request) => ({ name: "aicr.try_blame", input: request }));
+function attributionRequestsToToolCalls(
+  requests: readonly TryBlameInput[],
+): readonly ToolCallEnvelope[] {
+  return requests.map((request) => ({
+    name: "aicr.try_blame",
+    input: request,
+  }));
 }
 
-function replayMcpReviewOutputs(state: AicrOutputState, collector: AicrOutputCollector): void {
+function replayMcpReviewOutputs(
+  state: AicrOutputState,
+  collector: AicrOutputCollector,
+): void {
   for (const problem of state.problems) {
     try {
       collector.reportProblem(problem);
     } catch (error) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "MCP state problem rejected by collector",
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "MCP state problem rejected by collector",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
   for (const summary of state.summaries) {
     try {
       collector.publishSummary(summary);
     } catch (error) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "MCP state summary rejected by collector",
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "MCP state summary rejected by collector",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
   if (state.skipReason) {
     try {
       collector.skip({ reason: state.skipReason });
     } catch (error) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "MCP state skip rejected by collector",
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "MCP state skip rejected by collector",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
 }
@@ -2575,13 +3192,22 @@ async function collectCompletionOutputs(
     replayMcpReviewOutputs(completion.mcpState, collector);
     const attributionRequests = completion.mcpState.attributionRequests ?? [];
     const reviewDataRequests = completion.mcpState.reviewDataRequests ?? [];
-    if (completion.mcpState.contextRequests.length > 0 || attributionRequests.length > 0 || reviewDataRequests.length > 0) {
+    if (
+      completion.mcpState.contextRequests.length > 0 ||
+      attributionRequests.length > 0 ||
+      reviewDataRequests.length > 0
+    ) {
       executions.push(
         await executeAicrToolCalls(
           [
             ...contextRequestsToToolCalls(completion.mcpState.contextRequests),
             ...attributionRequestsToToolCalls(attributionRequests),
-            ...reviewDataRequests.filter(request => request && (request.name === "aicr.get_review_commits" || request.name === "aicr.get_review_context")),
+            ...reviewDataRequests.filter(
+              (request) =>
+                request &&
+                (request.name === "aicr.get_review_commits" ||
+                  request.name === "aicr.get_review_context"),
+            ),
           ],
           tools,
         ),
@@ -2594,8 +3220,14 @@ async function collectCompletionOutputs(
     if (hasFinalReviewOutput(completion.mcpState)) {
       return mergeToolExecutionResults(...executions);
     }
-  } else if (completion.toolCallEvents && completion.toolCallEvents.length > 0) {
-    const toolCallResult = await executeAicrToolCalls(completion.toolCallEvents, tools);
+  } else if (
+    completion.toolCallEvents &&
+    completion.toolCallEvents.length > 0
+  ) {
+    const toolCallResult = await executeAicrToolCalls(
+      completion.toolCallEvents,
+      tools,
+    );
     executions.push(toolCallResult);
     // Kilo stream tool-call events are authoritative when they produced review
     // output. Skip text re-parsing for the same double-collect reason.
@@ -2606,18 +3238,28 @@ async function collectCompletionOutputs(
 
   // Fall back to text-based parsing only when no structured output was collected
   // via MCP state or stream tool-call events.
-  executions.push(await callAicrTools(completion.llmResult.content, tools, options));
+  executions.push(
+    await callAicrTools(completion.llmResult.content, tools, options),
+  );
   return mergeToolExecutionResults(...executions);
 }
 
 function hasFinalReviewOutput(state: AicrOutputState): boolean {
-  return state.problems.length > 0 || state.summaries.length > 0 || Boolean(state.skipReason);
+  return (
+    state.problems.length > 0 ||
+    state.summaries.length > 0 ||
+    Boolean(state.skipReason)
+  );
 }
 
-const NO_ACTIONABLE_PROBLEM_RE = /(?:no\s+(?:actionable\s+)?(?:issues?|problems?|findings?)\s+(?:found|detected)|no\s+(?:actionable\s+)?(?:issues?|problems?|findings?)|未发现(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|没有发现(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|暂无(?:问题|缺陷|风险)|无(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|lgtm)/iu;
-const ACTIONABLE_PROBLEM_CLAIM_RE = /(?:(?:发现|發現)\s*(?:了\s*)?[1-9]\d*\s*(?:个|個|项|項)?\s*(?:问题|問題|缺陷|风险|風險)|(?:存在|检出|檢出)\s*(?:明显|可执行|阻塞|严重|高风险)?\s*(?:问题|問題|缺陷|风险|風險)|found\s+[1-9]\d*\s+(?:issues?|problems?)|[1-9]\d*\s+(?:issues?|problems?)\s+(?:found|detected)|(?:critical|high[-\s]?risk|blocking)\s+(?:issue|problem)|(?:严重|高风险|阻塞)\s*(?:问题|問題|缺陷|风险|風險))/iu;
-const MISSING_CONTEXT_REQUEST_RE = /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?diff|fetch_more_context|(?:cannot|can't|unable\s+to)\s+(?:access|read|inspect|verify).*(?:full\s+)?(?:repo|repository|source|code|context)|无法(?:获取|访问|读取|查看|验证).*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|缺少.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|需要.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|请提供.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|获取.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源))/iu;
-const NO_REVIEWABLE_CODE_RE = /(?:no\s+(?:reviewable\s+)?(?:code|changes?)\s+to\s+review|nothing\s+to\s+review|empty\s+file|file\s+is\s+empty|文件为空|空文件|内容为空|无代码可(?:审查|评审)|无(?:可|需|需要)?(?:审查|评审)(?:的)?(?:代码|内容)|没有(?:可|需要)?(?:审查|评审)(?:的)?(?:代码|内容))/iu;
+const NO_ACTIONABLE_PROBLEM_RE =
+  /(?:no\s+(?:actionable\s+)?(?:issues?|problems?|findings?)\s+(?:found|detected)|no\s+(?:actionable\s+)?(?:issues?|problems?|findings?)|未发现(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|没有发现(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|暂无(?:问题|缺陷|风险)|无(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|lgtm)/iu;
+const ACTIONABLE_PROBLEM_CLAIM_RE =
+  /(?:(?:发现|發現)\s*(?:了\s*)?[1-9]\d*\s*(?:个|個|项|項)?\s*(?:问题|問題|缺陷|风险|風險)|(?:存在|检出|檢出)\s*(?:明显|可执行|阻塞|严重|高风险)?\s*(?:问题|問題|缺陷|风险|風險)|found\s+[1-9]\d*\s+(?:issues?|problems?)|[1-9]\d*\s+(?:issues?|problems?)\s+(?:found|detected)|(?:critical|high[-\s]?risk|blocking)\s+(?:issue|problem)|(?:严重|高风险|阻塞)\s*(?:问题|問題|缺陷|风险|風險))/iu;
+const MISSING_CONTEXT_REQUEST_RE =
+  /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?diff|fetch_more_context|(?:cannot|can't|unable\s+to)\s+(?:access|read|inspect|verify).*(?:full\s+)?(?:repo|repository|source|code|context)|无法(?:获取|访问|读取|查看|验证).*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|缺少.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|需要.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|请提供.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|获取.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源))/iu;
+const NO_REVIEWABLE_CODE_RE =
+  /(?:no\s+(?:reviewable\s+)?(?:code|changes?)\s+to\s+review|nothing\s+to\s+review|empty\s+file|file\s+is\s+empty|文件为空|空文件|内容为空|无代码可(?:审查|评审)|无(?:可|需|需要)?(?:审查|评审)(?:的)?(?:代码|内容)|没有(?:可|需要)?(?:审查|评审)(?:的)?(?:代码|内容))/iu;
 
 type NoActionableSkipReason = "lgtm" | "no_reviewable_code";
 
@@ -2630,8 +3272,12 @@ function summaryClaimsActionableProblems(markdown: string): boolean {
 }
 
 function summaryOnlyClaimsActionableProblems(state: AicrOutputState): boolean {
-  return state.problems.length === 0
-    && state.summaries.some((summary) => summaryClaimsActionableProblems(summary.markdown));
+  return (
+    state.problems.length === 0 &&
+    state.summaries.some((summary) =>
+      summaryClaimsActionableProblems(summary.markdown),
+    )
+  );
 }
 
 function outputRequestsMissingContext(state: AicrOutputState): boolean {
@@ -2639,17 +3285,26 @@ function outputRequestsMissingContext(state: AicrOutputState): boolean {
     return false;
   }
 
-  return (state.skipReason !== undefined && MISSING_CONTEXT_REQUEST_RE.test(state.skipReason))
-    || state.summaries.some((summary) => MISSING_CONTEXT_REQUEST_RE.test(summary.markdown));
+  return (
+    (state.skipReason !== undefined &&
+      MISSING_CONTEXT_REQUEST_RE.test(state.skipReason)) ||
+    state.summaries.some((summary) =>
+      MISSING_CONTEXT_REQUEST_RE.test(summary.markdown),
+    )
+  );
 }
 
-function hasFetchedContextResponses(execution: ToolCallExecutionResult): boolean {
+function hasFetchedContextResponses(
+  execution: ToolCallExecutionResult,
+): boolean {
   return execution.contextResponses.some(
     (response) => response.error === undefined && response.path !== undefined,
   );
 }
 
-function classifyUnstructuredNoActionableOutput(content: string): NoActionableSkipReason | undefined {
+function classifyUnstructuredNoActionableOutput(
+  content: string,
+): NoActionableSkipReason | undefined {
   const text = stripReasoningBlocks(content).trim();
   if (!text || MISSING_CONTEXT_REQUEST_RE.test(text)) {
     return undefined;
@@ -2677,9 +3332,10 @@ function classifyNoActionableReviewResult(
     return undefined;
   }
 
-  const candidates = state.summaries.length > 0
-    ? state.summaries.map((summary) => summary.markdown)
-    : [rawContent];
+  const candidates =
+    state.summaries.length > 0
+      ? state.summaries.map((summary) => summary.markdown)
+      : [rawContent];
   let sawNoReviewableCode = false;
   for (const candidate of candidates) {
     const reason = classifyUnstructuredNoActionableOutput(candidate);
@@ -2723,7 +3379,11 @@ function buildContextFollowUpPrompt(
     );
   }
 
-  sections.push("", "Changed files:", ...changedPaths.map((path) => `- ${path}`));
+  sections.push(
+    "",
+    "Changed files:",
+    ...changedPaths.map((path) => `- ${path}`),
+  );
 
   if (execution.contextResponses.length > 0) {
     sections.push(
@@ -2753,18 +3413,19 @@ function buildContextFollowUpPrompt(
     sections.push(
       "",
       "Ignored invalid review output tool calls:",
-      ...execution.invalidReviewOutputs.map((response) => `- ${response.name}: ${response.error}`),
+      ...execution.invalidReviewOutputs.map(
+        (response) => `- ${response.name}: ${response.error}`,
+      ),
     );
   }
 
-  const validResponses = execution.contextResponses.filter((response) => response.path && response.content !== undefined);
+  const validResponses = execution.contextResponses.filter(
+    (response) => response.path && response.content !== undefined,
+  );
   if (validResponses.length > 0) {
     sections.push("", "Fetched context:");
     for (const response of validResponses) {
-      sections.push(
-        `\n--- ${response.path} ---`,
-        response.content ?? "",
-      );
+      sections.push(`\n--- ${response.path} ---`, response.content ?? "");
     }
   }
 
@@ -2775,7 +3436,9 @@ function buildFallbackReviewSummary(
   reviewEvent: ReviewEvent,
   changedPaths: readonly string[],
 ): string {
-  const target = reviewEvent.headSha ? `${reviewEvent.repoRef}@${reviewEvent.headSha}` : reviewEvent.repoRef;
+  const target = reviewEvent.headSha
+    ? `${reviewEvent.repoRef}@${reviewEvent.headSha}`
+    : reviewEvent.repoRef;
   return [
     `AICR review completed for ${target}.`,
     `Changed files analyzed: ${changedPaths.length}.`,
@@ -2783,22 +3446,36 @@ function buildFallbackReviewSummary(
   ].join("\n");
 }
 
-function toExtraContextRequest(input: FetchMoreContextInput, revision: string | undefined): ExtraContextRequest {
+function toExtraContextRequest(
+  input: FetchMoreContextInput,
+  revision: string | undefined,
+): ExtraContextRequest {
   return {
     path: input.path,
     reason: input.reason,
-    ...(input.range?.start_line !== undefined ? { startLine: input.range.start_line } : {}),
-    ...(input.range?.end_line !== undefined ? { endLine: input.range.end_line } : {}),
+    ...(input.range?.start_line !== undefined
+      ? { startLine: input.range.start_line }
+      : {}),
+    ...(input.range?.end_line !== undefined
+      ? { endLine: input.range.end_line }
+      : {}),
     ...(revision !== undefined ? { revision } : {}),
   };
 }
 
-function toAttributionRequest(input: TryBlameInput, revision: string | undefined): AttributionRequest {
+function toAttributionRequest(
+  input: TryBlameInput,
+  revision: string | undefined,
+): AttributionRequest {
   return {
     path: input.path,
     reason: input.reason,
-    ...(input.range?.start_line !== undefined ? { startLine: input.range.start_line } : {}),
-    ...(input.range?.end_line !== undefined ? { endLine: input.range.end_line } : {}),
+    ...(input.range?.start_line !== undefined
+      ? { startLine: input.range.start_line }
+      : {}),
+    ...(input.range?.end_line !== undefined
+      ? { endLine: input.range.end_line }
+      : {}),
     ...(revision !== undefined ? { revision } : {}),
   };
 }
@@ -2815,30 +3492,42 @@ function toReviewProblem(input: ReportProblemInput): ReviewProblem {
     ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
   };
 
-  return problem.fingerprint ? problem : { ...problem, fingerprint: computeProblemFingerprint(problem) };
+  return problem.fingerprint
+    ? problem
+    : { ...problem, fingerprint: computeProblemFingerprint(problem) };
 }
 
-function pathMatchesDiffFile(problemPath: string, file: ParsedDiff["files"][number]): boolean {
+function pathMatchesDiffFile(
+  problemPath: string,
+  file: ParsedDiff["files"][number],
+): boolean {
   const normalizedProblemPath = normalizePath(problemPath);
   return [file.newPath, file.oldPath]
     .filter((path): path is string => Boolean(path))
     .some((path) => normalizePath(path) === normalizedProblemPath);
 }
 
-function isLineCommentableInDiff(problem: ReviewProblem, diff: ParsedDiff | undefined): boolean | undefined {
+function isLineCommentableInDiff(
+  problem: ReviewProblem,
+  diff: ParsedDiff | undefined,
+): boolean | undefined {
   if (!diff) {
     return undefined;
   }
 
-  const matchingFiles = diff.files.filter((file) => pathMatchesDiffFile(problem.file, file));
+  const matchingFiles = diff.files.filter((file) =>
+    pathMatchesDiffFile(problem.file, file),
+  );
   if (matchingFiles.length === 0) {
     return false;
   }
 
   return matchingFiles.some((file) =>
     file.hunks.some((hunk) =>
-      hunk.lines.some((line) =>
-        (line.kind === "add" || line.kind === "context") && line.newLine === problem.line,
+      hunk.lines.some(
+        (line) =>
+          (line.kind === "add" || line.kind === "context") &&
+          line.newLine === problem.line,
       ),
     ),
   );
@@ -2851,7 +3540,13 @@ const CODE_REFERENCE_MAX_CHARS = 2000;
 function inferCodeFenceLanguage(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "ts";
-  if (lower.endsWith(".js") || lower.endsWith(".jsx") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "js";
+  if (
+    lower.endsWith(".js") ||
+    lower.endsWith(".jsx") ||
+    lower.endsWith(".mjs") ||
+    lower.endsWith(".cjs")
+  )
+    return "js";
   if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "md";
   if (lower.endsWith(".py")) return "py";
@@ -2860,7 +3555,15 @@ function inferCodeFenceLanguage(filePath: string): string {
   if (lower.endsWith(".java")) return "java";
   if (lower.endsWith(".kt") || lower.endsWith(".kts")) return "kotlin";
   if (lower.endsWith(".c")) return "c";
-  if (lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx") || lower.endsWith(".hpp") || lower.endsWith(".hh") || lower.endsWith(".hxx")) return "cpp";
+  if (
+    lower.endsWith(".cc") ||
+    lower.endsWith(".cpp") ||
+    lower.endsWith(".cxx") ||
+    lower.endsWith(".hpp") ||
+    lower.endsWith(".hh") ||
+    lower.endsWith(".hxx")
+  )
+    return "cpp";
   if (lower.endsWith(".h")) return "c";
   if (lower.endsWith(".cs")) return "csharp";
   if (lower.endsWith(".php")) return "php";
@@ -2875,12 +3578,17 @@ function inferCodeFenceLanguage(filePath: string): string {
   return "text";
 }
 
-function buildCodeReferenceSnippet(problem: ReviewProblem, diff: ParsedDiff | undefined): string | undefined {
+function buildCodeReferenceSnippet(
+  problem: ReviewProblem,
+  diff: ParsedDiff | undefined,
+): string | undefined {
   if (!diff) {
     return undefined;
   }
 
-  const matchingFiles = diff.files.filter((file) => pathMatchesDiffFile(problem.file, file));
+  const matchingFiles = diff.files.filter((file) =>
+    pathMatchesDiffFile(problem.file, file),
+  );
   const targetStart = Math.min(problem.line, problem.endLine ?? problem.line);
   const targetEnd = Math.max(problem.line, problem.endLine ?? problem.line);
   const windowStart = Math.max(1, targetStart - CODE_REFERENCE_CONTEXT_LINES);
@@ -2888,14 +3596,20 @@ function buildCodeReferenceSnippet(problem: ReviewProblem, diff: ParsedDiff | un
 
   for (const file of matchingFiles) {
     for (const hunk of file.hunks) {
-      const sourceLines = hunk.lines.filter((line) => line.kind !== "delete" && line.newLine !== undefined);
-      const overlapsTarget = sourceLines.some((line) => line.newLine! >= targetStart && line.newLine! <= targetEnd);
+      const sourceLines = hunk.lines.filter(
+        (line) => line.kind !== "delete" && line.newLine !== undefined,
+      );
+      const overlapsTarget = sourceLines.some(
+        (line) => line.newLine! >= targetStart && line.newLine! <= targetEnd,
+      );
       if (!overlapsTarget) {
         continue;
       }
 
       const selectedLines = sourceLines
-        .filter((line) => line.newLine! >= windowStart && line.newLine! <= windowEnd)
+        .filter(
+          (line) => line.newLine! >= windowStart && line.newLine! <= windowEnd,
+        )
         .slice(0, CODE_REFERENCE_MAX_LINES)
         .map((line) => line.content);
       const snippet = selectedLines.join("\n").replace(/\s+$/u, "");
@@ -2912,14 +3626,21 @@ function buildCodeReferenceSnippet(problem: ReviewProblem, diff: ParsedDiff | un
   return undefined;
 }
 
-function withCodeReference(problem: ReviewProblem, diff: ParsedDiff | undefined): ReviewProblem {
+function withCodeReference(
+  problem: ReviewProblem,
+  diff: ParsedDiff | undefined,
+): ReviewProblem {
   if (problem.codeSnippet) {
     return problem;
   }
 
   const codeSnippet = buildCodeReferenceSnippet(problem, diff);
   return codeSnippet
-    ? { ...problem, codeSnippet, codeLanguage: inferCodeFenceLanguage(problem.file) }
+    ? {
+        ...problem,
+        codeSnippet,
+        codeLanguage: inferCodeFenceLanguage(problem.file),
+      }
     : problem;
 }
 
@@ -2933,12 +3654,20 @@ function withRenderedProblemContent(
     file: problem.file,
     line: problem.line,
     ...(problem.endLine !== undefined ? { endLine: problem.endLine } : {}),
-    ...(problem.lineCommentAllowed !== undefined ? { lineCommentAllowed: problem.lineCommentAllowed } : {}),
+    ...(problem.lineCommentAllowed !== undefined
+      ? { lineCommentAllowed: problem.lineCommentAllowed }
+      : {}),
     severity: problem.severity,
     category: problem.category,
     message,
     ...(suggestion ? { suggestion } : {}),
-    ...(codeSnippet ? { codeSnippet, codeLanguage: problem.codeLanguage ?? inferCodeFenceLanguage(problem.file) } : {}),
+    ...(codeSnippet
+      ? {
+          codeSnippet,
+          codeLanguage:
+            problem.codeLanguage ?? inferCodeFenceLanguage(problem.file),
+        }
+      : {}),
     ...(problem.fingerprint ? { fingerprint: problem.fingerprint } : {}),
   };
 }
@@ -2958,7 +3687,10 @@ function publishProblem(
   return publisher.publishProblem(problem);
 }
 
-function appendDispatchResults(target: DispatchResult[], result: ReviewDispatchResult): void {
+function appendDispatchResults(
+  target: DispatchResult[],
+  result: ReviewDispatchResult,
+): void {
   if (Array.isArray(result)) {
     target.push(...(result as readonly DispatchResult[]));
     return;
@@ -2967,11 +3699,15 @@ function appendDispatchResults(target: DispatchResult[], result: ReviewDispatchR
   target.push(result as DispatchResult);
 }
 
-function countPublishedDispatchResults(results: readonly DispatchResult[]): number {
+function countPublishedDispatchResults(
+  results: readonly DispatchResult[],
+): number {
   return results.filter((result) => result.status === "published").length;
 }
 
-function countFailedDispatchResults(results: readonly DispatchResult[]): number {
+function countFailedDispatchResults(
+  results: readonly DispatchResult[],
+): number {
   return results.filter((result) => result.status === "failed").length;
 }
 
@@ -2988,7 +3724,11 @@ function toDispatchErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function createFailedDispatchResult(channel: string, phase: "problem" | "summary", error: unknown): DispatchResult {
+function createFailedDispatchResult(
+  channel: string,
+  phase: "problem" | "summary",
+  error: unknown,
+): DispatchResult {
   const status = readDispatchErrorStatus(error);
   return {
     channel,
@@ -3002,16 +3742,22 @@ function createFailedDispatchResult(channel: string, phase: "problem" | "summary
   };
 }
 
-function logDispatchFailure(channel: string, phase: "problem" | "summary", error: unknown): void {
+function logDispatchFailure(
+  channel: string,
+  phase: "problem" | "summary",
+  error: unknown,
+): void {
   const status = readDispatchErrorStatus(error);
-  console.warn(JSON.stringify({
-    level: "warn",
-    msg: "output publisher dispatch failed",
-    channel,
-    phase,
-    error: toDispatchErrorMessage(error),
-    ...(status !== undefined ? { status } : {}),
-  }));
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      msg: "output publisher dispatch failed",
+      channel,
+      phase,
+      error: toDispatchErrorMessage(error),
+      ...(status !== undefined ? { status } : {}),
+    }),
+  );
 }
 
 export async function runReviewOrchestration(
@@ -3019,11 +3765,19 @@ export async function runReviewOrchestration(
   options: ServerReviewOrchestrationOptions,
 ): Promise<ReviewOrchestrationResult> {
   if (options.executionScope) {
-    return options.executionScope(context, () => runReviewOrchestration(context, { ...options, executionScope: undefined }));
+    return options.executionScope(context, () =>
+      runReviewOrchestration(context, {
+        ...options,
+        executionScope: undefined,
+      }),
+    );
   }
   context.signal?.throwIfAborted();
   if (options.modelOptionsResolver && !options.optionsResolver) {
-    options = { ...options, ...options.modelOptionsResolver(context.reviewEvent.workspaceId) };
+    options = {
+      ...options,
+      ...options.modelOptionsResolver(context.reviewEvent.workspaceId),
+    };
   }
   if (options.optionsResolver) {
     // One execution plan per task (P4): workspace-layer analysis options and
@@ -3034,45 +3788,73 @@ export async function runReviewOrchestration(
 
   const registry = options.liveRuns;
   if (!registry) {
-    const result = await executeReviewOrchestration(context, { ...options, signal: context.signal });
-    return { ...result, ...(options.configVersion ? { configVersion: options.configVersion } : {}) };
+    const result = await executeReviewOrchestration(context, {
+      ...options,
+      signal: context.signal,
+    });
+    return {
+      ...result,
+      ...(options.configVersion
+        ? { configVersion: options.configVersion }
+        : {}),
+    };
   }
 
   const { reviewEvent } = context;
   const operatorAbort = new AbortController();
-  context = { ...context, signal: context.signal ? AbortSignal.any([context.signal, operatorAbort.signal]) : operatorAbort.signal };
+  context = {
+    ...context,
+    signal: context.signal
+      ? AbortSignal.any([context.signal, operatorAbort.signal])
+      : operatorAbort.signal,
+  };
   const runId = context.runId ?? randomUUID();
   const vcsKind = vcsKindForProvider(reviewEvent.provider);
-  const executionId = registry.start({
-    runId,
-    source: context.runSource ?? "webhook",
-    provider: reviewEvent.provider,
-    eventName: context.eventName,
-    workspaceId: reviewEvent.workspaceId,
-    triggerName: reviewEvent.triggerName ?? null,
-    repoRef: reviewEvent.repoRef,
-    targetKind: reviewEvent.targetKind,
-    ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
-    ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
-    ...(vcsKind ? { vcsKind } : {}),
-    ...(reviewEvent.title ? { title: reviewEvent.title } : {}),
-    ...(reviewEvent.url ? { url: reviewEvent.url } : {}),
-    modelProviderId: options.model.providerId,
-    modelId: options.model.modelId,
-    agentKind: options.agentAdapter?.kind ?? "native-llm",
-    attempt: context.attempt ?? 1,
-  }, () => operatorAbort.abort(new ReviewCancelledError()));
+  const executionId = registry.start(
+    {
+      runId,
+      source: context.runSource ?? "webhook",
+      provider: reviewEvent.provider,
+      eventName: context.eventName,
+      workspaceId: reviewEvent.workspaceId,
+      triggerName: reviewEvent.triggerName ?? null,
+      repoRef: reviewEvent.repoRef,
+      targetKind: reviewEvent.targetKind,
+      ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+      ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+      ...(vcsKind ? { vcsKind } : {}),
+      ...(reviewEvent.title ? { title: reviewEvent.title } : {}),
+      ...(reviewEvent.url ? { url: reviewEvent.url } : {}),
+      modelProviderId: options.model.providerId,
+      modelId: options.model.modelId,
+      agentKind: options.agentAdapter?.kind ?? "native-llm",
+      attempt: context.attempt ?? 1,
+    },
+    () => operatorAbort.abort(new ReviewCancelledError()),
+  );
   try {
     await options.onExecutionStart?.({
       runId,
       reviewEvent,
-      model: { providerId: options.model.providerId, modelId: options.model.modelId },
+      model: {
+        providerId: options.model.providerId,
+        modelId: options.model.modelId,
+      },
     });
     // Propagate the registry runId so the per-run directory scope (L09)
     // matches the id operators see in the live-run view.
-    const result = await executeReviewOrchestration({ ...context, runId }, { ...options, signal: context.signal }, { registry, executionId });
+    const result = await executeReviewOrchestration(
+      { ...context, runId },
+      { ...options, signal: context.signal },
+      { registry, executionId },
+    );
     context.signal?.throwIfAborted();
-    return { ...result, ...(options.configVersion ? { configVersion: options.configVersion } : {}) };
+    return {
+      ...result,
+      ...(options.configVersion
+        ? { configVersion: options.configVersion }
+        : {}),
+    };
   } finally {
     registry.finish(executionId);
   }
@@ -3083,20 +3865,42 @@ interface LiveRunHandle {
   readonly executionId: string;
 }
 
-function liveRunMetricsFromAccumulator(accumulator: ReviewRunMetricsAccumulator): LiveRunMetrics {
+function liveRunMetricsFromAccumulator(
+  accumulator: ReviewRunMetricsAccumulator,
+): LiveRunMetrics {
   const metrics = finalizeReviewRunMetrics(accumulator);
   const usage = metrics.usage;
   return {
-    ...(usage?.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
-    ...(usage?.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
-    ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
-    ...(usage?.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
-    ...(usage?.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
-    ...(metrics.estimatedCostUsd !== undefined ? { estimatedCostUsd: metrics.estimatedCostUsd } : {}),
-    ...(metrics.requestCount !== undefined ? { requestCount: metrics.requestCount } : {}),
-    ...(metrics.retryCount !== undefined ? { retryCount: metrics.retryCount } : {}),
-    ...(metrics.fallbackCount !== undefined ? { fallbackCount: metrics.fallbackCount } : {}),
-    ...(metrics.usageSource !== undefined ? { usageSource: metrics.usageSource } : {}),
+    ...(usage?.promptTokens !== undefined
+      ? { promptTokens: usage.promptTokens }
+      : {}),
+    ...(usage?.completionTokens !== undefined
+      ? { completionTokens: usage.completionTokens }
+      : {}),
+    ...(usage?.totalTokens !== undefined
+      ? { totalTokens: usage.totalTokens }
+      : {}),
+    ...(usage?.cachedPromptTokens !== undefined
+      ? { cachedPromptTokens: usage.cachedPromptTokens }
+      : {}),
+    ...(usage?.cacheCreationTokens !== undefined
+      ? { cacheCreationTokens: usage.cacheCreationTokens }
+      : {}),
+    ...(metrics.estimatedCostUsd !== undefined
+      ? { estimatedCostUsd: metrics.estimatedCostUsd }
+      : {}),
+    ...(metrics.requestCount !== undefined
+      ? { requestCount: metrics.requestCount }
+      : {}),
+    ...(metrics.retryCount !== undefined
+      ? { retryCount: metrics.retryCount }
+      : {}),
+    ...(metrics.fallbackCount !== undefined
+      ? { fallbackCount: metrics.fallbackCount }
+      : {}),
+    ...(metrics.usageSource !== undefined
+      ? { usageSource: metrics.usageSource }
+      : {}),
   };
 }
 
@@ -3106,7 +3910,8 @@ async function executeReviewOrchestration(
   liveRun?: LiveRunHandle,
 ): Promise<ReviewOrchestrationResult> {
   const runtimeDirs = options.runtimeDirsResolver?.(context.reviewEvent);
-  const sourceRoot = runtimeDirs?.sourceRoot ?? options.sourceRootResolver(context.reviewEvent);
+  const sourceRoot =
+    runtimeDirs?.sourceRoot ?? options.sourceRootResolver(context.reviewEvent);
   if (!sourceRoot) {
     throw new TypeError("Review orchestration requires a source root.");
   }
@@ -3122,11 +3927,19 @@ async function executeReviewOrchestration(
   // each other's source/agent/tmp/MCP/HOME-XDG/context state.
   const runId = context.runId ?? randomUUID();
   const runScope = runId.replace(/[^A-Za-z0-9._-]+/gu, "_");
-  if (runScope === "" || runScope === "." || runScope === "..") throw new Error("runId must name one non-dot directory");
+  if (runScope === "" || runScope === "." || runScope === "..")
+    throw new Error("runId must name one non-dot directory");
   const runDirs = computeRunDirs(runtimeDirs, sourceRoot, runScope);
-  const containmentRoot = runtimeDirs ? await realpathContaining(runtimeDirs.instanceRoot) : undefined;
-  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(runDirs.root))) {
-    throw new Error(`run directory escapes instanceRoot via symlink/junction: ${runDirs.root}`);
+  const containmentRoot = runtimeDirs
+    ? await realpathContaining(runtimeDirs.instanceRoot)
+    : undefined;
+  if (
+    containmentRoot &&
+    !isWithinRoot(containmentRoot, await realpathContaining(runDirs.root))
+  ) {
+    throw new Error(
+      `run directory escapes instanceRoot via symlink/junction: ${runDirs.root}`,
+    );
   }
 
   // One owner spans fetch, all model attempts, follow-ups and publication.
@@ -3140,9 +3953,16 @@ async function executeReviewOrchestration(
   try {
     await reapStaleRunDirs(dirname(runDirs.root));
     if (containmentRoot) {
-      for (const dir of [runDirs.sourceDir, runDirs.agentDir, runDirs.tmpDir, runDirs.contextReposDir]) {
+      for (const dir of [
+        runDirs.sourceDir,
+        runDirs.agentDir,
+        runDirs.tmpDir,
+        runDirs.contextReposDir,
+      ]) {
         if (!isWithinRoot(containmentRoot, await realpathContaining(dir))) {
-          throw new Error(`run directory escapes instanceRoot via symlink/junction: ${dir}`);
+          throw new Error(
+            `run directory escapes instanceRoot via symlink/junction: ${dir}`,
+          );
         }
       }
     }
@@ -3157,15 +3977,30 @@ async function executeReviewOrchestration(
       // recorded host differs. Reuse the directory only when its recorded
       // owner is provably gone; a live owner keeps failing closed.
       if (await isRunDirOwnerAlive(runDirs.root)) {
-        throw new Error(`run directory is owned by a live process: ${runDirs.root}`, { cause: error });
+        throw new Error(
+          `run directory is owned by a live process: ${runDirs.root}`,
+          { cause: error },
+        );
       }
       await rm(runDirs.root, { recursive: true, force: true });
       await mkdir(runDirs.root);
     }
     ownsRunRoot = true;
-    await writeFile(join(runDirs.root, RUN_OWNER_FILE), JSON.stringify({ host: hostname(), pid: process.pid }), { flag: "wx" });
+    await writeFile(
+      join(runDirs.root, RUN_OWNER_FILE),
+      JSON.stringify({ host: hostname(), pid: process.pid }),
+      { flag: "wx" },
+    );
     runSandbox = await options.sandboxFactory?.();
-    return await executeReviewInRunDirs(context, runSandbox ? { ...options, sandbox: runSandbox } : options, sourceRoot, runDirs, containmentRoot, runtimeDirs, liveRun);
+    return await executeReviewInRunDirs(
+      context,
+      runSandbox ? { ...options, sandbox: runSandbox } : options,
+      sourceRoot,
+      runDirs,
+      containmentRoot,
+      runtimeDirs,
+      liveRun,
+    );
   } finally {
     try {
       await runSandbox?.teardown();
@@ -3173,11 +4008,23 @@ async function executeReviewOrchestration(
       activeRunDirs.delete(runDirs.root);
       // Verify again before recursive cleanup; an escaping junction must never
       // redirect cleanup to an unrelated workspace, even if teardown failed.
-      const realRunsRoot = await realpathContaining(dirname(runDirs.root)).catch(() => undefined);
-      const realRunRoot = await realpathContaining(runDirs.root).catch(() => undefined);
-      if (ownsRunRoot && realRunsRoot && realRunRoot && isWithinRoot(realRunsRoot, realRunRoot) && realRunsRoot !== realRunRoot &&
-          (!containmentRoot || isWithinRoot(containmentRoot, realRunRoot))) {
-        await rm(runDirs.root, { recursive: true, force: true }).catch(() => {});
+      const realRunsRoot = await realpathContaining(
+        dirname(runDirs.root),
+      ).catch(() => undefined);
+      const realRunRoot = await realpathContaining(runDirs.root).catch(
+        () => undefined,
+      );
+      if (
+        ownsRunRoot &&
+        realRunsRoot &&
+        realRunRoot &&
+        isWithinRoot(realRunsRoot, realRunRoot) &&
+        realRunsRoot !== realRunRoot &&
+        (!containmentRoot || isWithinRoot(containmentRoot, realRunRoot))
+      ) {
+        await rm(runDirs.root, { recursive: true, force: true }).catch(
+          () => {},
+        );
       }
     }
   }
@@ -3198,16 +4045,33 @@ async function executeReviewInRunDirs(
     id: context.reviewEvent.workspaceId,
     sourceDir: runDirs.sourceDir,
   };
-  const vcs = options.vcsFactory ? await options.vcsFactory(context.reviewEvent.provider === "p4" ? runDirs.sourceDir : sourceRoot, context) : options.vcs;
+  const vcs = options.vcsFactory
+    ? await options.vcsFactory(
+        context.reviewEvent.provider === "p4" ? runDirs.sourceDir : sourceRoot,
+        context,
+      )
+    : options.vcs;
   const event = context.reviewEvent;
-  const range = await vcs.listChanges(vcs.resolveReviewRevision ? { ...event,
-    baseSha: event.baseSha ? await vcs.resolveReviewRevision(event.baseSha) : undefined,
-    headSha: event.headSha ? await vcs.resolveReviewRevision(event.headSha) : undefined,
-  } : event);
+  const range = await vcs.listChanges(
+    vcs.resolveReviewRevision
+      ? {
+          ...event,
+          baseSha: event.baseSha
+            ? await vcs.resolveReviewRevision(event.baseSha)
+            : undefined,
+          headSha: event.headSha
+            ? await vcs.resolveReviewRevision(event.headSha)
+            : undefined,
+        }
+      : event,
+  );
   let headCommittedAt: string | undefined;
   try {
-    const timestamp = range.headRevision && await vcs.fetchRevisionCommittedAt?.(range.headRevision);
-    if (timestamp && Number.isFinite(Date.parse(timestamp))) headCommittedAt = new Date(timestamp).toISOString();
+    const timestamp =
+      range.headRevision &&
+      (await vcs.fetchRevisionCommittedAt?.(range.headRevision));
+    if (timestamp && Number.isFinite(Date.parse(timestamp)))
+      headCommittedAt = new Date(timestamp).toISOString();
   } catch {
     // Custom adapters must not turn a missing display stamp into a failed review.
   }
@@ -3219,41 +4083,58 @@ async function executeReviewInRunDirs(
   };
   liveRun?.registry.update(liveRun.executionId, revisionStamp);
   let changedPaths = [
-    ...(options.changedPathsResolver?.(context) ?? range.files ?? context.reviewEvent.changedFiles ?? []),
+    ...(options.changedPathsResolver?.(context) ??
+      range.files ??
+      context.reviewEvent.changedFiles ??
+      []),
   ];
   // P4/H05: apply the task's merged review include/exclude/max_files policy
   // (workspace layer included) to the VCS-derived path list. Truncation is
   // visible in the log so operators can tell filtering from VCS gaps.
   if (options.reviewPolicyResolver && changedPaths.length > 0) {
-    const reviewPolicy = options.reviewPolicyResolver(context.reviewEvent.workspaceId);
+    const reviewPolicy = options.reviewPolicyResolver(
+      context.reviewEvent.workspaceId,
+    );
     if (reviewPolicy) {
       const applied = applyReviewPathPolicy(changedPaths, reviewPolicy);
       if (applied.excluded.length > 0 || applied.truncated.length > 0) {
-        console.info(JSON.stringify({
-          level: "info",
-          msg: "review path policy applied",
-          workspaceId: context.reviewEvent.workspaceId,
-          excluded: applied.excluded.length,
-          truncated: applied.truncated.length,
-        }));
+        console.info(
+          JSON.stringify({
+            level: "info",
+            msg: "review path policy applied",
+            workspaceId: context.reviewEvent.workspaceId,
+            excluded: applied.excluded.length,
+            truncated: applied.truncated.length,
+          }),
+        );
       }
       changedPaths = [...applied.paths];
     }
   }
 
-  const scopedTree = await vcs.fetchScoped({ ...range, files: changedPaths }, workspaceRef);
-  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(scopedTree.rootDir))) {
-    throw new Error(`materialized sourceDir escapes instanceRoot via symlink/junction: ${scopedTree.rootDir}`);
+  const scopedTree = await vcs.fetchScoped(
+    { ...range, files: changedPaths },
+    workspaceRef,
+  );
+  if (
+    containmentRoot &&
+    !isWithinRoot(containmentRoot, await realpathContaining(scopedTree.rootDir))
+  ) {
+    throw new Error(
+      `materialized sourceDir escapes instanceRoot via symlink/junction: ${scopedTree.rootDir}`,
+    );
   }
   const noChangesResult = (): ReviewOrchestrationResult => {
-    console.info(JSON.stringify({
-      level: "info",
-      msg: "no changed files after filtering, skipping review",
-      triggerName: context.reviewEvent.triggerName,
-      workspaceId: context.reviewEvent.workspaceId,
-      repoRef: context.reviewEvent.repoRef,
-      headSha: context.reviewEvent.headSha,
-    }));
+    console.info(
+      JSON.stringify({
+        level: "info",
+        msg: "no changed files after filtering, skipping review",
+        triggerName: context.reviewEvent.triggerName,
+        workspaceId: context.reviewEvent.workspaceId,
+        repoRef: context.reviewEvent.repoRef,
+        headSha: context.reviewEvent.headSha,
+      }),
+    );
     return {
       status: "skipped",
       sourceRoot: scopedTree.rootDir,
@@ -3266,13 +4147,21 @@ async function executeReviewInRunDirs(
       contextRequestCount: 0,
       dispatchCount: 0,
       skipReason: "no_changed_files",
-      model: { providerId: options.model.providerId, modelId: options.model.modelId },
+      model: {
+        providerId: options.model.providerId,
+        modelId: options.model.modelId,
+      },
       preparedPrompt: {
         reviewEvent: context.reviewEvent,
         sourceRoot,
         changedPaths: [],
         taskContext: "",
-        discovery: { instructions: [], skills: [], droppedRefs: [], conflicts: [] },
+        discovery: {
+          instructions: [],
+          skills: [],
+          droppedRefs: [],
+          conflicts: [],
+        },
         prompt: {
           systemPrompt: "",
           tokenEstimate: 0,
@@ -3286,11 +4175,16 @@ async function executeReviewInRunDirs(
       },
       outputState: { problems: [], summaries: [], contextRequests: [] },
       dispatchResults: [],
-      llmResult: { providerId: options.model.providerId, modelId: options.model.modelId, content: "", raw: null },
+      llmResult: {
+        providerId: options.model.providerId,
+        modelId: options.model.modelId,
+        content: "",
+        raw: null,
+      },
       scrubMatches: [],
       ...revisionStamp,
     };
-  }
+  };
 
   if (changedPaths.length === 0 && !options.dryRun) return noChangesResult();
 
@@ -3301,34 +4195,94 @@ async function executeReviewInRunDirs(
     runtimeDirs,
     runDirs.contextReposDir,
   );
-  const contextRepoMounts = contextRepoResults.filter((entry) => entry.status === "ok");
-  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(runDirs.contextReposDir))) {
-    throw new Error(`materialized contextReposDir escapes instanceRoot via symlink/junction: ${runDirs.contextReposDir}`);
+  const contextRepoMounts = contextRepoResults.filter(
+    (entry) => entry.status === "ok",
+  );
+  if (
+    containmentRoot &&
+    !isWithinRoot(
+      containmentRoot,
+      await realpathContaining(runDirs.contextReposDir),
+    )
+  ) {
+    throw new Error(
+      `materialized contextReposDir escapes instanceRoot via symlink/junction: ${runDirs.contextReposDir}`,
+    );
   }
-  const contextReposSection = buildContextReposPromptSection(contextRepoMounts, options.sandbox);
+  const contextReposSection = buildContextReposPromptSection(
+    contextRepoMounts,
+    options.sandbox,
+  );
+
+  // tgrep index (architecture §3.17): one persistent cache per workspace,
+  // refreshed on head-revision change / TTL. Only git reviews have a clone
+  // cache to archive from; P4/SVN and dry runs skip indexing.
+  let tgrepHandle: TgrepSearchHandle | undefined;
+  if (
+    options.tgrepSearch &&
+    runtimeDirs &&
+    vcs.kind === "git" &&
+    !options.dryRun &&
+    range.headRevision
+  ) {
+    try {
+      tgrepHandle = await options.tgrepSearch({
+        workspaceId: context.reviewEvent.workspaceId,
+        layout: runtimeDirs,
+        sourceRoot,
+        revision: range.headRevision,
+      });
+    } catch (error) {
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "tgrep index preparation failed; continuing without indexed search",
+          workspaceId: context.reviewEvent.workspaceId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  }
+  const tgrepGuidance = tgrepHandle
+    ? buildTgrepGuidance(
+        tgrepHandle,
+        options.sandbox && options.sandbox.kind !== "native"
+          ? TGREP_SANDBOX_MOUNT_PATH
+          : undefined,
+      )
+    : undefined;
   let diff: ParsedDiff | undefined;
   if (vcs.diff) {
     try {
-      const diffRange = { ...range, files: changedPaths.length > 0 ? changedPaths : range.files };
-      diff = await vcs.diff(diffRange, { contextLines: options.diffContextLines ?? 3 });
+      const diffRange = {
+        ...range,
+        files: changedPaths.length > 0 ? changedPaths : range.files,
+      };
+      diff = await vcs.diff(diffRange, {
+        contextLines: options.diffContextLines ?? 3,
+      });
       if (!diff || diff.files.length === 0) {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "vcs diff returned empty result",
-          provider: vcs.kind,
-          headSha: context.reviewEvent.headSha,
-          changedFileCount: changedPaths.length,
-          rangeFileCount: range.files.length,
-        }));
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "vcs diff returned empty result",
+            provider: vcs.kind,
+            headSha: context.reviewEvent.headSha,
+            changedFileCount: changedPaths.length,
+            rangeFileCount: range.files.length,
+          }),
+        );
       }
     } catch (error) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "vcs diff threw an exception",
-        provider: vcs.kind,
-        headSha: context.reviewEvent.headSha,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "vcs diff threw an exception",
+          provider: vcs.kind,
+          headSha: context.reviewEvent.headSha,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
       if (vcs.kind === "p4") {
         throw error;
       }
@@ -3336,8 +4290,14 @@ async function executeReviewInRunDirs(
     }
   }
   const policy = options.reviewConfig;
-  const commitPolicy = await applyReviewCommitPolicy(vcs, context.reviewEvent, { ...range, files: changedPaths }, diff,
-    policy?.commit_strategy, options.diffContextLines ?? 3);
+  const commitPolicy = await applyReviewCommitPolicy(
+    vcs,
+    context.reviewEvent,
+    { ...range, files: changedPaths },
+    diff,
+    policy?.commit_strategy,
+    options.diffContextLines ?? 3,
+  );
   diff = commitPolicy.diff;
   changedPaths = [...commitPolicy.files];
   if (options.resumePublication) {
@@ -3357,7 +4317,12 @@ async function executeReviewInRunDirs(
           modelId: options.model.modelId,
           content: "",
           raw: { resumed: true },
-          ...(resume.analysis ? { providerId: resume.analysis.model.providerId, modelId: resume.analysis.model.modelId } : {}),
+          ...(resume.analysis
+            ? {
+                providerId: resume.analysis.model.providerId,
+                modelId: resume.analysis.model.modelId,
+              }
+            : {}),
         },
       },
       lastAgentResult: undefined,
@@ -3365,7 +4330,9 @@ async function executeReviewInRunDirs(
         problems: resume.problems,
         summaries: resume.summaries,
         contextRequests: [],
-        ...(resume.skipReason !== undefined ? { skipReason: resume.skipReason } : {}),
+        ...(resume.skipReason !== undefined
+          ? { skipReason: resume.skipReason }
+          : {}),
       },
       scopedTree,
       runtimeDirs,
@@ -3378,7 +4345,12 @@ async function executeReviewInRunDirs(
         sourceRoot: scopedTree.rootDir,
         changedPaths,
         taskContext: "",
-        discovery: { instructions: [], skills: [], droppedRefs: [], conflicts: [] },
+        discovery: {
+          instructions: [],
+          skills: [],
+          droppedRefs: [],
+          conflicts: [],
+        },
         prompt: {
           systemPrompt: "",
           tokenEstimate: 0,
@@ -3404,43 +4376,85 @@ async function executeReviewInRunDirs(
   // so files dropped by review.include/exclude never count. A dry run with
   // an empty analyzed set previews the unfiltered diff but analyzes nothing
   // — it must not be rejected on preview-only content.
-  if (changedPaths.length > 0 && policy?.max_patch_bytes !== undefined && Buffer.byteLength(patchText, "utf8") > policy.max_patch_bytes) {
-    throw new Error("review.max_patch_bytes exceeded; reduce the review scope or raise its configured byte limit.");
+  if (
+    changedPaths.length > 0 &&
+    policy?.max_patch_bytes !== undefined &&
+    Buffer.byteLength(patchText, "utf8") > policy.max_patch_bytes
+  ) {
+    throw new Error(
+      "review.max_patch_bytes exceeded; reduce the review scope or raise its configured byte limit.",
+    );
   }
   const policyContext: string[] = [];
   if (policy?.commit_strategy === "per_commit") {
-    policyContext.push("Commit-labelled patches describe historical changes within one review. Verify each suspected problem against the final head and report it only if it still exists there; publish line locations from that final head.");
+    policyContext.push(
+      "Commit-labelled patches describe historical changes within one review. Verify each suspected problem against the final head and report it only if it still exists there; publish line locations from that final head.",
+    );
   }
   if (policy?.languages_auto_detect) {
-    policyContext.push(`Source languages inferred from file extensions: ${[...new Set(changedPaths.map(inferCodeFenceLanguage).filter(Boolean))].join(", ")}. Verify against the source before applying language-specific rules.`);
+    policyContext.push(
+      `Source languages inferred from file extensions: ${[...new Set(changedPaths.map(inferCodeFenceLanguage).filter(Boolean))].join(", ")}. Verify against the source before applying language-specific rules.`,
+    );
   }
   if (policy?.skip_lgtm !== undefined) {
-    policyContext.push(policy.skip_lgtm
-      ? "Skip redundant LGTM-only commentary when there are no confirmed problems. Empty-result publication remains controlled by the output channel policy."
-      : "When there are no confirmed problems, provide a concise review summary with the checked scope and limitations.");
+    policyContext.push(
+      policy.skip_lgtm
+        ? "Skip redundant LGTM-only commentary when there are no confirmed problems. Empty-result publication remains controlled by the output channel policy."
+        : "When there are no confirmed problems, provide a concise review summary with the checked scope and limitations.",
+    );
   }
   if (policy?.incremental === false) {
     let bytes = 0;
     for (const path of changedPaths) {
-      if (diff?.files.some(file => file.status === "deleted" && file.oldPath === path)) continue;
-      const full = await vcs.fetchExtraContext({ path, reason: "Full-file review requested by review.incremental=false", ...(range.headRevision ? { revision: range.headRevision } : {}) }, workspaceRef);
+      if (
+        diff?.files.some(
+          (file) => file.status === "deleted" && file.oldPath === path,
+        )
+      )
+        continue;
+      const full = await vcs.fetchExtraContext(
+        {
+          path,
+          reason: "Full-file review requested by review.incremental=false",
+          ...(range.headRevision ? { revision: range.headRevision } : {}),
+        },
+        workspaceRef,
+      );
       bytes += Buffer.byteLength(full.content, "utf8");
-      if (bytes > (policy.max_patch_bytes ?? REVIEW_DEFAULT_MAX_PATCH_BYTES)) throw new Error("Full-file review exceeds review.max_patch_bytes.");
-      policyContext.push(`Current file ${JSON.stringify(path)}:\n${full.content}`);
+      if (bytes > (policy.max_patch_bytes ?? REVIEW_DEFAULT_MAX_PATCH_BYTES))
+        throw new Error("Full-file review exceeds review.max_patch_bytes.");
+      policyContext.push(
+        `Current file ${JSON.stringify(path)}:\n${full.content}`,
+      );
     }
   }
-  const rawTaskContext = (options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
-    buildTaskContext(context.reviewEvent, changedPaths, diff, options.outputLanguage, contextReposSection)
-  ) + (policyContext.length ? `\n\n${policyContext.join("\n\n")}` : "");
+  const rawTaskContext =
+    (options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
+      buildTaskContext(
+        context.reviewEvent,
+        changedPaths,
+        diff,
+        options.outputLanguage,
+        contextReposSection,
+      )) +
+    (policyContext.length ? `\n\n${policyContext.join("\n\n")}` : "") +
+    (tgrepGuidance ? `\n\n${tgrepGuidance}` : "");
 
   let compressed = false;
   let originalTokenEstimate: number | undefined;
   let compressedTokenEstimate: number | undefined;
   let taskContext = rawTaskContext;
 
-  if (diff && options.compression && options.summarizeModel && options.summarizeClient) {
+  if (
+    diff &&
+    options.compression &&
+    options.summarizeModel &&
+    options.summarizeClient
+  ) {
     const preEstimate = estimatePromptTokenCount(rawTaskContext);
-    if (shouldTriggerCompression(preEstimate, options.model, options.compression)) {
+    if (
+      shouldTriggerCompression(preEstimate, options.model, options.compression)
+    ) {
       const compressionResult = await compressDiff({
         diff,
         promptText: rawTaskContext,
@@ -3459,6 +4473,7 @@ async function executeReviewInRunDirs(
           "",
           compressionResult.compactDiff,
           ...(contextReposSection ? ["", contextReposSection] : []),
+          ...(tgrepGuidance ? ["", tgrepGuidance] : []),
           "",
           buildJsonToolContract(),
         ];
@@ -3477,24 +4492,31 @@ async function executeReviewInRunDirs(
   const resolvedBasePrompt = await (async () => {
     let base: string | undefined;
     if (options.baseSystemPromptResolver) {
-      base = await options.baseSystemPromptResolver(context.reviewEvent.workspaceId);
+      base = await options.baseSystemPromptResolver(
+        context.reviewEvent.workspaceId,
+      );
     }
     let resolved = base ?? options.baseSystemPrompt;
     // The workspace extra prompt appends after whichever base resolved
     // (built-in, workspace file, or named prompts.system override).
-    const extra = options.extraSystemPromptResolver !== undefined
-      ? await options.extraSystemPromptResolver(context.reviewEvent.workspaceId)
-      : undefined;
+    const extra =
+      options.extraSystemPromptResolver !== undefined
+        ? await options.extraSystemPromptResolver(
+            context.reviewEvent.workspaceId,
+          )
+        : undefined;
     if (extra !== undefined && extra.trim().length > 0) {
       resolved = `${resolved.trimEnd()}\n\n${extra.trim()}`;
     }
     return resolved;
   })();
 
-  const resolvedForceSkills = options.forceSkillsResolver?.(context.reviewEvent.workspaceId);
+  const resolvedForceSkills = options.forceSkillsResolver?.(
+    context.reviewEvent.workspaceId,
+  );
   const resolvedMemoryHints = options.memoryHintsResolver
     ? await options.memoryHintsResolver(reviewMemoryScope(context.reviewEvent))
-    : options.memoryHints ?? [];
+    : (options.memoryHints ?? []);
 
   const effectiveMaxPromptTokens =
     options.maxPromptTokens ??
@@ -3508,11 +4530,19 @@ async function executeReviewInRunDirs(
     changedPaths,
     baseSystemPrompt: resolvedBasePrompt,
     taskContext,
-    ...(resolvedForceSkills?.length ? { forceSkills: resolvedForceSkills } : {}),
-    ...(options.operatorOverrides ? { operatorOverrides: options.operatorOverrides } : {}),
+    ...(resolvedForceSkills?.length
+      ? { forceSkills: resolvedForceSkills }
+      : {}),
+    ...(options.operatorOverrides
+      ? { operatorOverrides: options.operatorOverrides }
+      : {}),
     ...(runtimeDirs?.policyRoot ? { policyRoot: runtimeDirs.policyRoot } : {}),
-    ...(resolvedMemoryHints.length > 0 ? { memoryHints: resolvedMemoryHints } : {}),
-    ...(effectiveMaxPromptTokens !== undefined ? { maxPromptTokens: effectiveMaxPromptTokens } : {}),
+    ...(resolvedMemoryHints.length > 0
+      ? { memoryHints: resolvedMemoryHints }
+      : {}),
+    ...(effectiveMaxPromptTokens !== undefined
+      ? { maxPromptTokens: effectiveMaxPromptTokens }
+      : {}),
   });
   liveRun?.registry.update(liveRun.executionId, {
     promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
@@ -3523,22 +4553,41 @@ async function executeReviewInRunDirs(
   const allScrubMatches: ScrubMatch[] = [];
 
   const scrubbedPrompt = enableScrub
-    ? scrubPromptMessages([{ role: "system", content: preparedPrompt.prompt.systemPrompt }])
-    : { messages: [{ role: "system", content: preparedPrompt.prompt.systemPrompt }], matches: [] as ScrubMatch[] };
+    ? scrubPromptMessages([
+        { role: "system", content: preparedPrompt.prompt.systemPrompt },
+      ])
+    : {
+        messages: [
+          { role: "system", content: preparedPrompt.prompt.systemPrompt },
+        ],
+        matches: [] as ScrubMatch[],
+      };
 
   if (enableScrub) {
     allScrubMatches.push(...scrubbedPrompt.matches);
   }
 
-  const llmSystemPrompt = (scrubbedPrompt.messages[0] as { role: string; content: string }).content;
+  const llmSystemPrompt = (
+    scrubbedPrompt.messages[0] as { role: string; content: string }
+  ).content;
 
   const collector = new AicrOutputCollector();
-  const fetchContext = createReviewContextFetcher(policy?.fetch_extra, async (path, startLine, endLine) => {
-    const result = await vcs.fetchExtraContext({ path, reason: "Requested review context",
-      ...(startLine !== undefined ? { startLine } : {}), ...(endLine !== undefined ? { endLine } : {}),
-      ...(range.headRevision ? { revision: range.headRevision } : {}) }, workspaceRef);
-    return result.content;
-  });
+  const fetchContext = createReviewContextFetcher(
+    policy?.fetch_extra,
+    async (path, startLine, endLine) => {
+      const result = await vcs.fetchExtraContext(
+        {
+          path,
+          reason: "Requested review context",
+          ...(startLine !== undefined ? { startLine } : {}),
+          ...(endLine !== undefined ? { endLine } : {}),
+          ...(range.headRevision ? { revision: range.headRevision } : {}),
+        },
+        workspaceRef,
+      );
+      return result.content;
+    },
+  );
   const tools = createAicrOutputToolRegistry(
     collector,
     async (request) => {
@@ -3550,25 +4599,52 @@ async function executeReviewInRunDirs(
         return { path: request.path, status: "not_found", entries: [] };
       }
 
-      return vcs.fetchAttribution(toAttributionRequest(request, range.headRevision), workspaceRef);
+      return vcs.fetchAttribution(
+        toAttributionRequest(request, range.headRevision),
+        workspaceRef,
+      );
     },
-    createReviewDataHandler(vcs, context.reviewEvent, range, changedPaths, policy?.commit_strategy),
+    createReviewDataHandler(
+      vcs,
+      context.reviewEvent,
+      range,
+      changedPaths,
+      policy?.commit_strategy,
+    ),
+    tgrepHandle?.state === "ready"
+      ? (input) =>
+          executeTgrepSearch(input, {
+            indexDir: tgrepHandle.indexDir,
+            sourceDir: tgrepHandle.checkoutDir,
+          })
+      : undefined,
   );
   const runMetricsAccumulator = createReviewRunMetricsAccumulator();
   const bundleContext: AgentBundleContext = {
-    ...(liveRun ? { progress: {
-      modelStarted: (selected: ModelSpec, agentKind?: string) => {
-        liveRun.registry.update(liveRun.executionId, {
-          modelProviderId: selected.providerId, modelId: selected.modelId, agentKind: agentKind ?? "native-llm",
-        });
-      },
-      agentUsage: (partial: ReviewCompletionResult) => {
-        // Preview the invocation on top of settled invocations; never commit it twice.
-        const preview = { ...runMetricsAccumulator, usageSources: new Set(runMetricsAccumulator.usageSources) };
-        accumulateReviewCompletionMetrics(preview, partial);
-        liveRun.registry.update(liveRun.executionId, { metrics: liveRunMetricsFromAccumulator(preview) });
-      },
-    } } : {}),
+    ...(liveRun
+      ? {
+          progress: {
+            modelStarted: (selected: ModelSpec, agentKind?: string) => {
+              liveRun.registry.update(liveRun.executionId, {
+                modelProviderId: selected.providerId,
+                modelId: selected.modelId,
+                agentKind: agentKind ?? "native-llm",
+              });
+            },
+            agentUsage: (partial: ReviewCompletionResult) => {
+              // Preview the invocation on top of settled invocations; never commit it twice.
+              const preview = {
+                ...runMetricsAccumulator,
+                usageSources: new Set(runMetricsAccumulator.usageSources),
+              };
+              accumulateReviewCompletionMetrics(preview, partial);
+              liveRun.registry.update(liveRun.executionId, {
+                metrics: liveRunMetricsFromAccumulator(preview),
+              });
+            },
+          },
+        }
+      : {}),
     // Always set: the per-run directory scope derives from it (L09); the
     // value matches the runDirs scope computed at orchestration start.
     runId,
@@ -3599,7 +4675,9 @@ async function executeReviewInRunDirs(
         },
       },
     ],
-    ...(options.contextCompaction ? { compaction: options.contextCompaction } : {}),
+    ...(options.contextCompaction
+      ? { compaction: options.contextCompaction }
+      : {}),
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
   };
   // Final completion replaces the preview with the authoritative invocation total.
@@ -3622,63 +4700,90 @@ async function executeReviewInRunDirs(
     contextRepoMounts,
     runDirs,
     containmentRoot,
+    tgrepHandle,
   );
   accumulateCompletion(completion);
   let lastAgentResult = completion.agentResult;
   const rawModelOutput = completion.llmResult.content;
   const allowNaturalLanguageSummary = completion.agentResult === undefined;
-  const toolExecution = await collectCompletionOutputs(completion, tools, collector, { allowNaturalLanguageSummary });
+  const toolExecution = await collectCompletionOutputs(
+    completion,
+    tools,
+    collector,
+    { allowNaturalLanguageSummary },
+  );
   let outputState = collector.snapshot();
-  const initialNoActionSkipReason = completion.agentResult && !hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0
-    ? classifyUnstructuredNoActionableOutput(rawModelOutput)
-    : undefined;
-  const summaryOnlyProblemClaim = summaryOnlyClaimsActionableProblems(outputState);
+  const initialNoActionSkipReason =
+    completion.agentResult &&
+    !hasFinalReviewOutput(outputState) &&
+    toolExecution.toolCallCount === 0
+      ? classifyUnstructuredNoActionableOutput(rawModelOutput)
+      : undefined;
+  const summaryOnlyProblemClaim =
+    summaryOnlyClaimsActionableProblems(outputState);
   // Context requests are only satisfied after the round that asked for them,
   // so problems reported alongside pending fetches were produced without the
   // fetched content and must be re-verified in a follow-up pass.
-  const reportedProblemsPendingContext = outputState.problems.length > 0
-    && hasFetchedContextResponses(toolExecution);
-  const contextNeedsFinalPass = reportedProblemsPendingContext || (outputState.problems.length === 0 && (
-    toolExecution.contextResponses.length > 0 ||
-    toolExecution.invalidContextRequestCount > 0
-  ));
+  const reportedProblemsPendingContext =
+    outputState.problems.length > 0 &&
+    hasFetchedContextResponses(toolExecution);
+  const contextNeedsFinalPass =
+    reportedProblemsPendingContext ||
+    (outputState.problems.length === 0 &&
+      (toolExecution.contextResponses.length > 0 ||
+        toolExecution.invalidContextRequestCount > 0));
   const missingContextRequest = outputRequestsMissingContext(outputState);
-  const shouldRepairModelOutput = !initialNoActionSkipReason && (summaryOnlyProblemClaim
-    || contextNeedsFinalPass
-    || missingContextRequest
-    || (!hasFinalReviewOutput(outputState) && (
-      toolExecution.toolCallCount === 0 ||
-      toolExecution.invalidReviewOutputCount > 0
-    )));
+  const shouldRepairModelOutput =
+    !initialNoActionSkipReason &&
+    (summaryOnlyProblemClaim ||
+      contextNeedsFinalPass ||
+      missingContextRequest ||
+      (!hasFinalReviewOutput(outputState) &&
+        (toolExecution.toolCallCount === 0 ||
+          toolExecution.invalidReviewOutputCount > 0)));
 
-  if (!initialNoActionSkipReason && !hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0) {
-    const truncatedOutput = rawModelOutput.length > 500
-      ? `${rawModelOutput.slice(0, 500)}... (${rawModelOutput.length} chars total)`
-      : rawModelOutput;
-    console.warn(JSON.stringify({
-      level: "warn",
-      msg: "model output produced no parseable review payload",
-      headSha: context.reviewEvent.headSha,
-      toolCallCount: toolExecution.toolCallCount,
-      reviewOutputCount: toolExecution.reviewOutputCount,
-      outputLength: rawModelOutput.length,
-      outputPreview: truncatedOutput,
-      ...(completion.agentResult ? {
-        agentExitCode: completion.agentResult.exitCode,
-        agentDurationMs: completion.agentResult.durationMs,
-        agentStderrLength: completion.agentResult.stderr.length,
-        agentStderrPreview: completion.agentResult.stderr.length > 200
-          ? `${completion.agentResult.stderr.slice(0, 200)}...`
-          : completion.agentResult.stderr,
-      } : {}),
-    }));
+  if (
+    !initialNoActionSkipReason &&
+    !hasFinalReviewOutput(outputState) &&
+    toolExecution.toolCallCount === 0
+  ) {
+    const truncatedOutput =
+      rawModelOutput.length > 500
+        ? `${rawModelOutput.slice(0, 500)}... (${rawModelOutput.length} chars total)`
+        : rawModelOutput;
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "model output produced no parseable review payload",
+        headSha: context.reviewEvent.headSha,
+        toolCallCount: toolExecution.toolCallCount,
+        reviewOutputCount: toolExecution.reviewOutputCount,
+        outputLength: rawModelOutput.length,
+        outputPreview: truncatedOutput,
+        ...(completion.agentResult
+          ? {
+              agentExitCode: completion.agentResult.exitCode,
+              agentDurationMs: completion.agentResult.durationMs,
+              agentStderrLength: completion.agentResult.stderr.length,
+              agentStderrPreview:
+                completion.agentResult.stderr.length > 200
+                  ? `${completion.agentResult.stderr.slice(0, 200)}...`
+                  : completion.agentResult.stderr,
+            }
+          : {}),
+      }),
+    );
   }
 
   if (initialNoActionSkipReason) {
     collector.skip({ reason: initialNoActionSkipReason });
     outputState = collector.snapshot();
   } else if (shouldRepairModelOutput) {
-    if (summaryOnlyProblemClaim || contextNeedsFinalPass || missingContextRequest) {
+    if (
+      summaryOnlyProblemClaim ||
+      contextNeedsFinalPass ||
+      missingContextRequest
+    ) {
       collector.clearReviewOutputs();
     }
 
@@ -3689,29 +4794,43 @@ async function executeReviewInRunDirs(
       {
         previousOutput: completion.llmResult.content,
         prompt: buildContextFollowUpPrompt(changedPaths, toolExecution, {
-          ...(summaryOnlyProblemClaim ? { summaryOnlyClaimsProblems: true } : {}),
+          ...(summaryOnlyProblemClaim
+            ? { summaryOnlyClaimsProblems: true }
+            : {}),
           ...(missingContextRequest ? { missingContextRequest: true } : {}),
-          ...(reportedProblemsPendingContext ? { reportedProblemsPendingContext: true } : {}),
+          ...(reportedProblemsPendingContext
+            ? { reportedProblemsPendingContext: true }
+            : {}),
         }),
       },
       bundleContext,
       contextRepoMounts,
       runDirs,
       containmentRoot,
+      tgrepHandle,
     );
     accumulateCompletion(completion);
     if (completion.agentResult) {
       lastAgentResult = completion.agentResult;
     }
-    const repairExecution = await collectCompletionOutputs(completion, tools, collector, {
-      allowNaturalLanguageSummary: completion.agentResult === undefined,
-    });
+    const repairExecution = await collectCompletionOutputs(
+      completion,
+      tools,
+      collector,
+      {
+        allowNaturalLanguageSummary: completion.agentResult === undefined,
+      },
+    );
     outputState = collector.snapshot();
 
-    const repairProblemsPendingContext = outputState.problems.length > 0
-      && hasFetchedContextResponses(repairExecution);
-    if (repairProblemsPendingContext
-      || (outputState.problems.length === 0 && repairExecution.contextResponses.length > 0)) {
+    const repairProblemsPendingContext =
+      outputState.problems.length > 0 &&
+      hasFetchedContextResponses(repairExecution);
+    if (
+      repairProblemsPendingContext ||
+      (outputState.problems.length === 0 &&
+        repairExecution.contextResponses.length > 0)
+    ) {
       collector.clearReviewOutputs();
       completion = await requestReviewCompletion(
         scopedTree.rootDir,
@@ -3720,13 +4839,16 @@ async function executeReviewInRunDirs(
         {
           previousOutput: completion.llmResult.content,
           prompt: buildContextFollowUpPrompt(changedPaths, repairExecution, {
-            ...(repairProblemsPendingContext ? { reportedProblemsPendingContext: true } : {}),
+            ...(repairProblemsPendingContext
+              ? { reportedProblemsPendingContext: true }
+              : {}),
           }),
         },
         bundleContext,
         contextRepoMounts,
         runDirs,
         containmentRoot,
+        tgrepHandle,
       );
       accumulateCompletion(completion);
       if (completion.agentResult) {
@@ -3739,22 +4861,27 @@ async function executeReviewInRunDirs(
     }
 
     const repairNoActionSkipReason = completion.agentResult
-      ? classifyNoActionableReviewResult(outputState, completion.llmResult.content)
+      ? classifyNoActionableReviewResult(
+          outputState,
+          completion.llmResult.content,
+        )
       : undefined;
     if (repairNoActionSkipReason) {
       collector.clearReviewOutputs();
       collector.skip({ reason: repairNoActionSkipReason });
       outputState = collector.snapshot();
     } else if (!hasFinalReviewOutput(outputState) && completion.agentResult) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "agent repair produced no parseable review payload; retrying with direct LLM",
-        headSha: context.reviewEvent.headSha,
-        triggerName: context.reviewEvent.triggerName,
-        workspaceId: context.reviewEvent.workspaceId,
-        agentExitCode: completion.agentResult.exitCode,
-        agentDurationMs: completion.agentResult.durationMs,
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "agent repair produced no parseable review payload; retrying with direct LLM",
+          headSha: context.reviewEvent.headSha,
+          triggerName: context.reviewEvent.triggerName,
+          workspaceId: context.reviewEvent.workspaceId,
+          agentExitCode: completion.agentResult.exitCode,
+          agentDurationMs: completion.agentResult.durationMs,
+        }),
+      );
       completion = await requestDirectLlmCompletion(
         llmSystemPrompt,
         options,
@@ -3765,10 +4892,15 @@ async function executeReviewInRunDirs(
         bundleContext.progress,
       );
       accumulateCompletion(completion);
-      await collectCompletionOutputs(completion, tools, collector, { allowNaturalLanguageSummary: true });
+      await collectCompletionOutputs(completion, tools, collector, {
+        allowNaturalLanguageSummary: true,
+      });
       outputState = collector.snapshot();
 
-      const directNoActionSkipReason = classifyNoActionableReviewResult(outputState, completion.llmResult.content);
+      const directNoActionSkipReason = classifyNoActionableReviewResult(
+        outputState,
+        completion.llmResult.content,
+      );
       if (directNoActionSkipReason) {
         collector.clearReviewOutputs();
         collector.skip({ reason: directNoActionSkipReason });
@@ -3778,14 +4910,23 @@ async function executeReviewInRunDirs(
 
     if (summaryOnlyClaimsActionableProblems(outputState)) {
       collector.clearReviewOutputs();
-      collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+      collector.publishSummary({
+        markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths),
+      });
       outputState = collector.snapshot();
     } else if (!hasFinalReviewOutput(outputState)) {
-      collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+      collector.publishSummary({
+        markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths),
+      });
       outputState = collector.snapshot();
     }
-  } else if (!hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0) {
-    collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+  } else if (
+    !hasFinalReviewOutput(outputState) &&
+    toolExecution.toolCallCount === 0
+  ) {
+    collector.publishSummary({
+      markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths),
+    });
     outputState = collector.snapshot();
   }
 
@@ -3812,8 +4953,18 @@ async function executeReviewInRunDirs(
   });
 }
 
-function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {
-  const result: { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } = {};
+function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): {
+  branch?: string;
+  sourcePath?: string;
+  workspace?: string;
+  repositoryPath?: string;
+} {
+  const result: {
+    branch?: string;
+    sourcePath?: string;
+    workspace?: string;
+    repositoryPath?: string;
+  } = {};
 
   if (reviewEvent.branch !== undefined) {
     result.branch = reviewEvent.branch;
@@ -3846,7 +4997,16 @@ function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: strin
  * separately labelled local estimate.
  */
 function extractReviewRunUsage(
-  result: Pick<ReviewOrchestrationResult, "llmResult" | "agentResult" | "usageSource" | "estimatedCostUsd" | "requestCount" | "retryCount" | "fallbackCount">,
+  result: Pick<
+    ReviewOrchestrationResult,
+    | "llmResult"
+    | "agentResult"
+    | "usageSource"
+    | "estimatedCostUsd"
+    | "requestCount"
+    | "retryCount"
+    | "fallbackCount"
+  >,
 ): {
   readonly llmUsage?: ReviewOrchestrationWebhookUsage;
   readonly usageSource?: ReviewOrchestrationUsageSource;
@@ -3859,7 +5019,8 @@ function extractReviewRunUsage(
   const isFiniteNumber = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v);
   const usageSource: ReviewOrchestrationUsageSource | undefined = usage
-    ? result.usageSource ?? (result.agentResult ? "agent_stdout" : "llm_gateway")
+    ? (result.usageSource ??
+      (result.agentResult ? "agent_stdout" : "llm_gateway"))
     : undefined;
   // On the direct path the gateway-only fields are read from the runtime llmResult,
   // since the static ChatCompletionResult type does not declare them.
@@ -3869,39 +5030,65 @@ function extractReviewRunUsage(
     fallbackCount?: unknown;
   };
   return {
-    ...(usage ? {
-      llmUsage: {
-        ...(usage.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
-        ...(usage.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
-        ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
-        ...(usage.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
-        ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
-      },
-    } : {}),
+    ...(usage
+      ? {
+          llmUsage: {
+            ...(usage.promptTokens !== undefined
+              ? { promptTokens: usage.promptTokens }
+              : {}),
+            ...(usage.completionTokens !== undefined
+              ? { completionTokens: usage.completionTokens }
+              : {}),
+            ...(usage.totalTokens !== undefined
+              ? { totalTokens: usage.totalTokens }
+              : {}),
+            ...(usage.cachedPromptTokens !== undefined
+              ? { cachedPromptTokens: usage.cachedPromptTokens }
+              : {}),
+            ...(usage.cacheCreationTokens !== undefined
+              ? { cacheCreationTokens: usage.cacheCreationTokens }
+              : {}),
+          },
+        }
+      : {}),
     ...(usageSource ? { usageSource } : {}),
     ...(result.estimatedCostUsd !== undefined
       ? { estimatedCostUsd: result.estimatedCostUsd }
-      : isFiniteNumber(gatewayResult.estimatedCostUsd) ? { estimatedCostUsd: gatewayResult.estimatedCostUsd } : {}),
+      : isFiniteNumber(gatewayResult.estimatedCostUsd)
+        ? { estimatedCostUsd: gatewayResult.estimatedCostUsd }
+        : {}),
     ...(result.retryCount !== undefined
       ? { retryCount: result.retryCount }
-      : isFiniteNumber(gatewayResult.retryCount) ? { retryCount: gatewayResult.retryCount } : {}),
+      : isFiniteNumber(gatewayResult.retryCount)
+        ? { retryCount: gatewayResult.retryCount }
+        : {}),
     ...(result.fallbackCount !== undefined
       ? { fallbackCount: result.fallbackCount }
-      : isFiniteNumber(gatewayResult.fallbackCount) ? { fallbackCount: gatewayResult.fallbackCount } : {}),
+      : isFiniteNumber(gatewayResult.fallbackCount)
+        ? { fallbackCount: gatewayResult.fallbackCount }
+        : {}),
     // The direct path is a single completion; the agent path reports one request per
     // captured step. New results carry a run-wide aggregate; the fallback preserves legacy
     // manually-constructed direct-path results used by callers/tests.
     ...(result.requestCount !== undefined
       ? { requestCount: result.requestCount }
-      : usage && !result.agentResult ? { requestCount: 1 } : {}),
+      : usage && !result.agentResult
+        ? { requestCount: 1 }
+        : {}),
   };
 }
 
 /** Billable analysis metadata retained during publication-only recovery. */
-export type ReviewAnalysisSnapshot = ReturnType<typeof extractReviewRunUsage> & Pick<
-  ReviewOrchestrationWebhookSummary,
-  "model" | "promptTokenEstimate" | "contextRequestCount" | "compressed" | "originalTokenEstimate" | "compressedTokenEstimate"
->;
+export type ReviewAnalysisSnapshot = ReturnType<typeof extractReviewRunUsage> &
+  Pick<
+    ReviewOrchestrationWebhookSummary,
+    | "model"
+    | "promptTokenEstimate"
+    | "contextRequestCount"
+    | "compressed"
+    | "originalTokenEstimate"
+    | "compressedTokenEstimate"
+  >;
 
 export function summarizeReviewOrchestrationForWebhook(
   result: ReviewOrchestrationResult,
@@ -3920,34 +5107,51 @@ export function summarizeReviewOrchestrationForWebhook(
     dispatchCount: result.dispatchCount,
     ...(result.skipReason ? { skipReason: result.skipReason } : {}),
     ...(result.compressed ? { compressed: result.compressed } : {}),
-    ...(result.originalTokenEstimate !== undefined ? { originalTokenEstimate: result.originalTokenEstimate } : {}),
-    ...(result.compressedTokenEstimate !== undefined ? { compressedTokenEstimate: result.compressedTokenEstimate } : {}),
+    ...(result.originalTokenEstimate !== undefined
+      ? { originalTokenEstimate: result.originalTokenEstimate }
+      : {}),
+    ...(result.compressedTokenEstimate !== undefined
+      ? { compressedTokenEstimate: result.compressedTokenEstimate }
+      : {}),
     model: result.model,
     ...(usage.llmUsage ? { llmUsage: usage.llmUsage } : {}),
     ...(usage.usageSource ? { usageSource: usage.usageSource } : {}),
-    ...(usage.estimatedCostUsd !== undefined ? { estimatedCostUsd: usage.estimatedCostUsd } : {}),
-    ...(usage.requestCount !== undefined ? { requestCount: usage.requestCount } : {}),
+    ...(usage.estimatedCostUsd !== undefined
+      ? { estimatedCostUsd: usage.estimatedCostUsd }
+      : {}),
+    ...(usage.requestCount !== undefined
+      ? { requestCount: usage.requestCount }
+      : {}),
     ...(usage.retryCount !== undefined ? { retryCount: usage.retryCount } : {}),
-    ...(usage.fallbackCount !== undefined ? { fallbackCount: usage.fallbackCount } : {}),
+    ...(usage.fallbackCount !== undefined
+      ? { fallbackCount: usage.fallbackCount }
+      : {}),
     ...(result.contextRepositories && result.contextRepositories.length > 0
       ? {
           contextRepositories: result.contextRepositories.map((entry) => ({
             alias: entry.alias,
             kind: entry.kind,
             status: entry.status,
-            ...(entry.resolvedRevision ? { resolvedRevision: entry.resolvedRevision } : {}),
-            ...(entry.fileCount !== undefined ? { fileCount: entry.fileCount } : {}),
-            ...(entry.totalBytes !== undefined ? { totalBytes: entry.totalBytes } : {}),
+            ...(entry.resolvedRevision
+              ? { resolvedRevision: entry.resolvedRevision }
+              : {}),
+            ...(entry.fileCount !== undefined
+              ? { fileCount: entry.fileCount }
+              : {}),
+            ...(entry.totalBytes !== undefined
+              ? { totalBytes: entry.totalBytes }
+              : {}),
             ...(entry.error ? { error: entry.error } : {}),
           })),
         }
       : {}),
-    ...(result.headCommittedAt ? { headCommittedAt: result.headCommittedAt } : {}),
+    ...(result.headCommittedAt
+      ? { headCommittedAt: result.headCommittedAt }
+      : {}),
     ...(result.headSha ? { headSha: result.headSha } : {}),
     ...(result.vcsKind ? { vcsKind: result.vcsKind } : {}),
   };
 }
-
 
 interface FinalizeReviewRunParams {
   readonly context: ReviewOrchestrationContext;
@@ -3975,7 +5179,9 @@ interface FinalizeReviewRunParams {
   };
 }
 
-async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<ReviewOrchestrationResult> {
+async function finalizeReviewRun(
+  params: FinalizeReviewRunParams,
+): Promise<ReviewOrchestrationResult> {
   const {
     context,
     options,
@@ -4002,14 +5208,21 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
     ? { ...completion.llmResult, usage: runMetrics.usage }
     : completion.llmResult;
   const agentResult = completion.agentResult ?? lastAgentResult;
-  const analysis: ReviewAnalysisSnapshot = options.resumePublication?.analysis ?? {
+  const analysis: ReviewAnalysisSnapshot = options.resumePublication
+    ?.analysis ?? {
     model: { providerId: llmResult.providerId, modelId: llmResult.modelId },
     promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
     contextRequestCount: outputState.contextRequests.length,
     ...(compressed ? { compressed } : {}),
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
-    ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
-    ...extractReviewRunUsage({ ...runMetrics, llmResult, ...(agentResult ? { agentResult } : {}) }),
+    ...(compressedTokenEstimate !== undefined
+      ? { compressedTokenEstimate }
+      : {}),
+    ...extractReviewRunUsage({
+      ...runMetrics,
+      llmResult,
+      ...(agentResult ? { agentResult } : {}),
+    }),
   };
   const dispatchResults: DispatchResult[] = [];
   // A worker that lost its lease must never start publication afterwards.
@@ -4022,26 +5235,43 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
     phase: "publishing",
     metrics: liveRunMetricsFromAccumulator(runMetricsAccumulator),
   });
-  const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(
-    context,
-    { sourceRoot: scopedTree.rootDir },
-  ));
+  const outputPublisher =
+    options.outputPublisher ??
+    (await options.outputPublisherResolver?.(context, {
+      sourceRoot: scopedTree.rootDir,
+    }));
 
   if (!options.dryRun && outputPublisher) {
     const resolver = outputPublisher.handlesRendering
       ? undefined
-      : options.templateResolver ?? (
-          options.channelKind
-            ? createTemplateResolver({ channelKind: options.channelKind,
-              ...(runtimeDirs ? { workspaceTemplatesDir: runtimeDirs.templatesDir } : {}),
-              ...(runtimeDirs?.policyRoot ? { fallbackWorkspaceTemplatesDirs: [join(runtimeDirs.policyRoot, "templates")] } : {}) })
-            : undefined
-        );
-    const mentionChannelKind = options.channelKind as MentionChannelKind | undefined;
+      : (options.templateResolver ??
+        (options.channelKind
+          ? createTemplateResolver({
+              channelKind: options.channelKind,
+              ...(runtimeDirs
+                ? { workspaceTemplatesDir: runtimeDirs.templatesDir }
+                : {}),
+              ...(runtimeDirs?.policyRoot
+                ? {
+                    fallbackWorkspaceTemplatesDirs: [
+                      join(runtimeDirs.policyRoot, "templates"),
+                    ],
+                  }
+                : {}),
+            })
+          : undefined));
+    const mentionChannelKind = options.channelKind as
+      MentionChannelKind | undefined;
     const eventAuthor = context.reviewEvent.author?.username;
     const eventEmail = context.reviewEvent.author?.email;
     const eventDisplayName = context.reviewEvent.author?.displayName;
-    const eventCtx: { author?: string; email?: string; displayName?: string; url?: string; title?: string } = {};
+    const eventCtx: {
+      author?: string;
+      email?: string;
+      displayName?: string;
+      url?: string;
+      title?: string;
+    } = {};
     if (eventAuthor !== undefined) {
       eventCtx.author = eventAuthor;
     }
@@ -4064,10 +5294,18 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
         kind: context.reviewEvent.targetKind,
         provider: context.reviewEvent.provider,
         repoRef: context.reviewEvent.repoRef,
-        ...(context.reviewEvent.title !== undefined ? { title: context.reviewEvent.title } : {}),
-        ...(context.reviewEvent.url !== undefined ? { url: context.reviewEvent.url } : {}),
-        ...(context.reviewEvent.baseSha !== undefined ? { baseRevision: context.reviewEvent.baseSha } : {}),
-        ...(context.reviewEvent.headSha !== undefined ? { headRevision: context.reviewEvent.headSha } : {}),
+        ...(context.reviewEvent.title !== undefined
+          ? { title: context.reviewEvent.title }
+          : {}),
+        ...(context.reviewEvent.url !== undefined
+          ? { url: context.reviewEvent.url }
+          : {}),
+        ...(context.reviewEvent.baseSha !== undefined
+          ? { baseRevision: context.reviewEvent.baseSha }
+          : {}),
+        ...(context.reviewEvent.headSha !== undefined
+          ? { headRevision: context.reviewEvent.headSha }
+          : {}),
         triggerName: context.reviewEvent.triggerName,
         workspaceId: context.reviewEvent.workspaceId,
       }),
@@ -4075,11 +5313,17 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
         fullName: context.reviewEvent.repoRef,
       },
       ...(mentionChannelKind && options.mentionAuthor !== false
-        ? { atMentions: buildAtMentions(
-            { ...(context.reviewEvent.author ? { author: context.reviewEvent.author } : {}) },
-            mentionChannelKind,
-            options.authorResolution,
-          ) }
+        ? {
+            atMentions: buildAtMentions(
+              {
+                ...(context.reviewEvent.author
+                  ? { author: context.reviewEvent.author }
+                  : {}),
+              },
+              mentionChannelKind,
+              options.authorResolution,
+            ),
+          }
         : {}),
       ...(Object.keys(vcsCtx).length > 0 ? { vcs: vcsCtx } : {}),
     };
@@ -4088,17 +5332,22 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
       context.signal?.throwIfAborted();
       const rawReviewProblem = toReviewProblem(reportedProblem);
       const lineCommentable = isLineCommentableInDiff(rawReviewProblem, diff);
-      const anchoredProblem: ReviewProblem = lineCommentable === false
-        ? { ...rawReviewProblem, lineCommentAllowed: false }
-        : rawReviewProblem;
+      const anchoredProblem: ReviewProblem =
+        lineCommentable === false
+          ? { ...rawReviewProblem, lineCommentAllowed: false }
+          : rawReviewProblem;
       const reviewProblem = withCodeReference(anchoredProblem, diff);
       let renderedMessage: string;
       let renderedSuggestion: string | undefined;
       let renderedCodeSnippet: string | undefined;
       if (enableScrub) {
         const scrubbedMsg = scrubText(reviewProblem.message);
-        const scrubbedSuggestion = reviewProblem.suggestion ? scrubText(reviewProblem.suggestion) : undefined;
-        const scrubbedCodeSnippet = reviewProblem.codeSnippet ? scrubText(reviewProblem.codeSnippet) : undefined;
+        const scrubbedSuggestion = reviewProblem.suggestion
+          ? scrubText(reviewProblem.suggestion)
+          : undefined;
+        const scrubbedCodeSnippet = reviewProblem.codeSnippet
+          ? scrubText(reviewProblem.codeSnippet)
+          : undefined;
         allScrubMatches.push(...scrubbedMsg.matches);
         if (scrubbedSuggestion) {
           allScrubMatches.push(...scrubbedSuggestion.matches);
@@ -4107,11 +5356,15 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
           allScrubMatches.push(...scrubbedCodeSnippet.matches);
         }
         renderedMessage = fixAndValidateMarkdown(scrubbedMsg.text);
-        renderedSuggestion = scrubbedSuggestion ? fixAndValidateMarkdown(scrubbedSuggestion.text) : undefined;
+        renderedSuggestion = scrubbedSuggestion
+          ? fixAndValidateMarkdown(scrubbedSuggestion.text)
+          : undefined;
         renderedCodeSnippet = scrubbedCodeSnippet?.text;
       } else {
         renderedMessage = fixAndValidateMarkdown(reviewProblem.message);
-        renderedSuggestion = reviewProblem.suggestion ? fixAndValidateMarkdown(reviewProblem.suggestion) : undefined;
+        renderedSuggestion = reviewProblem.suggestion
+          ? fixAndValidateMarkdown(reviewProblem.suggestion)
+          : undefined;
         renderedCodeSnippet = reviewProblem.codeSnippet;
       }
 
@@ -4127,7 +5380,9 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
           ...baseTemplateContext,
           problem: toTemplateProblem(renderedProblemContent),
         };
-        const renderedMarkdown = fixAndValidateMarkdown(resolver.render("problem", templateCtx));
+        const renderedMarkdown = fixAndValidateMarkdown(
+          resolver.render("problem", templateCtx),
+        );
         const preparedProblem: ReviewProblem = {
           ...renderedProblemContent,
           renderedMarkdown,
@@ -4135,11 +5390,16 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
         reviewProblems.push(preparedProblem);
         if (publishesProblems(outputPublisher)) {
           try {
-            appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
+            appendDispatchResults(
+              dispatchResults,
+              await publishProblem(outputPublisher, preparedProblem),
+            );
           } catch (error) {
             context.signal?.throwIfAborted();
             logDispatchFailure("output", "problem", error);
-            dispatchResults.push(createFailedDispatchResult("output", "problem", error));
+            dispatchResults.push(
+              createFailedDispatchResult("output", "problem", error),
+            );
           }
         }
         continue;
@@ -4149,59 +5409,83 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
       reviewProblems.push(preparedProblem);
       if (publishesProblems(outputPublisher)) {
         try {
-          appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
+          appendDispatchResults(
+            dispatchResults,
+            await publishProblem(outputPublisher, preparedProblem),
+          );
         } catch (error) {
           context.signal?.throwIfAborted();
           logDispatchFailure("output", "problem", error);
-          dispatchResults.push(createFailedDispatchResult("output", "problem", error));
+          dispatchResults.push(
+            createFailedDispatchResult("output", "problem", error),
+          );
         }
       }
     }
 
     if (outputPublisher.publishSummary) {
-      const suppressNoProblemsSummary = reviewProblems.length === 0
-      && !outputPublisher.reconcilesManagedIssues
-        && (outputPublisher.noProblemsAction === "suppress"
-          || (outputPublisher.noProblemsAction === "publish_if_summary"
-            && outputState.summaries.every((s) => !s.markdown.trim())));
+      const suppressNoProblemsSummary =
+        reviewProblems.length === 0 &&
+        !outputPublisher.reconcilesManagedIssues &&
+        (outputPublisher.noProblemsAction === "suppress" ||
+          (outputPublisher.noProblemsAction === "publish_if_summary" &&
+            outputState.summaries.every((s) => !s.markdown.trim())));
       if (!suppressNoProblemsSummary) {
-        const summariesToPublish: readonly PublishSummaryInput[] = outputState.summaries.length > 0
-          ? outputState.summaries
-          : reviewProblems.length > 0 || outputPublisher.publishEmptySummary || outputPublisher.reconcilesManagedIssues
-            ? [{ markdown: "" }]
-            : [];
-        for (const [summaryIndex, summaryEntry] of summariesToPublish.entries()) {
+        const summariesToPublish: readonly PublishSummaryInput[] =
+          outputState.summaries.length > 0
+            ? outputState.summaries
+            : reviewProblems.length > 0 ||
+                outputPublisher.publishEmptySummary ||
+                outputPublisher.reconcilesManagedIssues
+              ? [{ markdown: "" }]
+              : [];
+        for (const [
+          summaryIndex,
+          summaryEntry,
+        ] of summariesToPublish.entries()) {
           context.signal?.throwIfAborted();
           let renderedSummary: string;
           let renderedSummaryTitle: string | undefined;
           if (enableScrub) {
             const scrubbedSummary = scrubText(summaryEntry.markdown);
-            const scrubbedTitle = summaryEntry.title ? scrubText(summaryEntry.title) : undefined;
+            const scrubbedTitle = summaryEntry.title
+              ? scrubText(summaryEntry.title)
+              : undefined;
             allScrubMatches.push(...scrubbedSummary.matches);
             if (scrubbedTitle) {
               allScrubMatches.push(...scrubbedTitle.matches);
             }
             renderedSummary = fixAndValidateMarkdown(scrubbedSummary.text);
-            renderedSummaryTitle = scrubbedTitle ? fixAndValidateMarkdown(scrubbedTitle.text) : undefined;
+            renderedSummaryTitle = scrubbedTitle
+              ? fixAndValidateMarkdown(scrubbedTitle.text)
+              : undefined;
           } else {
             renderedSummary = fixAndValidateMarkdown(summaryEntry.markdown);
-            renderedSummaryTitle = summaryEntry.title ? fixAndValidateMarkdown(summaryEntry.title) : undefined;
+            renderedSummaryTitle = summaryEntry.title
+              ? fixAndValidateMarkdown(summaryEntry.title)
+              : undefined;
           }
 
           if (resolver) {
             const summaryCtx: TemplateContext = {
               ...baseTemplateContext,
               summary: renderedSummary,
-              ...(renderedSummaryTitle ? { summaryTitle: renderedSummaryTitle } : {}),
+              ...(renderedSummaryTitle
+                ? { summaryTitle: renderedSummaryTitle }
+                : {}),
               problems: reviewProblems.map((problem) =>
                 toTemplateProblem({
                   ...problem,
                   message: problem.message,
-                  ...(problem.suggestion ? { suggestion: problem.suggestion } : {}),
+                  ...(problem.suggestion
+                    ? { suggestion: problem.suggestion }
+                    : {}),
                 }),
               ),
             };
-            renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
+            renderedSummary = fixAndValidateMarkdown(
+              resolver.render("summary", summaryCtx),
+            );
           }
           try {
             appendDispatchResults(
@@ -4210,16 +5494,27 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
                 renderedSummary,
                 reviewProblems,
                 {
-                  ...(context.publicationRecovery ? { finalForChannel: summaryIndex === summariesToPublish.length - 1 } : {}),
-                  ...(renderedSummaryTitle ? { title: renderedSummaryTitle } : {}),
-                  ...(changedPaths.length > 0 ? { reviewedFiles: changedPaths } : {}),
+                  ...(context.publicationRecovery
+                    ? {
+                        finalForChannel:
+                          summaryIndex === summariesToPublish.length - 1,
+                      }
+                    : {}),
+                  ...(renderedSummaryTitle
+                    ? { title: renderedSummaryTitle }
+                    : {}),
+                  ...(changedPaths.length > 0
+                    ? { reviewedFiles: changedPaths }
+                    : {}),
                 },
               ),
             );
           } catch (error) {
             context.signal?.throwIfAborted();
             logDispatchFailure("output", "summary", error);
-            dispatchResults.push(createFailedDispatchResult("output", "summary", error));
+            dispatchResults.push(
+              createFailedDispatchResult("output", "summary", error),
+            );
           }
         }
       }
@@ -4227,62 +5522,95 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
   }
 
   if (options.logThinking !== false) {
-    const llmContentPreview = llmResult.content.length > 2000
-      ? `${llmResult.content.slice(0, 2000)}... (${llmResult.content.length} chars total)`
-      : llmResult.content;
-    console.info(JSON.stringify({
-      level: "info",
-      msg: "review model output",
-      headSha: context.reviewEvent.headSha,
-      triggerName: context.reviewEvent.triggerName,
-      workspaceId: context.reviewEvent.workspaceId,
-      modelProvider: llmResult.providerId,
-      modelId: llmResult.modelId,
-      ...(agentResult ? {
-        agentKind: options.agentAdapter?.kind ?? "unknown",
-        agentExitCode: agentResult.exitCode,
-        agentDurationMs: agentResult.durationMs,
-      } : {}),
-      problemCount: outputState.problems.length,
-      summaryCount: outputState.summaries.length,
-      llmOutput: llmContentPreview,
-      ...(context.reviewEvent.branch ? { branch: context.reviewEvent.branch } : {}),
-      ...(context.reviewEvent.author?.username ? { author: context.reviewEvent.author.username } : {}),
-      ...(context.reviewEvent.author?.email ? { authorEmail: context.reviewEvent.author.email } : {}),
-      ...(outputState.problems.length > 0 ? {
-        problems: outputState.problems.map((p) => ({
-          file: p.file,
-          line: p.line,
-          severity: p.severity,
-          message: p.message.length > 200 ? `${p.message.slice(0, 200)}...` : p.message,
-        })),
-      } : {}),
-      ...(outputState.summaries.length > 0 ? {
-        summaries: outputState.summaries.map((summary) => ({
-          ...(summary.title ? {
-            title: summary.title.length > 120 ? `${summary.title.slice(0, 120)}...` : summary.title,
-          } : {}),
-          markdown: summary.markdown.length > 500 ? `${summary.markdown.slice(0, 500)}...` : summary.markdown,
-        })),
-      } : {}),
-    }));
+    const llmContentPreview =
+      llmResult.content.length > 2000
+        ? `${llmResult.content.slice(0, 2000)}... (${llmResult.content.length} chars total)`
+        : llmResult.content;
+    console.info(
+      JSON.stringify({
+        level: "info",
+        msg: "review model output",
+        headSha: context.reviewEvent.headSha,
+        triggerName: context.reviewEvent.triggerName,
+        workspaceId: context.reviewEvent.workspaceId,
+        modelProvider: llmResult.providerId,
+        modelId: llmResult.modelId,
+        ...(agentResult
+          ? {
+              agentKind: options.agentAdapter?.kind ?? "unknown",
+              agentExitCode: agentResult.exitCode,
+              agentDurationMs: agentResult.durationMs,
+            }
+          : {}),
+        problemCount: outputState.problems.length,
+        summaryCount: outputState.summaries.length,
+        llmOutput: llmContentPreview,
+        ...(context.reviewEvent.branch
+          ? { branch: context.reviewEvent.branch }
+          : {}),
+        ...(context.reviewEvent.author?.username
+          ? { author: context.reviewEvent.author.username }
+          : {}),
+        ...(context.reviewEvent.author?.email
+          ? { authorEmail: context.reviewEvent.author.email }
+          : {}),
+        ...(outputState.problems.length > 0
+          ? {
+              problems: outputState.problems.map((p) => ({
+                file: p.file,
+                line: p.line,
+                severity: p.severity,
+                message:
+                  p.message.length > 200
+                    ? `${p.message.slice(0, 200)}...`
+                    : p.message,
+              })),
+            }
+          : {}),
+        ...(outputState.summaries.length > 0
+          ? {
+              summaries: outputState.summaries.map((summary) => ({
+                ...(summary.title
+                  ? {
+                      title:
+                        summary.title.length > 120
+                          ? `${summary.title.slice(0, 120)}...`
+                          : summary.title,
+                    }
+                  : {}),
+                markdown:
+                  summary.markdown.length > 500
+                    ? `${summary.markdown.slice(0, 500)}...`
+                    : summary.markdown,
+              })),
+            }
+          : {}),
+      }),
+    );
   }
 
   const publishedDispatchCount = countPublishedDispatchResults(dispatchResults);
   const failedDispatchCount = countFailedDispatchResults(dispatchResults);
-  const previouslyPublished = Boolean(options.resumePublication && context.publicationRecovery?.skipChannels?.length);
-  const implicitSkipReason = !options.dryRun && !outputState.skipReason && publishedDispatchCount === 0 && !previouslyPublished
-    ? failedDispatchCount > 0
-      ? "output_dispatch_failed"
-      : outputState.problems.length > 0 && !outputPublisher
-      ? "no_output_publisher"
-      : outputState.problems.length === 0
-        && (outputPublisher?.noProblemsAction === "suppress"
-          || (outputPublisher?.noProblemsAction === "publish_if_summary"
-            && outputState.summaries.every((s) => !s.markdown.trim())))
-        ? "no_problems_suppressed"
-        : "no_dispatchable_problems"
-    : undefined;
+  const previouslyPublished = Boolean(
+    options.resumePublication &&
+    context.publicationRecovery?.skipChannels?.length,
+  );
+  const implicitSkipReason =
+    !options.dryRun &&
+    !outputState.skipReason &&
+    publishedDispatchCount === 0 &&
+    !previouslyPublished
+      ? failedDispatchCount > 0
+        ? "output_dispatch_failed"
+        : outputState.problems.length > 0 && !outputPublisher
+          ? "no_output_publisher"
+          : outputState.problems.length === 0 &&
+              (outputPublisher?.noProblemsAction === "suppress" ||
+                (outputPublisher?.noProblemsAction === "publish_if_summary" &&
+                  outputState.summaries.every((s) => !s.markdown.trim())))
+            ? "no_problems_suppressed"
+            : "no_dispatchable_problems"
+      : undefined;
   const skipReason = outputState.skipReason ?? implicitSkipReason;
   const status = skipReason
     ? "skipped"
@@ -4311,16 +5639,28 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
     scrubMatches: allScrubMatches,
     ...(compressed ? { compressed } : {}),
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
-    ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
+    ...(compressedTokenEstimate !== undefined
+      ? { compressedTokenEstimate }
+      : {}),
     // Every initial/follow-up/fallback completion is billable. Persist the run-wide sums,
     // not merely the final completion that happened to produce the accepted review output.
-    ...(runMetrics.estimatedCostUsd !== undefined ? { estimatedCostUsd: runMetrics.estimatedCostUsd } : {}),
-    ...(runMetrics.requestCount !== undefined ? { requestCount: runMetrics.requestCount } : {}),
-    ...(runMetrics.retryCount !== undefined ? { retryCount: runMetrics.retryCount } : {}),
-    ...(runMetrics.fallbackCount !== undefined ? { fallbackCount: runMetrics.fallbackCount } : {}),
+    ...(runMetrics.estimatedCostUsd !== undefined
+      ? { estimatedCostUsd: runMetrics.estimatedCostUsd }
+      : {}),
+    ...(runMetrics.requestCount !== undefined
+      ? { requestCount: runMetrics.requestCount }
+      : {}),
+    ...(runMetrics.retryCount !== undefined
+      ? { retryCount: runMetrics.retryCount }
+      : {}),
+    ...(runMetrics.fallbackCount !== undefined
+      ? { fallbackCount: runMetrics.fallbackCount }
+      : {}),
     ...(runMetrics.usageSource ? { usageSource: runMetrics.usageSource } : {}),
     ...analysisFields,
-    ...(contextRepoResults.length > 0 ? { contextRepositories: contextRepoResults } : {}),
+    ...(contextRepoResults.length > 0
+      ? { contextRepositories: contextRepoResults }
+      : {}),
     ...revisionStamp,
   };
 
@@ -4328,13 +5668,18 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
     try {
       await options.postRunCallback(result, context);
     } catch (callbackError: unknown) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        msg: "postRunCallback failed",
-        triggerName: context.reviewEvent.triggerName,
-        workspaceId: context.reviewEvent.workspaceId,
-        error: callbackError instanceof Error ? callbackError.message : String(callbackError),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "postRunCallback failed",
+          triggerName: context.reviewEvent.triggerName,
+          workspaceId: context.reviewEvent.workspaceId,
+          error:
+            callbackError instanceof Error
+              ? callbackError.message
+              : String(callbackError),
+        }),
+      );
     }
   }
 

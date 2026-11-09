@@ -5,14 +5,38 @@ import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
 import { markdownDocumentString } from "./markdown-document.js";
-import { CONFIG_MATCHER_LIMITS, addSecretMutexIssues, assertConfigDatabaseFormat, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
+import {
+  CONFIG_MATCHER_LIMITS,
+  addSecretMutexIssues,
+  assertConfigDatabaseFormat,
+  configMatcherSchema,
+  reasoningEffortSchema,
+} from "./config-format.js";
 import { validateWorkspaceDefinitions } from "./config-workspace.js";
-import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
-import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
-import { REVIEW_DEFAULT_MAX_FILES, REVIEW_DEFAULT_MAX_PATCH_BYTES } from "./review-policy.js";
+import {
+  autoCommitConfigSchema,
+  type AutoCommitConfig,
+} from "./auto-commit-policy.js";
+import {
+  pullRequestConfigSchema,
+  type PullRequestConfig,
+} from "./pull-request-policy.js";
+import {
+  REVIEW_DEFAULT_MAX_FILES,
+  REVIEW_DEFAULT_MAX_PATCH_BYTES,
+} from "./review-policy.js";
 import { isPlainObject } from "./utils.js";
 import { validateConfigNamespace, workspaceRootKeys } from "./config-format.js";
-import { channelMemberDirectorySchema, imConfigSchema, wecomAppTargetSchema, isSocialImKind, decimalPlatformIdSchema, telegramActorIdSchema, telegramChatIdSchema, slackPlatformIdSchema } from "./im-config.js";
+import {
+  channelMemberDirectorySchema,
+  imConfigSchema,
+  wecomAppTargetSchema,
+  isSocialImKind,
+  decimalPlatformIdSchema,
+  telegramActorIdSchema,
+  telegramChatIdSchema,
+  slackPlatformIdSchema,
+} from "./im-config.js";
 
 import {
   assertNoSecretEnvIssues,
@@ -25,7 +49,11 @@ import {
 
 export { workspaceRootKeys };
 
-const reservedWorkspaceIds: Record<string, true> = { cache: true, defaults: true, instances: true };
+const reservedWorkspaceIds: Record<string, true> = {
+  cache: true,
+  defaults: true,
+  instances: true,
+};
 
 export const workspaceIdSchema = z
   .string()
@@ -59,15 +87,16 @@ export const llmProviderObjectSchema = z
   })
   .passthrough();
 
-export const llmProviderSchema = llmProviderObjectSchema
-  .superRefine((provider, ctx) => addSecretMutexIssues(ctx, provider, [
-    ["api_key", "api_key_env"],
-    ["aws_access_key", "aws_access_key_env"],
-    ["aws_secret_key", "aws_secret_key_env"],
-    ["aws_session_token", "aws_session_token_env"],
-    ["google_application_credentials", "google_application_credentials_env"],
-  ]));
-
+export const llmProviderSchema = llmProviderObjectSchema.superRefine(
+  (provider, ctx) =>
+    addSecretMutexIssues(ctx, provider, [
+      ["api_key", "api_key_env"],
+      ["aws_access_key", "aws_access_key_env"],
+      ["aws_secret_key", "aws_secret_key_env"],
+      ["aws_session_token", "aws_session_token_env"],
+      ["google_application_credentials", "google_application_credentials_env"],
+    ]),
+);
 
 /**
  * Request-level overrides on a single model-chain entry (architecture §3.15). Wired
@@ -82,7 +111,9 @@ export const modelRequestOverridesSchema = z
     extra_body: z.record(z.string().min(1), z.unknown()).optional(),
     extra_headers: z.record(z.string().min(1), z.string()).optional(),
     reasoning_effort: reasoningEffortSchema.optional(),
-    thinking_level: z.enum(["off", "minimal", "low", "medium", "high", "max"]).optional(),
+    thinking_level: z
+      .enum(["off", "minimal", "low", "medium", "high", "max"])
+      .optional(),
     thinking_budget_tokens: z.number().int().positive().optional(),
     thinking: z.object({ enabled: z.boolean() }).passthrough().optional(),
     response_format: z
@@ -90,7 +121,10 @@ export const modelRequestOverridesSchema = z
       .passthrough()
       .optional(),
     tool_choice: z
-      .union([z.enum(["auto", "none", "required"]), z.record(z.string().min(1), z.unknown())])
+      .union([
+        z.enum(["auto", "none", "required"]),
+        z.record(z.string().min(1), z.unknown()),
+      ])
       .optional(),
     parallel_tool_calls: z.boolean().optional(),
     seed: z.number().int().optional(),
@@ -111,13 +145,15 @@ export const llmModelChainEntrySchema = z
 
 export const modelChainReferenceSchema = z
   .string({
-    error: (issue) => issue.code === "invalid_type" && issue.input !== undefined
-      ? "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group"
-      : undefined,
+    error: (issue) =>
+      issue.code === "invalid_type" && issue.input !== undefined
+        ? "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group"
+        : undefined,
   })
   .min(1)
   .refine((name) => name.trim() === name, {
-    message: "Model chain group names must not have leading or trailing whitespace",
+    message:
+      "Model chain group names must not have leading or trailing whitespace",
   });
 
 export const llmRetrySchema = z
@@ -243,7 +279,9 @@ export const modelCatalogSchema = z
       })
       .passthrough()
       .default({ backend: "sqlite" }),
-    overrides: z.record(z.string().min(1), modelCatalogOverrideSchema).default({}),
+    overrides: z
+      .record(z.string().min(1), modelCatalogOverrideSchema)
+      .default({}),
   })
   .passthrough()
   .default({
@@ -256,7 +294,6 @@ export const modelCatalogSchema = z
     cache: { backend: "sqlite" },
     overrides: {},
   });
-
 
 export const compressionSchema = z
   .object({
@@ -280,7 +317,10 @@ export const compressionSchema = z
   .passthrough()
   .optional();
 
-export const githubAppIdSchema = z.union([z.string().min(1), z.number().int().positive()]);
+export const githubAppIdSchema = z.union([
+  z.string().min(1),
+  z.number().int().positive(),
+]);
 
 export const githubAppAuthSchema = z
   .object({
@@ -294,7 +334,9 @@ export const githubAppAuthSchema = z
   })
   .passthrough()
   .superRefine((app, ctx) => {
-    const forms = ["private_key", "private_key_env", "private_key_path"].filter((field) => app[field as keyof typeof app] !== undefined);
+    const forms = ["private_key", "private_key_env", "private_key_path"].filter(
+      (field) => app[field as keyof typeof app] !== undefined,
+    );
     if (forms.length > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -308,7 +350,16 @@ export const githubAppAuthSchema = z
 export const triggerObjectSchema = z
   .object({
     name: z.string().min(1),
-    kind: z.enum(["gitea", "forgejo", "github", "gitlab", "p4", "svn", "scheduled", "manual"]),
+    kind: z.enum([
+      "gitea",
+      "forgejo",
+      "github",
+      "gitlab",
+      "p4",
+      "svn",
+      "scheduled",
+      "manual",
+    ]),
     enabled: z.boolean().optional(),
     watch_path: z.array(z.string().min(1)).optional(),
     include_cr_file: z.array(z.string().min(1)).optional(),
@@ -328,15 +379,16 @@ export const triggerObjectSchema = z
   })
   .passthrough();
 
-export const triggerSchema = triggerObjectSchema
-  .superRefine((trigger, ctx) => addSecretMutexIssues(ctx, trigger, [
+export const triggerSchema = triggerObjectSchema.superRefine((trigger, ctx) =>
+  addSecretMutexIssues(ctx, trigger, [
     ["token", "token_env"],
     ["webhook_secret", "webhook_secret_env"],
     ["user", "user_env"],
     ["ticket", "ticket_env"],
     ["password", "password_env"],
     ["username", "username_env"],
-  ]));
+  ]),
+);
 
 export const noProblemsPolicySchema = z
   .object({
@@ -354,9 +406,13 @@ export const outputChannelOverrideSchema = z
 export const outputChannelSchema = z
   .object({
     name: z.string().min(1),
-    kind: z.string().min(1).refine((value) => value !== "gitea_finding_issue", {
-      message: "gitea_finding_issue has been removed; use gitea_problem_issue.",
-    }),
+    kind: z
+      .string()
+      .min(1)
+      .refine((value) => value !== "gitea_finding_issue", {
+        message:
+          "gitea_finding_issue has been removed; use gitea_problem_issue.",
+      }),
     trigger: z.string().min(1).optional(),
     mention_author: z.boolean().optional(),
     mention_fallback: z.enum(["all", "skip"]).optional(),
@@ -377,7 +433,9 @@ export const outputChannelSchema = z
     marker_label: z.string().min(1).optional(),
     label_ids: z.array(z.number().int().positive()).optional(),
     labels: z.array(z.string().min(1)).optional(),
-    issue_mode: z.enum(["per_problem", "consolidated", "per_commit"]).optional(),
+    issue_mode: z
+      .enum(["per_problem", "consolidated", "per_commit"])
+      .optional(),
     /**
      * Feishu card verbosity when the summary route also records the full
      * report as a managed issue and the card links to it: `brief` keeps
@@ -386,15 +444,21 @@ export const outputChannelSchema = z
      * feishu_bot/feishu_app.
      */
     issue_link_card: z.enum(["brief", "titles", "full"]).optional(),
-    resolved_action: z.enum(["none", "close", "mark_resolved", "delete"]).optional(),
+    resolved_action: z
+      .enum(["none", "close", "mark_resolved", "delete"])
+      .optional(),
     assign_committer: z.boolean().optional(),
     owners_file: z.string().min(1).optional(),
     add_owners_as_assignees: z.boolean().optional(),
     severity_label_prefix: z.string().min(1).optional(),
-    severity_label_colors: z.record(z.string().min(1), z.string().min(1)).optional(),
+    severity_label_colors: z
+      .record(z.string().min(1), z.string().min(1))
+      .optional(),
     review_mode: z.enum(["auto", "review", "comment"]).optional(),
     review_event: z.enum(["COMMENT", "REQUEST_CHANGES"]).optional(),
-    review_update_strategy: z.enum(["always_new", "update_existing"]).optional(),
+    review_update_strategy: z
+      .enum(["always_new", "update_existing"])
+      .optional(),
     notify_feishu: z
       .object({
         webhook_url_env: z.string().min(1).optional(),
@@ -410,7 +474,10 @@ export const outputChannelSchema = z
           ["webhook_url", "webhook_url_env"],
           ["secret", "secret_env"],
         ]);
-        if (notify.webhook_url === undefined && notify.webhook_url_env === undefined) {
+        if (
+          notify.webhook_url === undefined &&
+          notify.webhook_url_env === undefined
+        ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: "notify_feishu requires webhook_url or webhook_url_env.",
@@ -427,7 +494,9 @@ export const outputChannelSchema = z
     app_secret: z.string().min(1).optional(),
     app_secret_env: z.string().min(1).optional(),
     receive_id: z.string().min(1).optional(),
-    receive_id_type: z.enum(["chat_id", "open_id", "user_id", "union_id", "email"]).optional(),
+    receive_id_type: z
+      .enum(["chat_id", "open_id", "user_id", "union_id", "email"])
+      .optional(),
     /**
      * Reference into `im.connections`. New app channels require it; historical
      * feishu_app channels keep their inline credentials, but inline and
@@ -439,7 +508,9 @@ export const outputChannelSchema = z
     /** WeCom application send target: recipients or appchat, exclusively. */
     target: wecomAppTargetSchema.optional(),
     member_directory: channelMemberDirectorySchema.optional(),
-    user_mappings: z.record(z.string().min(1), z.string().regex(/^ou_[A-Za-z0-9_-]+$/u)).optional(),
+    user_mappings: z
+      .record(z.string().min(1), z.string().regex(/^ou_[A-Za-z0-9_-]+$/u))
+      .optional(),
     /** Explicit author → file member key mapping; exclusive with user_mappings (member-directory design §2). */
     author_mappings: z.record(z.string().min(1), z.string().min(1)).optional(),
     guess_author: z.boolean().optional(),
@@ -454,7 +525,11 @@ export const outputChannelSchema = z
     ]);
     if (channel.connection !== undefined) {
       if (channel.kind === "feishu_app") {
-        for (const inlineKey of ["app_id", "app_secret", "app_secret_env"] as const) {
+        for (const inlineKey of [
+          "app_id",
+          "app_secret",
+          "app_secret_env",
+        ] as const) {
           if (channel[inlineKey] !== undefined) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
@@ -463,7 +538,10 @@ export const outputChannelSchema = z
             });
           }
         }
-      } else if (channel.kind !== "wecom_app" && !isSocialImKind(channel.kind)) {
+      } else if (
+        channel.kind !== "wecom_app" &&
+        !isSocialImKind(channel.kind)
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `connection references are only supported by wecom_app/feishu_app channels, not kind "${channel.kind}".`,
@@ -472,51 +550,140 @@ export const outputChannelSchema = z
       }
     }
     if (isSocialImKind(channel.kind)) {
-      const allowed = new Set(["name", "kind", "connection", "channel_id", "chat_id", "trigger", "templates", "no_problems",
-        "mention_author", "mention_fallback", "member_directory", "author_mappings", "guess_author",
-        "commit_url_template", "revision_url_template", "change_url_template"]);
+      const allowed = new Set([
+        "name",
+        "kind",
+        "connection",
+        "channel_id",
+        "chat_id",
+        "trigger",
+        "templates",
+        "no_problems",
+        "mention_author",
+        "mention_fallback",
+        "member_directory",
+        "author_mappings",
+        "guess_author",
+        "commit_url_template",
+        "revision_url_template",
+        "change_url_template",
+      ]);
       for (const key of Object.keys(channel)) {
-        if (!allowed.has(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `${channel.kind} does not support ${key}.` });
+        if (!allowed.has(key))
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${channel.kind} does not support ${key}.`,
+          });
       }
-      if (channel.connection === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["connection"], message: "social IM channels require a connection reference." });
-      const targetKey = channel.kind === "telegram_bot" ? "chat_id" : "channel_id";
-      const targetSchema = channel.kind === "telegram_bot" ? telegramChatIdSchema : channel.kind === "discord_bot" ? decimalPlatformIdSchema : slackPlatformIdSchema;
-      if (!targetSchema.safeParse(channel[targetKey]).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [targetKey], message: "an exact platform destination ID is required." });
+      if (channel.connection === undefined)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["connection"],
+          message: "social IM channels require a connection reference.",
+        });
+      const targetKey =
+        channel.kind === "telegram_bot" ? "chat_id" : "channel_id";
+      const targetSchema =
+        channel.kind === "telegram_bot"
+          ? telegramChatIdSchema
+          : channel.kind === "discord_bot"
+            ? decimalPlatformIdSchema
+            : slackPlatformIdSchema;
+      if (!targetSchema.safeParse(channel[targetKey]).success)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [targetKey],
+          message: "an exact platform destination ID is required.",
+        });
       const wrongKey = targetKey === "chat_id" ? "channel_id" : "chat_id";
-      if (channel[wrongKey] !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [wrongKey], message: "destination field does not match platform." });
-      if (channel.mention_fallback === "all") ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["mention_fallback"], message: "social IM only supports mention_fallback: skip." });
+      if (channel[wrongKey] !== undefined)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [wrongKey],
+          message: "destination field does not match platform.",
+        });
+      if (channel.mention_fallback === "all")
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["mention_fallback"],
+          message: "social IM only supports mention_fallback: skip.",
+        });
       const directory = channel.member_directory;
       if (directory !== undefined) {
         const source = "source" in directory ? directory.source : "feishu_api";
-        const apiSource = channel.kind === "slack_app" ? "slack_api" : channel.kind === "discord_bot" ? "discord_api" : undefined;
-        if (source !== "file" && source !== apiSource) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["member_directory"], message: "member directory source does not match platform." });
+        const apiSource =
+          channel.kind === "slack_app"
+            ? "slack_api"
+            : channel.kind === "discord_bot"
+              ? "discord_api"
+              : undefined;
+        if (source !== "file" && source !== apiSource)
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["member_directory"],
+            message: "member directory source does not match platform.",
+          });
         if ("identity_scope" in directory) {
-          const scope = channel.kind === "slack_app" ? "slack_team" : channel.kind === "discord_bot" ? "discord_guild" : "telegram_bot";
-          if (directory.identity_scope.kind !== scope) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["member_directory", "identity_scope", "kind"], message: "member directory identity scope does not match platform." });
+          const scope =
+            channel.kind === "slack_app"
+              ? "slack_team"
+              : channel.kind === "discord_bot"
+                ? "discord_guild"
+                : "telegram_bot";
+          if (directory.identity_scope.kind !== scope)
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["member_directory", "identity_scope", "kind"],
+              message:
+                "member directory identity scope does not match platform.",
+            });
         }
       }
-      if (directory === undefined || !("source" in directory && directory.source === "file")) {
-        const idSchema = channel.kind === "slack_app" ? z.string().regex(/^[UW][A-Z0-9]{1,63}$/u)
-          : channel.kind === "telegram_bot" ? telegramActorIdSchema : decimalPlatformIdSchema;
+      if (
+        directory === undefined ||
+        !("source" in directory && directory.source === "file")
+      ) {
+        const idSchema =
+          channel.kind === "slack_app"
+            ? z.string().regex(/^[UW][A-Z0-9]{1,63}$/u)
+            : channel.kind === "telegram_bot"
+              ? telegramActorIdSchema
+              : decimalPlatformIdSchema;
         for (const [key, id] of Object.entries(channel.author_mappings ?? {})) {
-          if (!idSchema.safeParse(id).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["author_mappings", key], message: "author mappings require platform user IDs, not usernames or markup." });
+          if (!idSchema.safeParse(id).success)
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["author_mappings", key],
+              message:
+                "author mappings require platform user IDs, not usernames or markup.",
+            });
         }
       }
-    } else if (channel.member_directory !== undefined && "source" in channel.member_directory &&
-      ["slack_api", "discord_api"].includes(channel.member_directory.source)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["member_directory"], message: "social API directories require a matching social IM channel." });
+    } else if (
+      channel.member_directory !== undefined &&
+      "source" in channel.member_directory &&
+      ["slack_api", "discord_api"].includes(channel.member_directory.source)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["member_directory"],
+        message: "social API directories require a matching social IM channel.",
+      });
     }
     if (channel.kind === "wecom_app" && channel.connection === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "wecom_app channels require a connection reference into im.connections.",
+        message:
+          "wecom_app channels require a connection reference into im.connections.",
         path: ["connection"],
       });
     }
     if (channel.kind === "wecom_app" && channel.target === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "wecom_app channels require a send target (recipients or appchat).",
+        message:
+          "wecom_app channels require a send target (recipients or appchat).",
         path: ["target"],
       });
     }
@@ -527,26 +694,54 @@ export const outputChannelSchema = z
         path: ["target"],
       });
     }
-    if (channel.author_mappings !== undefined && channel.user_mappings !== undefined) {
+    if (
+      channel.author_mappings !== undefined &&
+      channel.user_mappings !== undefined
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "user_mappings and author_mappings are mutually exclusive on one channel.",
+        message:
+          "user_mappings and author_mappings are mutually exclusive on one channel.",
         path: ["author_mappings"],
       });
     }
     if (channel.kind === "feishu_app") {
       // Credentials come from im.connections when the channel references one;
       // the destination and base_url rules apply to both credential forms.
-      if (!channel.receive_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["receive_id"], message: "feishu_app requires receive_id." });
+      if (!channel.receive_id)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["receive_id"],
+          message: "feishu_app requires receive_id.",
+        });
       if (channel.connection === undefined) {
-        if (!channel.app_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["app_id"], message: "feishu_app requires app_id." });
+        if (!channel.app_id)
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["app_id"],
+            message: "feishu_app requires app_id.",
+          });
         if (!channel.app_secret && !channel.app_secret_env) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["app_secret"], message: "feishu_app requires app_secret or app_secret_env." });
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["app_secret"],
+            message: "feishu_app requires app_secret or app_secret_env.",
+          });
         }
       }
-      if (channel.base_url !== undefined && (typeof channel.base_url !== "string" ||
-        !["https://open.feishu.cn", "https://open.larksuite.com"].includes(channel.base_url.replace(/\/+$/u, "")))) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["base_url"], message: "feishu_app base_url must be https://open.feishu.cn or https://open.larksuite.com." });
+      if (
+        channel.base_url !== undefined &&
+        (typeof channel.base_url !== "string" ||
+          !["https://open.feishu.cn", "https://open.larksuite.com"].includes(
+            channel.base_url.replace(/\/+$/u, ""),
+          ))
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["base_url"],
+          message:
+            "feishu_app base_url must be https://open.feishu.cn or https://open.larksuite.com.",
+        });
       }
     }
   });
@@ -557,7 +752,9 @@ export const workspaceOutputsSchema = z
     summary: z.array(z.string()).optional(),
     no_problems: noProblemsPolicySchema.optional(),
     no_findings: z.never().optional(),
-    channel_overrides: z.record(z.string().min(1), outputChannelOverrideSchema).optional(),
+    channel_overrides: z
+      .record(z.string().min(1), outputChannelOverrideSchema)
+      .optional(),
   })
   .strict();
 
@@ -580,14 +777,18 @@ export const outputRouteTargetKindSchema = z.preprocess((value) => {
   return value === "pr" ? "pull_request" : value;
 }, reviewTargetKindSchema);
 
-const legacyOutputRouteMatchSchema = z.object({
-  trigger: z.string().min(1).optional(),
-  target_kind: outputRouteTargetKindSchema.optional(),
-}).passthrough();
+const legacyOutputRouteMatchSchema = z
+  .object({
+    trigger: z.string().min(1).optional(),
+    target_kind: outputRouteTargetKindSchema.optional(),
+  })
+  .passthrough();
 
 export const outputRouteSchema = z
   .object({
-    match: legacyOutputRouteMatchSchema.extend({ repo_ref: z.string().min(1).optional() }).optional(),
+    match: legacyOutputRouteMatchSchema
+      .extend({ repo_ref: z.string().min(1).optional() })
+      .optional(),
     line_comments: z.array(z.string()).optional(),
     summary: z.array(z.string()).optional(),
   })
@@ -595,12 +796,30 @@ export const outputRouteSchema = z
 
 export const sandboxSchema = z
   .object({
-    kind: z.enum(["native", "docker", "podman", "docker_socket", "k8s_pod", "firecracker"]).optional(),
+    kind: z
+      .enum([
+        "native",
+        "docker",
+        "podman",
+        "docker_socket",
+        "k8s_pod",
+        "firecracker",
+      ])
+      .optional(),
     engine: z.enum(["auto", "docker", "podman"]).optional(),
     image: z.string().min(1).optional(),
   })
   .strict();
-export const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi", "native-llm"]);
+export const agentKindSchema = z.enum([
+  "kilo",
+  "opencode",
+  "zoo",
+  "copilot-cli",
+  "claude-code",
+  "pi",
+  "oh-my-pi",
+  "native-llm",
+]);
 
 const contextCompactionShape = {
   auto: z.boolean(),
@@ -667,7 +886,10 @@ const agentWebSearchShape = {
   providers: z.array(z.string().min(1)),
   exclude: z.array(z.string().min(1)),
   timeout_seconds: z.number().int().min(1).max(300),
-  credentials: z.partialRecord(agentWebSearchCredentialProviderSchema, agentWebSearchCredentialSchema),
+  credentials: z.partialRecord(
+    agentWebSearchCredentialProviderSchema,
+    agentWebSearchCredentialSchema,
+  ),
   searxng: agentWebSearchSearxngSchema,
 };
 
@@ -686,9 +908,7 @@ export const agentWebSearchSchema = z
 export const triageSchema = z
   .object({
     enabled: z.boolean().default(false),
-    actions: z
-      .array(z.enum(["close"]))
-      .default(["close"]),
+    actions: z.array(z.enum(["close"])).default(["close"]),
     categories_close: z
       .array(
         z.enum([
@@ -701,14 +921,18 @@ export const triageSchema = z
         ]),
       )
       .default(["spam", "invalid"]),
-    events: z
-      .array(z.enum(["issues"]))
-      .default(["issues"]),
+    events: z.array(z.enum(["issues"])).default(["issues"]),
     custom_prompt: z.string().min(1).optional(),
     dry_run: z.boolean().default(false),
   })
   .passthrough()
-  .default({ enabled: false, actions: ["close"], categories_close: ["spam", "invalid"], events: ["issues"], dry_run: false });
+  .default({
+    enabled: false,
+    actions: ["close"],
+    categories_close: ["spam", "invalid"],
+    events: ["issues"],
+    dry_run: false,
+  });
 
 /**
  * Explicit portable shape of the `review` section. The schema below is reused
@@ -730,26 +954,34 @@ export interface ReviewConfig {
   pull_request?: PullRequestConfig | undefined;
   log_thinking?: boolean | undefined;
   git?: { allow_deepen?: boolean | undefined } | undefined;
-  labels?: {
-    ignore?: string[] | undefined;
-    auto_tag?: string | undefined;
-    reviewed_tag?: string | undefined;
-  } | undefined;
+  labels?:
+    | {
+        ignore?: string[] | undefined;
+        auto_tag?: string | undefined;
+        reviewed_tag?: string | undefined;
+      }
+    | undefined;
   problem_issue?: { max_recent_issues?: number | undefined } | undefined;
-  fetch_extra?: {
-    max_bytes?: number | undefined;
-    max_files?: number | undefined;
-    allow_paths?: string[] | undefined;
-  } | undefined;
-  reflection?: {
-    enabled?: boolean | undefined;
-    mode?: "off" | "light" | "thorough" | undefined;
-    memory?: {
-      max_size_kb?: number | undefined;
-      max_entries?: number | undefined;
-      retention_days?: number | undefined;
-    } | undefined;
-  } | undefined;
+  fetch_extra?:
+    | {
+        max_bytes?: number | undefined;
+        max_files?: number | undefined;
+        allow_paths?: string[] | undefined;
+      }
+    | undefined;
+  reflection?:
+    | {
+        enabled?: boolean | undefined;
+        mode?: "off" | "light" | "thorough" | undefined;
+        memory?:
+          | {
+              max_size_kb?: number | undefined;
+              max_entries?: number | undefined;
+              retention_days?: number | undefined;
+            }
+          | undefined;
+      }
+    | undefined;
   [key: string]: unknown;
 }
 
@@ -763,7 +995,9 @@ const reviewSchema: z.ZodType<ReviewConfig> = z
     incremental: z.boolean().optional(),
     skip_lgtm: z.boolean().optional(),
     output_language: z.string().min(1).optional(),
-    commit_strategy: z.enum(["per_commit", "aggregate", "head_only"]).optional(),
+    commit_strategy: z
+      .enum(["per_commit", "aggregate", "head_only"])
+      .optional(),
     auto_commit: autoCommitConfigSchema.optional(),
     pull_request: pullRequestConfigSchema.optional(),
     log_thinking: z.boolean().optional(),
@@ -817,7 +1051,8 @@ export const contextRepositoryAliasSchema = z
   .string()
   .min(1)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u, {
-    message: "context repository alias must be path-safe (letters, digits, '.', '_', '-'; no slashes)",
+    message:
+      "context repository alias must be path-safe (letters, digits, '.', '_', '-'; no slashes)",
   });
 
 export const contextRepositorySchema = z
@@ -830,7 +1065,9 @@ export const contextRepositorySchema = z
     /** Literal VCS token; mutually exclusive with token_env (literal wins). */
     token: z.string().min(1).optional(),
     repository_url: z.string().min(1).optional(),
-    revision: z.union([z.string().min(1), z.number().int().positive()]).optional(),
+    revision: z
+      .union([z.string().min(1), z.number().int().positive()])
+      .optional(),
     port: z.string().min(1).optional(),
     user_env: z.string().min(1).optional(),
     ticket_env: z.string().min(1).optional(),
@@ -865,25 +1102,58 @@ export const contextRepositorySchema = z
       if (!repo.url) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "kind: git context repository requires url; see docs/ai/architecture.md §3.2.2",
+          message:
+            "kind: git context repository requires url; see docs/ai/architecture.md §3.2.2",
           path: ["url"],
         });
       }
-      forbid(["repository_url", "revision", "port", "user_env", "ticket_env", "password_env", "user", "ticket", "password", "depot_path"], "svn/p4");
+      forbid(
+        [
+          "repository_url",
+          "revision",
+          "port",
+          "user_env",
+          "ticket_env",
+          "password_env",
+          "user",
+          "ticket",
+          "password",
+          "depot_path",
+        ],
+        "svn/p4",
+      );
     } else if (repo.kind === "svn") {
       if (!repo.repository_url) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "kind: svn context repository requires repository_url; see docs/ai/architecture.md §3.2.2",
+          message:
+            "kind: svn context repository requires repository_url; see docs/ai/architecture.md §3.2.2",
           path: ["repository_url"],
         });
       }
-      forbid(["url", "ref", "token_env", "token", "port", "user_env", "ticket_env", "password_env", "user", "ticket", "password", "depot_path"], "git/p4");
+      forbid(
+        [
+          "url",
+          "ref",
+          "token_env",
+          "token",
+          "port",
+          "user_env",
+          "ticket_env",
+          "password_env",
+          "user",
+          "ticket",
+          "password",
+          "depot_path",
+        ],
+        "git/p4",
+      );
     } else {
       if (!repo.depot_path) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "kind: p4 context repository requires depot_path; see docs/ai/architecture.md §3.2.2",
+          message:
+            "kind: p4 context repository requires depot_path; see docs/ai/architecture.md §3.2.2",
           path: ["depot_path"],
         });
       }
@@ -967,7 +1237,10 @@ export const workspaceInstanceSchema = z
       .optional(),
     // v2 multi-project form (architecture §3.10); mutually exclusive with source_repo,
     // enforced together with trigger references by validateWorkspaceDefinitions.
-    match: z.array(workspaceMatchRuleSchema).max(CONFIG_MATCHER_LIMITS.maxRulesPerGroup).optional(),
+    match: z
+      .array(workspaceMatchRuleSchema)
+      .max(CONFIG_MATCHER_LIMITS.maxRulesPerGroup)
+      .optional(),
     work_path: z.string().min(1).optional(),
     agent: workspaceAgentSelectionSchema.optional(),
     review: reviewSchema.optional(),
@@ -984,16 +1257,21 @@ export const workspaceInstanceSchema = z
         enabled: z.boolean().default(true),
       })
       .passthrough()
-      .superRefine((auth, ctx) => addSecretMutexIssues(ctx, auth, [["api_key", "api_key_env"]]))
+      .superRefine((auth, ctx) =>
+        addSecretMutexIssues(ctx, auth, [["api_key", "api_key_env"]]),
+      )
       .optional(),
   })
   .strict();
 
-const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }).extend({
-  // Repository-owned files may select an adapter, but cannot grant approval,
-  // change process limits or forward deployment credentials.
-  agent: workspaceAgentSelectionSchema.pick({ default: true }).optional(),
-}).strict();
+const workspaceConfigFileSchema = workspaceInstanceSchema
+  .omit({ sandbox: true })
+  .extend({
+    // Repository-owned files may select an adapter, but cannot grant approval,
+    // change process limits or forward deployment credentials.
+    agent: workspaceAgentSelectionSchema.pick({ default: true }).optional(),
+  })
+  .strict();
 
 export const trustProxyValueSchema: z.ZodType<
   boolean | "loopback" | "linklocal" | "uniquelocal" | readonly string[]
@@ -1011,7 +1289,9 @@ export const authSchema = z
     enabled: z.boolean().default(true),
   })
   .passthrough()
-  .superRefine((auth, ctx) => addSecretMutexIssues(ctx, auth, [["api_key", "api_key_env"]]))
+  .superRefine((auth, ctx) =>
+    addSecretMutexIssues(ctx, auth, [["api_key", "api_key_env"]]),
+  )
   .optional();
 
 export const serverSchema = z
@@ -1105,7 +1385,11 @@ export const storageSchema = z
         // Optional parents preserve the canonical shape of pre-upgrade snapshots.
         recent_runs: historyRetentionPolicySchema.optional(),
         events: historyRetentionPolicySchema.optional(),
-        queue: historyRetentionPolicySchema.extend({ max_count: z.number().int().min(1).max(1_000_000).default(1000) }).optional(),
+        queue: historyRetentionPolicySchema
+          .extend({
+            max_count: z.number().int().min(1).max(1_000_000).default(1000),
+          })
+          .optional(),
       })
       .passthrough()
       .default({ deleted_project_grace_days: 30 }),
@@ -1128,12 +1412,20 @@ export const adminAuthSchema = z
   .superRefine((admin, ctx) => {
     // password_env defaults to AICR_ADMIN_PASSWORD; only an explicitly chosen
     // (non-default) env name conflicts with a literal password.
-    addSecretMutexIssues(ctx,
-      { ...admin, password_env: admin.password_env === "AICR_ADMIN_PASSWORD" ? undefined : admin.password_env },
+    addSecretMutexIssues(
+      ctx,
+      {
+        ...admin,
+        password_env:
+          admin.password_env === "AICR_ADMIN_PASSWORD"
+            ? undefined
+            : admin.password_env,
+      },
       [
         ["password", "password_env"],
         ["password_hash", "password_hash_env"],
-      ]);
+      ],
+    );
   })
   .prefault({});
 
@@ -1147,18 +1439,32 @@ export const adminAuthSchema = z
  */
 export const configSourcesSchema = z
   .object({
-    secret_refs: z.array(z.object({
-      env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
-      target: z.array(z.string().min(1)).min(1),
-      destinations: z.record(z.string().min(1), z.unknown()),
-    }).strict()).optional(),
+    secret_refs: z
+      .array(
+        z
+          .object({
+            env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+            target: z.array(z.string().min(1)).min(1),
+            destinations: z.record(z.string().min(1), z.unknown()),
+          })
+          .strict(),
+      )
+      .optional(),
     database: z
       .object({
         enabled: z.boolean().default(false),
         backend: z.enum(["storage", "redis"]).default("storage"),
-        namespace: z.string().refine((value) => {
-          try { validateConfigNamespace(value); return true; } catch { return false; }
-        }, "Config namespace must be 1..64 safe identifier characters.").default("default"),
+        namespace: z
+          .string()
+          .refine((value) => {
+            try {
+              validateConfigNamespace(value);
+              return true;
+            } catch {
+              return false;
+            }
+          }, "Config namespace must be 1..64 safe identifier characters.")
+          .default("default"),
       })
       .strict()
       .default({ enabled: false, backend: "storage", namespace: "default" }),
@@ -1188,15 +1494,18 @@ export const promptsConfigSchema = z
 export const llmConfigSchema = z
   .object({
     providers: z.array(llmProviderSchema).default([]),
-    model_chain: z.record(
-      modelChainReferenceSchema,
-      z.array(llmModelChainEntrySchema).min(1),
-      {
-        error: (issue) => issue.code === "invalid_type" && issue.input !== undefined
-          ? "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default"
-          : undefined,
-      },
-    ).default({}),
+    model_chain: z
+      .record(
+        modelChainReferenceSchema,
+        z.array(llmModelChainEntrySchema).min(1),
+        {
+          error: (issue) =>
+            issue.code === "invalid_type" && issue.input !== undefined
+              ? "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default"
+              : undefined,
+        },
+      )
+      .default({}),
     default_model_chain: modelChainReferenceSchema.default("default"),
     triage_model_chain: modelChainReferenceSchema.optional(),
     author_resolution_model_chain: modelChainReferenceSchema.optional(),
@@ -1222,7 +1531,9 @@ export const outputsConfigSchema = z
     author_resolution: outputAuthorResolutionSchema,
     routes: z
       .object({
-        default: outputRouteSchema.extend({ match: legacyOutputRouteMatchSchema.optional() }).optional(),
+        default: outputRouteSchema
+          .extend({ match: legacyOutputRouteMatchSchema.optional() })
+          .optional(),
         rules: z.array(outputRouteSchema).default([]),
       })
       .passthrough()
@@ -1250,7 +1561,9 @@ export const queueConfigSchema = z
       .optional(),
     rate_limit: z
       .object({
-        per_provider_rps: z.record(z.string().min(1), z.number().positive()).optional(),
+        per_provider_rps: z
+          .record(z.string().min(1), z.number().positive())
+          .optional(),
       })
       .passthrough()
       .optional(),
@@ -1288,7 +1601,10 @@ export const agentConfigSchema = z
     // fallback allowed", while an explicit container kind is a trust
     // statement that must not silently downgrade when preflight fails.
     sandbox: sandboxSchema.default({}),
-    context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
+    context_compaction: contextCompactionSchema.default({
+      auto: true,
+      prune: true,
+    }),
     web_search: agentWebSearchSchema,
   })
   .strict();
@@ -1322,7 +1638,11 @@ export const workspacesConfigSchema = z
     // `<baseDir>/workspaces` root is used. Consumed by the runtime matcher
     // wiring (P1b).
     root: z.string().min(1).optional(),
-    cache: workspacesCacheSchema.default({ max_total_gb: 50, eviction: "lru", ttl_days: 30 }),
+    cache: workspacesCacheSchema.default({
+      max_total_gb: 50,
+      eviction: "lru",
+      ttl_days: 30,
+    }),
     defaults: workspacesDefaultsSchema.default({}),
     instances: z.record(workspaceIdSchema, workspaceInstanceSchema).default({}),
   })
@@ -1390,6 +1710,59 @@ export const routingConfigSchema = z
 export type RoutingRule = z.infer<typeof routingRuleSchema>;
 export type RoutingConfig = z.infer<typeof routingConfigSchema>;
 
+// ---------------------------------------------------------------------------
+// Code search index (architecture §3.x). Optional and default-free like `im`:
+// an absent `search` node must keep the historical canonical document and
+// snapshot hash bit-identical, so code-side defaults live in
+// `resolveSearchTgrepConfig` and every consumer must go through it.
+// ---------------------------------------------------------------------------
+
+export const searchTgrepSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Optional external cache root; defaults to `<instanceRoot>/.tgrep-cache`. */
+    data_dir: z.string().min(1).optional(),
+    /** Rebuild the index when the recorded head revision or this TTL drifts. */
+    index_ttl_seconds: z.number().int().positive().default(86400),
+    /** Housekeeping removes index caches not used for longer than this. */
+    cleanup_after_days: z.number().int().positive().default(7),
+    /** Bound one index build; a timeout never fails the review. */
+    build_timeout_seconds: z.number().int().positive().default(600),
+  })
+  .strict();
+
+export const searchConfigSchema = z
+  .object({
+    tgrep: searchTgrepSchema,
+  })
+  .strict();
+
+export type SearchConfig = z.infer<typeof searchConfigSchema>;
+export type SearchTgrepConfig = z.infer<typeof searchTgrepSchema>;
+
+export interface ResolvedSearchTgrepConfig {
+  readonly enabled: boolean;
+  /** External cache root; undefined means per-instance `<instanceRoot>/.tgrep-cache`. */
+  readonly dataDir?: string;
+  readonly indexTtlMs: number;
+  readonly cleanupAfterMs: number;
+  readonly buildTimeoutMs: number;
+}
+
+/** Code-side defaults for the optional `search.tgrep` section (see schema note). */
+export function resolveSearchTgrepConfig(
+  search: SearchConfig | undefined,
+): ResolvedSearchTgrepConfig {
+  const tgrep = search?.tgrep;
+  return {
+    enabled: tgrep?.enabled ?? true,
+    ...(tgrep?.data_dir !== undefined ? { dataDir: tgrep.data_dir } : {}),
+    indexTtlMs: (tgrep?.index_ttl_seconds ?? 86400) * 1000,
+    cleanupAfterMs: (tgrep?.cleanup_after_days ?? 7) * 24 * 60 * 60 * 1000,
+    buildTimeoutMs: (tgrep?.build_timeout_seconds ?? 600) * 1000,
+  };
+}
+
 const appConfigObjectSchema = z
   .object({
     storage: storageSchema,
@@ -1398,7 +1771,11 @@ const appConfigObjectSchema = z
     server: serverSchema,
     llm: llmConfigSchema.prefault({ providers: [], model_chain: {} }),
     triggers: z.array(triggerSchema).default([]),
-    outputs: outputsConfigSchema.default({ template_engine: "handlebars", templates: {}, channels: [] }),
+    outputs: outputsConfigSchema.default({
+      template_engine: "handlebars",
+      templates: {},
+      channels: [],
+    }),
     prompts: promptsConfigSchema.default({ system: {} }),
     queue: queueConfigSchema.default({ kind: "memory" }),
     agent: agentConfigSchema.default({
@@ -1407,7 +1784,12 @@ const appConfigObjectSchema = z
       auto_approve: true,
       sandbox: {},
       context_compaction: { auto: true, prune: true },
-      web_search: { enabled: false, providers: [], exclude: [], credentials: {} },
+      web_search: {
+        enabled: false,
+        providers: [],
+        exclude: [],
+        credentials: {},
+      },
     }),
     compression: compressionSchema,
     review: reviewSchema.default({
@@ -1432,201 +1814,256 @@ const appConfigObjectSchema = z
      * and snapshot hash bit-identical (execution contracts §1).
      */
     im: imConfigSchema.optional(),
+    search: searchConfigSchema.optional(),
   })
   .strict();
 
 type AppConfigRefinementTarget = z.infer<typeof appConfigObjectSchema>;
 
-const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.RefinementCtx): void => {
-    const llmRaw = config.llm as Record<string, unknown>;
-    for (const legacyKey of ["fallback_chain", "triage_fallback_chain"] as const) {
-      if (legacyKey in llmRaw) {
-        const renamedTo =
-          legacyKey === "fallback_chain" ? "model_chain" : "triage_model_chain";
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `llm.${legacyKey} was renamed to llm.${renamedTo}; rename the key in your config file`,
-          path: ["llm", legacyKey],
-        });
-      }
-    }
-
-    // Duplicate entity ids are rejected with the exact entity path (test C01);
-    // map collections (model_chain, workspaces.instances) cannot duplicate
-    // because YAML parsing already enforces unique mapping keys.
-    const checkDuplicateEntityIds = (
-      entries: readonly Record<string, unknown>[],
-      idField: "id" | "name",
-      collectionPath: [string, ...string[]],
-    ): void => {
-      const seen = new Map<string, number>();
-      entries.forEach((entry, index) => {
-        const id = entry[idField];
-        if (typeof id !== "string" || id.length === 0) {
-          return;
-        }
-        const firstIndex = seen.get(id);
-        if (firstIndex !== undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `Duplicate ${idField} "${id}": entries ${firstIndex} and ${index} in ${collectionPath.join(".")} must be unique`,
-            path: [...collectionPath, index, idField],
-          });
-          return;
-        }
-        seen.set(id, index);
+const appConfigRefinement = (
+  config: AppConfigRefinementTarget,
+  ctx: z.RefinementCtx,
+): void => {
+  const llmRaw = config.llm as Record<string, unknown>;
+  for (const legacyKey of [
+    "fallback_chain",
+    "triage_fallback_chain",
+  ] as const) {
+    if (legacyKey in llmRaw) {
+      const renamedTo =
+        legacyKey === "fallback_chain" ? "model_chain" : "triage_model_chain";
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `llm.${legacyKey} was renamed to llm.${renamedTo}; rename the key in your config file`,
+        path: ["llm", legacyKey],
       });
-    };
-    checkDuplicateEntityIds(config.llm.providers, "id", ["llm", "providers"]);
-    checkDuplicateEntityIds(config.triggers, "name", ["triggers"]);
-    checkDuplicateEntityIds(config.outputs.channels, "name", ["outputs", "channels"]);
+    }
+  }
 
-    // IM connection references from output channels (execution contracts §2):
-    // cross-entity integrity runs on every full-document parse, so file and
-    // database publish paths share it instead of only the admin UI.
-    config.outputs.channels.forEach((channel, index) => {
-      if (channel.connection === undefined) return;
-      const connection = config.im?.connections?.[channel.connection];
-      if (connection === undefined) {
+  // Duplicate entity ids are rejected with the exact entity path (test C01);
+  // map collections (model_chain, workspaces.instances) cannot duplicate
+  // because YAML parsing already enforces unique mapping keys.
+  const checkDuplicateEntityIds = (
+    entries: readonly Record<string, unknown>[],
+    idField: "id" | "name",
+    collectionPath: [string, ...string[]],
+  ): void => {
+    const seen = new Map<string, number>();
+    entries.forEach((entry, index) => {
+      const id = entry[idField];
+      if (typeof id !== "string" || id.length === 0) {
+        return;
+      }
+      const firstIndex = seen.get(id);
+      if (firstIndex !== undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `outputs.channels[${index}] references unknown im.connections entry "${channel.connection}".`,
-          path: ["outputs", "channels", index, "connection"],
+          message: `Duplicate ${idField} "${id}": entries ${firstIndex} and ${index} in ${collectionPath.join(".")} must be unique`,
+          path: [...collectionPath, index, idField],
         });
         return;
       }
-      if (connection.kind !== channel.kind) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `outputs.channels[${index}] kind "${channel.kind}" cannot use connection "${channel.connection}" of kind "${connection.kind}".`,
-          path: ["outputs", "channels", index, "connection"],
-        });
-      }
+      seen.set(id, index);
     });
+  };
+  checkDuplicateEntityIds(config.llm.providers, "id", ["llm", "providers"]);
+  checkDuplicateEntityIds(config.triggers, "name", ["triggers"]);
+  checkDuplicateEntityIds(config.outputs.channels, "name", [
+    "outputs",
+    "channels",
+  ]);
 
-    const checkModelChainReference = (name: string | undefined, path: string[]): void => {
-      if (name !== undefined && !Object.hasOwn(config.llm.model_chain, name)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Model chain group "${name}" is not defined in llm.model_chain`,
-          path,
-        });
-      }
-    };
-    // Preserve provider-only configurations, but never infer a group from map order.
-    if (Object.keys(config.llm.model_chain).length > 0 || config.llm.default_model_chain !== "default") {
-      checkModelChainReference(config.llm.default_model_chain, ["llm", "default_model_chain"]);
+  // IM connection references from output channels (execution contracts §2):
+  // cross-entity integrity runs on every full-document parse, so file and
+  // database publish paths share it instead of only the admin UI.
+  config.outputs.channels.forEach((channel, index) => {
+    if (channel.connection === undefined) return;
+    const connection = config.im?.connections?.[channel.connection];
+    if (connection === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `outputs.channels[${index}] references unknown im.connections entry "${channel.connection}".`,
+        path: ["outputs", "channels", index, "connection"],
+      });
+      return;
     }
-    checkModelChainReference(config.llm.triage_model_chain, ["llm", "triage_model_chain"]);
-    checkModelChainReference(config.llm.author_resolution_model_chain, ["llm", "author_resolution_model_chain"]);
-    for (const field of ["model_chain", "triage_model_chain", "author_resolution_model_chain"] as const) {
-      checkModelChainReference(config.workspaces.defaults[field], ["workspaces", "defaults", field]);
-      for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
-        checkModelChainReference(instance[field], ["workspaces", "instances", workspaceId, field]);
+    if (connection.kind !== channel.kind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `outputs.channels[${index}] kind "${channel.kind}" cannot use connection "${channel.connection}" of kind "${connection.kind}".`,
+        path: ["outputs", "channels", index, "connection"],
+      });
+    }
+  });
+
+  const checkModelChainReference = (
+    name: string | undefined,
+    path: string[],
+  ): void => {
+    if (name !== undefined && !Object.hasOwn(config.llm.model_chain, name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Model chain group "${name}" is not defined in llm.model_chain`,
+        path,
+      });
+    }
+  };
+  // Preserve provider-only configurations, but never infer a group from map order.
+  if (
+    Object.keys(config.llm.model_chain).length > 0 ||
+    config.llm.default_model_chain !== "default"
+  ) {
+    checkModelChainReference(config.llm.default_model_chain, [
+      "llm",
+      "default_model_chain",
+    ]);
+  }
+  checkModelChainReference(config.llm.triage_model_chain, [
+    "llm",
+    "triage_model_chain",
+  ]);
+  checkModelChainReference(config.llm.author_resolution_model_chain, [
+    "llm",
+    "author_resolution_model_chain",
+  ]);
+  for (const field of [
+    "model_chain",
+    "triage_model_chain",
+    "author_resolution_model_chain",
+  ] as const) {
+    checkModelChainReference(config.workspaces.defaults[field], [
+      "workspaces",
+      "defaults",
+      field,
+    ]);
+    for (const [workspaceId, instance] of Object.entries(
+      config.workspaces.instances,
+    )) {
+      checkModelChainReference(instance[field], [
+        "workspaces",
+        "instances",
+        workspaceId,
+        field,
+      ]);
+    }
+  }
+
+  const catalog = config.llm.model_catalog;
+  if (catalog.enabled && catalog.cache.backend === "redis") {
+    if (config.storage.cache.kind !== "redis") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'; see docs/ai/architecture.md §3.13 / D31",
+        path: ["llm", "model_catalog", "cache", "backend"],
+      });
+    }
+    if (!config.storage.cache.redis?.url_env) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env; see docs/ai/architecture.md §3.13 / D31",
+        path: ["storage", "cache", "redis", "url_env"],
+      });
+    }
+  }
+
+  if (
+    config.config_sources.database.enabled &&
+    config.config_sources.database.backend === "redis"
+  ) {
+    if (config.storage.cache.kind !== "redis") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "config_sources.database.backend 'redis' requires storage.cache.kind 'redis'; the config backend shares that connection declaration",
+        path: ["config_sources", "database", "backend"],
+      });
+    }
+    if (!config.storage.cache.redis?.url_env) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "config_sources.database.backend 'redis' requires storage.cache.redis.url_env; the config backend shares that connection declaration",
+        path: ["storage", "cache", "redis", "url_env"],
+      });
+    }
+  }
+
+  config.triggers.forEach((trigger, index) => {
+    const triggerConfig = trigger as Record<string, unknown>;
+    const tokenEnv = triggerConfig.token_env;
+    const hasTokenEnv = typeof tokenEnv === "string" && tokenEnv.length > 0;
+    const appConfig = trigger.app;
+    const hasApp = isPlainObject(appConfig);
+
+    if (trigger.kind !== "github") {
+      if (hasApp) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `app auth is only supported for kind: github, not kind: ${trigger.kind}; see docs/ai/architecture.md §3.2.1`,
+          path: ["triggers", index, "app"],
+        });
       }
+      return;
     }
 
-    const catalog = config.llm.model_catalog;
-    if (catalog.enabled && catalog.cache.backend === "redis") {
-      if (config.storage.cache.kind !== "redis") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'; see docs/ai/architecture.md §3.13 / D31",
-          path: ["llm", "model_catalog", "cache", "backend"],
-        });
-      }
-      if (!config.storage.cache.redis?.url_env) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env; see docs/ai/architecture.md §3.13 / D31",
-          path: ["storage", "cache", "redis", "url_env"],
-        });
-      }
+    if (!hasApp) {
+      return;
     }
 
-    if (config.config_sources.database.enabled && config.config_sources.database.backend === "redis") {
-      if (config.storage.cache.kind !== "redis") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "config_sources.database.backend 'redis' requires storage.cache.kind 'redis'; the config backend shares that connection declaration",
-          path: ["config_sources", "database", "backend"],
-        });
-      }
-      if (!config.storage.cache.redis?.url_env) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            "config_sources.database.backend 'redis' requires storage.cache.redis.url_env; the config backend shares that connection declaration",
-          path: ["storage", "cache", "redis", "url_env"],
-        });
-      }
+    const app = appConfig as Record<string, unknown>;
+    const hasAppId = app.app_id !== undefined && app.app_id !== "";
+    const hasClientId = app.client_id !== undefined && app.client_id !== "";
+    const hasPrivateKey =
+      typeof app.private_key === "string" && app.private_key.length > 0;
+    const hasPrivateKeyEnv =
+      typeof app.private_key_env === "string" && app.private_key_env.length > 0;
+    const hasPrivateKeyPath =
+      typeof app.private_key_path === "string" &&
+      app.private_key_path.length > 0;
+
+    if (!hasAppId && !hasClientId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "github app auth requires at least one of app_id or client_id; see docs/ai/architecture.md §3.2.1",
+        path: ["triggers", index, "app", "app_id"],
+      });
     }
 
-    config.triggers.forEach((trigger, index) => {
-      const triggerConfig = trigger as Record<string, unknown>;
-      const tokenEnv = triggerConfig.token_env;
-      const hasTokenEnv = typeof tokenEnv === "string" && tokenEnv.length > 0;
-      const appConfig = trigger.app;
-      const hasApp = isPlainObject(appConfig);
+    if (!hasPrivateKey && !hasPrivateKeyEnv && !hasPrivateKeyPath) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "github app auth requires exactly one of private_key, private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
+        path: ["triggers", index, "app", "private_key_env"],
+      });
+    }
 
-      if (trigger.kind !== "github") {
-        if (hasApp) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `app auth is only supported for kind: github, not kind: ${trigger.kind}; see docs/ai/architecture.md §3.2.1`,
-            path: ["triggers", index, "app"],
-          });
-        }
-        return;
-      }
+    if (
+      [hasPrivateKey, hasPrivateKeyEnv, hasPrivateKeyPath].filter(Boolean)
+        .length > 1
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "github app auth accepts only one of private_key, private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
+        path: ["triggers", index, "app", "private_key_path"],
+      });
+    }
 
-      if (!hasApp) {
-        return;
-      }
-
-      const app = appConfig as Record<string, unknown>;
-      const hasAppId = app.app_id !== undefined && app.app_id !== "";
-      const hasClientId = app.client_id !== undefined && app.client_id !== "";
-      const hasPrivateKey = typeof app.private_key === "string" && app.private_key.length > 0;
-      const hasPrivateKeyEnv = typeof app.private_key_env === "string" && app.private_key_env.length > 0;
-      const hasPrivateKeyPath = typeof app.private_key_path === "string" && app.private_key_path.length > 0;
-
-      if (!hasAppId && !hasClientId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "github app auth requires at least one of app_id or client_id; see docs/ai/architecture.md §3.2.1",
-          path: ["triggers", index, "app", "app_id"],
-        });
-      }
-
-      if (!hasPrivateKey && !hasPrivateKeyEnv && !hasPrivateKeyPath) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "github app auth requires exactly one of private_key, private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
-          path: ["triggers", index, "app", "private_key_env"],
-        });
-      }
-
-      if ([hasPrivateKey, hasPrivateKeyEnv, hasPrivateKeyPath].filter(Boolean).length > 1) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "github app auth accepts only one of private_key, private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
-          path: ["triggers", index, "app", "private_key_path"],
-        });
-      }
-
-      const hasToken = typeof triggerConfig.token === "string" && triggerConfig.token.length > 0;
-      if (hasTokenEnv || hasToken) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "github trigger cannot specify both token/token_env and app; they are mutually exclusive outbound auth methods; see docs/ai/architecture.md §3.2.1",
-          path: ["triggers", index, hasToken ? "token" : "token_env"],
-        });
-      }
-    });
+    const hasToken =
+      typeof triggerConfig.token === "string" && triggerConfig.token.length > 0;
+    if (hasTokenEnv || hasToken) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "github trigger cannot specify both token/token_env and app; they are mutually exclusive outbound auth methods; see docs/ai/architecture.md §3.2.1",
+        path: ["triggers", index, hasToken ? "token" : "token_env"],
+      });
+    }
+  });
 };
 
 const appConfigSchema = appConfigObjectSchema.superRefine(appConfigRefinement);
@@ -1645,9 +2082,14 @@ export const effectiveConfigV2Schema = appConfigObjectSchema
 export type EffectiveConfigV2 = z.infer<typeof effectiveConfigV2Schema>;
 
 /** Parses an effective (merged) config document at the given format version. */
-export function parseEffectiveConfig(input: unknown, formatVersion = 1): EffectiveConfigV2 {
+export function parseEffectiveConfig(
+  input: unknown,
+  formatVersion = 1,
+): EffectiveConfigV2 {
   assertConfigDatabaseFormat(formatVersion);
-  return (formatVersion >= 2 ? effectiveConfigV2Schema : appConfigSchema).parse(input) as EffectiveConfigV2;
+  return (formatVersion >= 2 ? effectiveConfigV2Schema : appConfigSchema).parse(
+    input,
+  ) as EffectiveConfigV2;
 }
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
@@ -1686,14 +2128,19 @@ export function mergeConfigLayers(...layers: AppConfigInput[]): AppConfig {
   return appConfigSchema.parse(merged);
 }
 
-export function resolveWorkspaceConfig(config: AppConfig, workspaceId: string): WorkspaceConfig {
+export function resolveWorkspaceConfig(
+  config: AppConfig,
+  workspaceId: string,
+): WorkspaceConfig {
   const instance = config.workspaces.instances[workspaceId];
 
   if (!instance) {
     throw new RangeError(`Workspace ${workspaceId} is not configured.`);
   }
 
-  return workspaceInstanceSchema.parse(mergeValue(config.workspaces.defaults, instance));
+  return workspaceInstanceSchema.parse(
+    mergeValue(config.workspaces.defaults, instance),
+  );
 }
 
 function normalizeConfigDocument(parsed: unknown): AppConfigInput {
@@ -1731,7 +2178,10 @@ export interface LoadedConfigDocument {
  * and `fallback_chain`/`triage_fallback_chain` aliases are converted by the
  * versioned converter only; the latest schema itself still rejects them.
  */
-export function parseConfigDocumentText(text: string, options?: ParseRawConfigOptions): LoadedConfigDocument {
+export function parseConfigDocumentText(
+  text: string,
+  options?: ParseRawConfigOptions,
+): LoadedConfigDocument {
   const raw = parseRawConfigSource(text, options);
   const { document, changes } = convertLegacyConfigDocument(raw.root);
   const config = appConfigSchema.parse(document);
@@ -1753,12 +2203,16 @@ export async function loadConfigFile(path: string): Promise<AppConfig> {
 }
 
 /** Full-document load for runtime/publish consumers needing digest + raw doc. */
-export async function loadConfigDocumentFile(path: string): Promise<LoadedConfigDocument> {
+export async function loadConfigDocumentFile(
+  path: string,
+): Promise<LoadedConfigDocument> {
   const raw = await readFile(path, "utf8");
   return parseConfigDocumentText(raw, { fileName: path });
 }
 
-export async function loadWorkspaceConfigFile(path: string): Promise<WorkspaceConfigFile> {
+export async function loadWorkspaceConfigFile(
+  path: string,
+): Promise<WorkspaceConfigFile> {
   const raw = await readFile(path, "utf8");
   const parsed = normalizeConfigDocument(parseYaml(raw));
 

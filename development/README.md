@@ -246,7 +246,7 @@ Perforce 官方 APT 仓库只发布 Ubuntu 代号源（已验证最新为 noble�
 | `PIP_INDEX_URL`               | Python pip simple index               | `https://pypi.org/simple`                                      | `https://mirrors.tencent.com/pypi/simple`                          |
 | `PIP_TRUSTED_HOST`            | pip HTTP/私有源信任主机               | （空）                                                         | 使用 HTTPS 的腾讯源时留空                                          |
 | `KUBERNETES_APT_REPO_BASE`    | `kubectl` APT 源 base                 | `https://pkgs.k8s.io/core:/stable:`                            | `https://mirrors.tencent.com/kubernetes_new/core:/stable:`         |
-| `KUBERNETES_APT_REPO_VERSION` | `kubectl` minor 版本源                | `v1.36`                                                        | 需与集群 minor 相差不超过 1；例如 `v1.36`                          |
+| `KUBERNETES_APT_REPO_VERSION` | `kubectl` minor 版本源                | `v1.37`                                                        | 需与集群 minor 相差不超过 1；例如 `v1.37`                          |
 | `HELM_APT_REPO`               | Helm Debian/Ubuntu apt 源             | `https://packages.buildkite.com/helm-linux/helm-debian/any/`   | 腾讯源未提供 Helm 专用镜像；保留默认或替换为内部缓存               |
 | `HELM_APT_KEY_URL`            | Helm apt signing key                  | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | 与 `HELM_APT_REPO` 的内部缓存配套                                  |
 | `YQ_VERSION`                  | Mike Farah `yq` 版本                  | `v4.53.2`                                                      | 按需固定                                                           |
@@ -266,7 +266,7 @@ Perforce 官方 APT 仓库只发布 Ubuntu 代号源（已验证最新为 noble�
 >
 > **关于 Kubernetes/Helm/yq**：Dockerfile 使用官方 Kubernetes apt 源安装 `kubectl`，国内示例切换到腾讯 `kubernetes_new`；Helm 官方文档当前列出的 Debian/Ubuntu apt 源由 Buildkite 托管，Mike Farah `yq` 官方建议下载预编译二进制。腾讯镜像站已验证没有 `/helm/` 与 `/yq/` 专用入口，如需全内网构建，请用内部缓存覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL` 与 `YQ_DOWNLOAD_BASE`。
 >
-> **关于现代 CLI 静态工具**：Debian trixie apt 已覆盖 `rg`、`fd`、`bat`、`sd`、`eza`、`duf`、`hyperfine`、`hexyl`、`miller`、`git-delta`、`lnav`、`ugrep`、`pigz`、`aria2`、`fzf` 等现代工具；`doggo`、`jaq`、`difftastic`、`ouch`、`watchexec`、`erdtree` 在 trixie 没有包，而 `dust`、`xh`、`procs`、`tailspin` 的 trixie 包版本偏旧，这些统一由 Dockerfile 以固定版本从 GitHub Releases 安装静态二进制（仅 amd64/arm64）。国内直连 github.com 受限时，设置 `GH_RELEASE_PREFIX` 为 ghproxy 风格前缀或内部缓存（例如 `GH_RELEASE_PREFIX=https://<mirror>/`），或依赖 `deploy.sh` 的构建代理自动探测。`tokei`（上游自 v13 起不再发布二进制，trixie apt 只有停留在 2023 年的 12.1.2）、`qsv`（musl 静态二进制约 104MB，过重，CSV 由 `miller` 覆盖）、`plocate`（容器内不会构建 updatedb 索引）有意不装进镜像。
+> **关于现代 CLI 静态工具**：Debian trixie apt 已覆盖 `rg`、`fd`、`bat`、`sd`、`eza`、`duf`、`hyperfine`、`hexyl`、`miller`、`git-delta`、`lnav`、`ugrep`、`pigz`、`aria2`、`fzf` 等现代工具；`doggo`、`jaq`、`difftastic`、`ouch`、`watchexec`、`erdtree`、`tgrep` 在 trixie 没有包，而 `dust`、`xh`、`procs`、`tailspin` 的 trixie 包版本偏旧，这些统一由 Dockerfile 以固定版本从 GitHub Releases 安装静态二进制（仅 amd64/arm64）。2026-11-05 核验并升级：dust v1.2.7、xh v0.26.3、doggo v1.4.2、jaq v3.1.2、difftastic 0.72.0、ouch 0.8.3、watchexec v2.8.0、yq v4.54.3，新增 tgrep v1.2.7（每 workspace 持久搜索索引，见 `docs/ai/architecture.md` §3.17）；procs v0.14.12、tailspin 7.0.0、erdtree v3.1.2 已是最新。kubectl 默认源升至 v1.37（对齐 dl.k8s.io stable v1.37.2）。bump 前必须核验上游 release asset 命名（测试 `packages/cli/test/deploy-assets.test.ts` 守住关键行）。国内直连 github.com 受限时，设置 `GH_RELEASE_PREFIX` 为 ghproxy 风格前缀或内部缓存（例如 `GH_RELEASE_PREFIX=https://<mirror>/`），或依赖 `deploy.sh` 的构建代理自动探测。`tokei`（上游自 v13 起不再发布二进制，trixie apt 只有停留在 2023 年的 12.1.2）、`qsv`（musl 静态二进制约 104MB，过重，CSV 由 `miller` 覆盖）、`plocate`（容器内不会构建 updatedb 索引）有意不装进镜像。
 >
 > **关于 Podman socket**：运行时镜像现在内置 `podman` CLI，并继续支持可选 Docker static CLI。`AICR_ENABLE_CONTAINER_SANDBOX=true` 时，`deploy.sh` 会挂载宿主 Podman socket，同时设置 `CONTAINER_HOST`（Podman 原生客户端）和 `DOCKER_HOST`（Docker 兼容客户端）。容器内不需要启动 Podman daemon；真正创建/管理子容器的是宿主 Podman socket。
 >
@@ -284,7 +284,7 @@ export NPM_REGISTRY=http://mirrors.tencent.com/npm/
 export NPM_STRICT_SSL=false
 export PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple
 export KUBERNETES_APT_REPO_BASE=https://mirrors.tencent.com/kubernetes_new/core:/stable:
-export KUBERNETES_APT_REPO_VERSION=v1.36
+export KUBERNETES_APT_REPO_VERSION=v1.37
 export DOCKER_DOWNLOAD_MIRROR=https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64
 ./deploy.sh
 ```
@@ -328,7 +328,12 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **SSH 远程终止构建任务**：直接 `pkill -f 'bash deploy.sh'` 会匹配到本地 ssh 命令自身导致会话被杀。用方括号正则规避自匹配，如 `pkill -f 'bash deploy[.]sh'`。
 - **外层容器必须保留 `--init`**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收被沙箱超时 kill 后 reparent 的 `.kilo` worker 僵尸（Kilo 会把 worker `setsid` 进独立 session，进程组信号杀不到，必须靠 `/proc` PPID 遍历 + PID 1 回收兜底）。删掉 `--init` 会让僵尸在 PID 1 下堆积（公网实测 31 个 `Z` 状态进程），并在退出窗口内拖慢重试形成死亡螺旋。若出现 `Agent kilo timed out after <N>ms` 且 N 远超 `agent.timeout_seconds`，先用 `podman exec aicr ps -eo pid,ppid,etime,comm | grep kilo` 确认是否有大量 PPID=1 的残留进程，再 `podman restart aicr` 清理并重新部署带修复的镜像。
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
-- **动态配置启用后不要直接改 `config.yaml` 重启**：首次数据库发布后，head revision 会钉住文件 SHA-256 摘要；文件摘要不一致时准入与 `/readyz` 返回 503 `config_unavailable`（`file_config_mismatch`）。恢复：还原摘要一致的文件，或从 `GET /api/admin/config/status` 的 `head.activeRevision` 取基线，用新文件摘要加空 `operations` 调 `POST /api/admin/config/changesets` 采纳新摘要（2026-09-16 用当前构建产物本地探针验证可恢复）；不要手工改数据库。
+- **动态配置启用后不要直接改 `config.yaml` 重启**：首次数据库发布后，head revision 会钉住文件 SHA-256 摘要；文件摘要不一致时**启动直接 fatal**（`aicr serve failed: The active revision file digest differs from this replica`，systemd 反复重启均失败），不是 503 降级。2026-11-09 公网实测确认，file-owned 实体（含 workspaces.instances）也不能用数据库 changeset 覆盖（`file_owned`），v2 routing rule 与 legacy `outputs.routes` 控制同一 trigger 会被 R12 拒绝——所以修改 file-owned workspace 的唯一途径是改文件 + 离线采纳新摘要。**正确流程（2026-11-09 公网验证通过）**：
+  1. 备份并定点修改 `config.yaml`（保持 anchors/env 引用）。
+  2. 在运行中的容器内执行一次性采纳脚本（走官方 `prepareConfigRestore` + `publishConfig`，非手工 SQL）：`core.loadConfigDocumentFile('/app/config.yaml')` 取新文件与摘要 → `createConfigStoreFromDatabaseConfig(config.storage.database, env)` 连库 → `prepareConfigRestore(store, { namespace, revision: head, baseRevision: head, fileDigest: 新摘要, operationId, actor: 'offline-adopt', file: document, formatVersion: 2 })` → `publishConfig(store, prepared, { secretSealing })`（不传 install）。产生带新摘要的新 revision。
+  3. `systemctl --user restart aicr.service`，验证 `/healthz`、`/readyz`、status 的 activeRevision 递增。
+  4. 失败回滚：恢复备份文件并用同一脚本把 head 恢复为旧摘要 revision，再重启。
+  不要用 v2 routing rule 规避文件修改（R12 冲突），不要手工改数据库，也不要在旧进程上调带新摘要的 API（`fileDigestOf` 强制请求摘要等于进程启动时的文件摘要）。
 - **升级备份目录必须唯一命名**：跨版本升级的备份目录带秒级时间戳，删除被替代的临时目录前确认它与本轮备份路径不同；2026-09-16 动态配置升级中同分钟的同名目录曾把新备份误删。
 - **队列停滞排查**：Events 的 `queued` 是接收时记录的决定，执行后也不会变更（超时清扫会翻转为 `timeout`）。若 Recent Runs 长期没有新记录，而 `/healthz` 仍返回 200，按对应存储后端核对 receipt、batch、stream head 和运行日志：
   1. 检查 `auto_commit_batches.status='dead'` 是否仍占用 stream 的 `active_batch_id`（仅升级前遗留的行；当前处理规则下终态失败走单次自动恢复，二次失败 terminally skip 并释放流）。人工恢复用看板 Queue 页或 `POST /api/admin/auto-commit/batches/:id/retry`（带鉴权与审计日志）；重排前先核对失败尝试是否已发布输出——重放可能重复发布。dead 成员不可直接重放。
@@ -357,7 +362,14 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   ```
 
   `deploy.sh` 检测到 loopback 代理会自动加 `--network=host`，使构建容器能访问宿主 loopback 上的代理。镜像内的运行时容器不需要该代理，故 `NO_PROXY` 必须包含 `127.0.0.1,localhost`，否则 `deploy.sh` 末尾的 `curl /healthz` 健康检查会误走代理。若想完全不走代理（仅当本机直连所有源都稳定时），需用一份把代理自动探测块（`if [ -z "$BUILD_HTTP_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then`）改为 `if false; then` 的 `deploy.sh` 副本构建。
-- **公网机直连镜像源构建（2026-10-13 验证）**：`3128` 代理（`vbox-proxy` 容器）不稳定时会在大文件传输中途重置连接，apt 下载 `cpp-14` 等大包时整轮构建被杀且无错误输出。替代方案：按上文把 `deploy.sh` 代理自动探测块改为 `if false; then` 生成无代理副本，显式导出国内镜像源构建：`APT_MIRROR=http://mirrors.ustc.edu.cn/debian`、`NPM_REGISTRY=http://mirrors.tencent.com/npm/`、`PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple`、`KUBERNETES_APT_REPO_BASE=https://mirrors.tencent.com/kubernetes_new/core:/stable:`、`KUBERNETES_APT_REPO_VERSION=v1.36`。GitHub release 直连会超时或报 `SSL unexpected eof`（yq 与 dust 等静态 CLI 均踩过），需同时设置 `GH_RELEASE_PREFIX=https://gh-proxy.com/`（现代 CLI 工具层）和 `YQ_DOWNLOAD_BASE=https://gh-proxy.com/https://github.com/mikefarah/yq/releases/download`（运行时 apt 层内的 yq 下载，`GH_RELEASE_PREFIX` 不覆盖它）。`package.perforce.com` 与 `packages.buildkite.com` 从构建容器 bridge 网络直连可达。新增 build-arg 会使运行时 apt 层缓存失效并整层重建，属预期行为。
+- **公网机直连镜像源构建（2026-10-13 验证）**：`3128` 代理（`vbox-proxy` 容器）不稳定时会在大文件传输中途重置连接，apt 下载 `cpp-14` 等大包时整轮构建被杀且无错误输出。替代方案：按上文把 `deploy.sh` 代理自动探测块改为 `if false; then` 生成无代理副本，显式导出国内镜像源构建：`APT_MIRROR=http://mirrors.ustc.edu.cn/debian`、`NPM_REGISTRY=http://mirrors.tencent.com/npm/`、`PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple`、`KUBERNETES_APT_REPO_BASE=https://mirrors.tencent.com/kubernetes_new/core:/stable:`、`KUBERNETES_APT_REPO_VERSION=v1.37`。GitHub release 直连会超时或报 `SSL unexpected eof`（yq 与 dust 等静态 CLI 均踩过），需同时设置 `GH_RELEASE_PREFIX=https://gh-proxy.com/`（现代 CLI 工具层）和 `YQ_DOWNLOAD_BASE=https://gh-proxy.com/https://github.com/mikefarah/yq/releases/download`（运行时 apt 层内的 yq 下载，`GH_RELEASE_PREFIX` 不覆盖它）。`package.perforce.com` 与 `packages.buildkite.com` 从构建容器 bridge 网络直连可达。新增 build-arg 会使运行时 apt 层缓存失效并整层重建，属预期行为。
+
+### 7.5 公网 workspace 报告语言（2026-11-09）
+
+公网正式环境 `github-cmake-toolset`（`owent/cmake-toolset`）的评审报告语言已按
+7.4 的离线采纳流程切换为 `review.output_language: en_US`（config.yaml 该 workspace
+新增 review 段，采纳后 activeRevision=2）。其余 workspace 未设覆盖，继承全局
+`output_language: zh-CN`（中文）不变。后续调整其他 workspace 语言时复用同一流程。
 
 ## 8. 测试验收环境（与生产隔离）
 

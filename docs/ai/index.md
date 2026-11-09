@@ -76,6 +76,18 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
   已封存批次；取消长 push 积压须同时检查未封存成员，不能据批次数宣称清空队列。
   需要持久禁止取消收据再次展开，并覆盖分页、并发封存和重复投递。
 
+## 路线图：搜索索引与工具链维护（M41 之后）
+
+tgrep 索引与工具链升级已落地（[M41](milestones/M41.md)，约定见
+[架构 §3.17](architecture.md)）。后续待办：
+
+- 真实环境验收：Kilo 生产签收需覆盖 `aicr.search_code` 实际调用、容器沙箱
+  `/workspace/tgrep-cache` 只读挂载内搜索、head 变化后的索引刷新时序；
+  本地单元测试（mock 进程）不替代真实 tgrep 二进制与端到端证据。
+- 大仓库性能观测：首次 `git archive` 全量解包 + 索引构建在大仓库上的耗时
+  与磁盘占用需实测；必要时引入增量 checkout（按 diff 更新）替代全量解包。
+- 独立迁移任务：zod 3→4、typescript 6→7 大版本升级（含 @aicr/docs-site）。
+
 ## 前瞻扩展（未纳入当前交付）
 
 以下候选项未纳入当前交付。
@@ -135,6 +147,7 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 | [M38](milestones/M38.md) | IM 回调重新评审与恢复修复 |
 | [M39](milestones/M39.md) | Slack、Discord、Telegram 本地接入 |
 | [M40](milestones/M40.md) | 社交 IM 复审与依赖、模型快照维护 |
+| [M41](milestones/M41.md) | 提示词与工具链现代化、依赖升级、tgrep 索引 |
 | [P0–P15](milestones/local-priority-queue.md) | 本地优先执行队列 |
 
 归档规则见根 [AGENTS.md](../../AGENTS.md)；详细过程由 Git 历史追溯。
