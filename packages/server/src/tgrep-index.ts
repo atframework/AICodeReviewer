@@ -332,8 +332,9 @@ export class TgrepIndexManager {
     // padding. Read the Git-generated archive through EOF.
     const consumer = this.spawnProcess(
       "tar",
-      ["-x", "--ignore-zeros", "-C", checkoutDir],
-      { stdio: ["pipe", "ignore", "ignore"] },
+      ["-x", "--ignore-zeros"],
+      // Avoid platform-specific -C path parsing in MSYS GNU tar and bsdtar.
+      { cwd: checkoutDir, stdio: ["pipe", "ignore", "ignore"] },
     );
     const jobs = [
       waitForCommand(producer, "git archive"),
