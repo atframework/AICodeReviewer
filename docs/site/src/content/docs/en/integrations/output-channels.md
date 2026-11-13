@@ -118,6 +118,9 @@ the composite publisher must still call the summary flush, or buffered
 problems will be dropped.
 :::
 
+GitHub examples: [PR report](/en/integrations/vcs-providers/#github-pr-report)
+and [managed issue](/en/integrations/vcs-providers/#github-managed-issue).
+
 ## Managed problem-issue lifecycle
 
 `gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue`

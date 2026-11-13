@@ -130,6 +130,32 @@ base64 -i app.private-key.pem
 
 令牌存为 `AICR_GITHUB_TOKEN`，并为每个仓库添加**仓库级 webhook**（PAT 没有 App 级 webhook）。
 
+#### GitHub PR 报告
+
+PR 对话中的合并评审包含审查目标、作者和评审人提醒，以及问题计数。
+下图节选报告开头的摘要与问题说明；发布和路由选项见
+[输出通道](/zh-cn/integrations/output-channels/)。
+
+<figure>
+  <a href="/images/integrations/github-pr-report-zh-cn.png" aria-label="GitHub PR 报告：查看完整截图" style="display:block;position:relative;overflow:hidden;aspect-ratio:1224 / 1020;border-radius:0.5rem;">
+    <img src="/images/integrations/github-pr-report-zh-cn.png" alt="GitHub PR 中的 AICR 评审评论：审查目标、作者和评审人提醒、评审摘要与问题说明" width="1329" height="3868" loading="lazy" decoding="async" style="display:block;position:absolute;width:108.578431%;max-width:none;height:auto;left:-8.088235%;top:-9.215686%;margin:0;" />
+  </a>
+  <figcaption>裁剪预览。<a href="/images/integrations/github-pr-report-zh-cn.png">查看完整截图</a>。</figcaption>
+</figure>
+
+#### GitHub 托管 issue
+
+托管 issue 包含审查目标与问题详情。下图节选报告正文，完整截图还包含关闭状态、受理人和
+严重级别标签。更新与解决规则见
+[托管 problem issue 生命周期](/zh-cn/integrations/output-channels/#托管-problem-issue-生命周期)。
+
+<figure>
+  <a href="/images/integrations/github-managed-issue-zh-cn.png" aria-label="GitHub 托管 issue：查看完整截图" style="display:block;position:relative;overflow:hidden;aspect-ratio:1368 / 1020;border-radius:0.5rem;">
+    <img src="/images/integrations/github-managed-issue-zh-cn.png" alt="GitHub 中的 AICR 托管 issue 正文节选：审查目标、提交作者、评审摘要与问题分析" width="1874" height="2880" loading="lazy" decoding="async" style="display:block;position:absolute;width:136.988304%;max-width:none;height:auto;left:-0.438596%;top:-24.215686%;margin:0;" />
+  </a>
+  <figcaption>裁剪预览。<a href="/images/integrations/github-managed-issue-zh-cn.png">查看完整截图</a>。</figcaption>
+</figure>
+
 ### GitLab
 
 ```yaml

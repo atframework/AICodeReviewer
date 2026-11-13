@@ -144,6 +144,34 @@ If you cannot use a GitHub App, create a personal access token:
 Store the token as `AICR_GITHUB_TOKEN` and add a **repository-level webhook** to
 each repo (a PAT has no App-level webhook).
 
+#### GitHub PR report
+
+The PR conversation contains a consolidated review with the target, author and
+reviewer mentions, and problem count. This excerpt shows the report's opening
+section. See [output channels](/en/integrations/output-channels/) for publishing
+and routing options.
+
+<figure>
+  <a href="/images/integrations/github-pr-report-en.png" aria-label="GitHub PR report: open full screenshot" style="display:block;position:relative;overflow:hidden;aspect-ratio:1224 / 800;border-radius:0.5rem;">
+    <img src="/images/integrations/github-pr-report-en.png" alt="AICR review comment in a GitHub PR with the review target, author and reviewer mentions, and problem count" width="2163" height="1734" loading="lazy" decoding="async" style="display:block;position:absolute;width:176.715686%;max-width:none;height:auto;left:-30.882353%;top:-49%;margin:0;" />
+  </a>
+  <figcaption>Cropped preview. <a href="/images/integrations/github-pr-report-en.png">Open full screenshot</a>.</figcaption>
+</figure>
+
+#### GitHub managed issue
+
+Managed issues contain the review target and problem details. The English
+example shows the report body; the
+[managed problem-issue lifecycle](/en/integrations/output-channels/#managed-problem-issue-lifecycle)
+describes updates and resolution handling.
+
+<figure>
+  <a href="/images/integrations/github-managed-issue-en.png" aria-label="GitHub managed issue: open full screenshot" style="display:block;position:relative;overflow:hidden;aspect-ratio:1360 / 950;border-radius:0.5rem;">
+    <img src="/images/integrations/github-managed-issue-en.png" alt="AICR managed issue report in GitHub with the commit, author, branch, problem severity and analysis" width="1380" height="1781" loading="lazy" decoding="async" style="display:block;position:absolute;width:101.470588%;max-width:none;height:auto;left:-0.735294%;top:-3.157895%;margin:0;" />
+  </a>
+  <figcaption>Cropped preview. <a href="/images/integrations/github-managed-issue-en.png">Open full screenshot</a>.</figcaption>
+</figure>
+
 ### GitLab
 
 ```yaml

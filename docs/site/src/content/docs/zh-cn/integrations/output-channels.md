@@ -99,6 +99,9 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
 下，复合发布器仍必须调用 summary flush，否则缓冲的 problem 会被丢弃。
 :::
 
+GitHub 实例：[PR 报告](/zh-cn/integrations/vcs-providers/#github-pr-报告)与
+[托管 issue](/zh-cn/integrations/vcs-providers/#github-托管-issue)。
+
 ## 托管 problem issue 生命周期
 
 `gitea_problem_issue`、`github_problem_issue` 和 `gitlab_problem_issue` 跨评审对账过期的托管 issue。关键行为：
