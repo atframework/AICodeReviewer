@@ -36,12 +36,61 @@ import {
   Steps,
   Aside,
 } from "@astrojs/starlight/components";
+import IntegrationGallery from "../../../components/IntegrationGallery.astro";
 
 **AICodeReviewer (AICR)** is a self-hosted service that orchestrates AI code
 review across your version-control systems. It normalizes webhooks and triggers
 into one review pipeline, runs the agent CLI of your choice inside a locked-down
 sandbox, and routes structured findings back to pull-request comments, managed
 issues, or IM bots. Free-form agent stdout never becomes the report.
+
+## Review reports in your team's chat
+
+See what reaches your team after a review: detailed findings with code context,
+report cards with author reminders, or brief notifications linked to the full
+report. Choose an integration guide below, or open a screenshot to inspect the
+complete report. Long reports show their opening section in the previews.
+
+<IntegrationGallery
+  guidesLabel="IM integration guides"
+  openLabel="Open full screenshot"
+  guides={[
+    { label: "Feishu", href: "/en/integrations/im-bots/#feishu-飞书" },
+    { label: "WeCom", href: "/en/integrations/im-bots/#wecom-企业微信" },
+    { label: "Slack", href: "/en/integrations/slack/" },
+    { label: "Discord", href: "/en/integrations/discord/" },
+    { label: "Telegram", href: "/en/integrations/telegram/" },
+  ]}
+  cards={[
+    {
+      platform: "WeCom",
+      label: "Detailed findings",
+      description: "Problem descriptions, file locations and referenced code in a group report.",
+      src: "/images/integrations/wecom-report-en.png",
+      alt: "AICR report in WeCom with severity labels, problem descriptions and code references",
+      width: 2883,
+      height: 1505,
+    },
+    {
+      platform: "Discord",
+      label: "Linked summary",
+      description: "A brief problem list and a link to the full report in an issue.",
+      src: "/images/integrations/discord-report-en.png",
+      alt: "AICR notification in Discord with a problem location, full-report link and author mention",
+      width: 1843,
+      height: 538,
+    },
+    {
+      platform: "Feishu",
+      label: "Report card",
+      description: "Review findings in a card, with an author reminder below the report.",
+      src: "/images/integrations/feishu-report-en.png",
+      alt: "AICR card in Feishu with a problem location, full-report link and author reminder",
+      width: 1012,
+      height: 327,
+    },
+  ]}
+/>
 
 ## What AICR does
 
@@ -137,7 +186,7 @@ issues, or IM bots. Free-form agent stdout never becomes the report.
 | --------------- | ------------------------------------------------------------------------------------- |
 | VCS providers   | GitHub, Gitea, Forgejo, GitLab (webhooks); Perforce (P4), Subversion (SVN) (triggers) |
 | Agent CLIs      | Kilo Code, Claude Code, opencode, Zoo Code, Copilot CLI                               |
-| Output channels | PR/MR line comments & summary, managed problem issues, Feishu bot, WeCom bot          |
+| Output channels | PR/MR line comments & summary, managed problem issues; Feishu, WeCom, Slack, Discord and Telegram |
 | Sandboxes       | native, docker, podman, docker_socket (`k8s_pod`, `firecracker` reserved)             |
 | Model providers | Any OpenAI-compatible API; models.dev catalog for context window and pricing metadata |
 

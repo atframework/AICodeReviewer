@@ -118,6 +118,15 @@ ships with Starlight (no extra integration needed); those components do **not**
 render in plain `.md` (they leak as literal tags). `validate-public-content.mjs`
 scans both `.md` and `.mdx`.
 
+Both landing pages use `src/components/IntegrationGallery.astro` for three
+localized report previews and links to all five IM setup guides. The gallery
+uses three columns from 64rem and stacks below that width. Equal-height image
+frames show the start of long reports; each preview links to the unmodified
+full-size image. Styles are scoped to the component, images load lazily with
+explicit dimensions, and the gallery needs no client-side JavaScript. Check
+both locales and themes on mobile and wide screens, including keyboard focus,
+full-image links and font-CDN fallback rendering, after gallery changes.
+
 ## Deployment target
 
 The site targets the GitHub Pages custom domain `https://aicr.atframe.work/`.

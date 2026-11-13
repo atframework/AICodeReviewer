@@ -35,11 +35,59 @@ import {
   Steps,
   Aside,
 } from "@astrojs/starlight/components";
+import IntegrationGallery from "../../../components/IntegrationGallery.astro";
 
 **AICodeReviewer (AICR)** 是一个自托管服务，在多个版本控制系统之上编排 AI
 代码评审。它把 webhook 和 trigger 归一到同一条评审流水线，在你选定的沙箱里运行
 agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机器人。agent 的
 自由文本 stdout 不会作为正式报告。
+
+## 在团队群聊中查看评审结果
+
+评审完成后，团队可以在群聊中收到带代码上下文的问题说明、带作者提醒的报告卡片，
+或链接到完整报告的简要通知。下方提供各 IM 的接入指南；点击截图可查看完整原图，
+长报告在预览中展示开头部分。
+
+<IntegrationGallery
+  guidesLabel="IM 接入指南"
+  openLabel="查看完整截图"
+  guides={[
+    { label: "飞书", href: "/zh-cn/integrations/im-bots/#飞书" },
+    { label: "企业微信", href: "/zh-cn/integrations/im-bots/#企业微信" },
+    { label: "Slack", href: "/zh-cn/integrations/slack/" },
+    { label: "Discord", href: "/zh-cn/integrations/discord/" },
+    { label: "Telegram", href: "/zh-cn/integrations/telegram/" },
+  ]}
+  cards={[
+    {
+      platform: "企业微信",
+      label: "问题详情",
+      description: "在群聊报告中查看问题说明、文件位置和引用的代码。",
+      src: "/images/integrations/wecom-report-zh-cn.png",
+      alt: "企业微信中的 AICR 报告：严重级别、问题说明、代码引用与作者提醒",
+      width: 2909,
+      height: 1193,
+    },
+    {
+      platform: "Discord",
+      label: "摘要通知",
+      description: "简要列出问题，附上 issue 中的完整报告链接。",
+      src: "/images/integrations/discord-report-zh-cn.png",
+      alt: "Discord 中的 AICR 通知：问题位置、完整报告链接与链接预览",
+      width: 2817,
+      height: 878,
+    },
+    {
+      platform: "飞书",
+      label: "报告卡片",
+      description: "用卡片呈现评审结果，并在报告下方提醒提交作者。",
+      src: "/images/integrations/feishu-report-zh-cn.png",
+      alt: "飞书中的 AICR 卡片：审查目标、问题说明、代码引用与作者提醒",
+      width: 998,
+      height: 1519,
+    },
+  ]}
+/>
 
 ## AICR 做什么
 
@@ -123,7 +171,7 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
 | ---------- | ------------------------------------------------------------------------------------- |
 | VCS 提供商 | GitHub、Gitea、Forgejo、GitLab（webhook）；Perforce (P4)、Subversion (SVN)（trigger） |
 | Agent CLI  | Kilo Code、Claude Code、opencode、Zoo Code、Copilot CLI                               |
-| 输出通道   | PR/MR 行内评论与摘要、托管 problem issue、飞书机器人、企业微信机器人                  |
+| 输出通道   | PR/MR 行内评论与摘要、托管 problem issue；飞书、企业微信、Slack、Discord、Telegram |
 | 沙箱       | native、docker、podman、docker_socket（`k8s_pod`、`firecracker` 预留）                |
 | 模型提供商 | 任意 OpenAI 兼容 API；models.dev 目录提供上下文窗口和定价元数据                       |
 

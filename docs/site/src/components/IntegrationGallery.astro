@@ -1,0 +1,188 @@
+---
+interface ReportPreview {
+  platform: string;
+  label: string;
+  description: string;
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
+}
+
+interface Props {
+  cards: ReportPreview[];
+  guides: { label: string; href: string }[];
+  guidesLabel: string;
+  openLabel: string;
+}
+
+const { cards, guides, guidesLabel, openLabel } = Astro.props;
+---
+
+<div class="integration-gallery not-content">
+  <nav aria-label={guidesLabel}>
+    <ul class="integration-guides" role="list">
+      {guides.map((guide) => <li><a href={guide.href}>{guide.label}</a></li>)}
+    </ul>
+  </nav>
+  <div class="report-grid">
+    {cards.map((card) => (
+      <figure class="report-card">
+        <figcaption>
+          <div class="report-heading">
+            <h3>{card.platform}</h3>
+            <span class="report-label">{card.label}</span>
+          </div>
+          <p>{card.description}</p>
+        </figcaption>
+        <a class="report-link" href={card.src} aria-label={`${card.platform}: ${openLabel}`}>
+          <span class="report-preview">
+            <img
+              src={card.src}
+              alt={card.alt}
+              width={card.width}
+              height={card.height}
+              loading="lazy"
+              decoding="async"
+            />
+          </span>
+          <span class="report-action">
+            {openLabel}<span aria-hidden="true">↗</span>
+          </span>
+        </a>
+      </figure>
+    ))}
+  </div>
+</div>
+
+<style>
+  .integration-gallery {
+    margin-block: 1.5rem 3rem;
+  }
+
+  .integration-guides {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0 0 1.25rem;
+    padding: 0;
+    list-style: none;
+  }
+
+  .integration-guides a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    padding: 0.375rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    color: var(--sl-color-white);
+    font-size: 0.875rem;
+    text-decoration: none;
+  }
+
+  .integration-guides a:hover {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent-low);
+  }
+
+  .integration-guides a:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 3px;
+  }
+
+  .report-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.25rem;
+  }
+
+  .report-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-bg);
+  }
+
+  figcaption {
+    padding: 1.25rem;
+  }
+
+  .report-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.25rem 0.75rem;
+  }
+
+  h3 {
+    margin: 0;
+    color: var(--sl-color-white);
+    font-size: 1.125rem;
+    line-height: 1.5;
+  }
+
+  .report-label {
+    color: var(--sl-color-text-accent);
+    font-size: 0.8125rem;
+  }
+
+  figcaption p {
+    margin: 0.5rem 0 0;
+    color: var(--sl-color-gray-2);
+    font-size: 0.875rem;
+    line-height: 1.65;
+  }
+
+  .report-link {
+    display: block;
+    margin-top: auto;
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+
+  .report-preview {
+    display: block;
+    overflow: hidden;
+    aspect-ratio: 16 / 9;
+    border-block: 1px solid var(--sl-color-gray-5);
+    background: #1b1d20;
+  }
+
+  .report-preview img {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0;
+  }
+
+  .report-action {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.875rem 1.25rem;
+    font-size: 0.875rem;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .report-link:hover .report-action {
+    color: var(--sl-color-text-accent);
+  }
+
+  .report-link:focus-visible {
+    outline: 3px solid var(--sl-color-accent);
+    outline-offset: -3px;
+  }
+
+  @media (min-width: 64rem) {
+    .report-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+</style>
