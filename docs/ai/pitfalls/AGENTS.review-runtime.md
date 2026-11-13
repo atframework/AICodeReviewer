@@ -36,8 +36,13 @@ Sources: `packages/server/src/review-orchestrator.ts`,
 - Replay `contextRequests`, `attributionRequests`, and `reviewDataRequests` through VCS handlers.
   A pending response is not proof the file is inaccessible. When context is
   fetched, re-run verification and clear provisional findings, even if the same
-  round also emitted problems. Preserve bounded follow-up rounds; failed invalid
-  requests alone do not invalidate otherwise confirmed findings.
+  round also emitted problems or skip. Apply this check after every completion,
+  including the last agent pass and direct fallback; carry earlier fetched
+  context into fresh conversations. Exhausted follow-ups must fail before the
+  analysis checkpoint or publisher, never become a successful empty summary.
+  See the final-context and incomplete-output regressions in
+  `review-orchestrator.test.ts`. Failed invalid requests alone do not invalidate
+  otherwise confirmed findings.
 - Review commit membership must not reuse the scheduler's first-parent walk:
   merged side commits belong to `base..head`. Pin refs before reading files,
   preserve fork source/target identity, and reject cursors from another run or

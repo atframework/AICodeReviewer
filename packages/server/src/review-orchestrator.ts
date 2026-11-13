@@ -3237,7 +3237,7 @@ const NO_ACTIONABLE_PROBLEM_RE =
 const ACTIONABLE_PROBLEM_CLAIM_RE =
   /(?:(?:发现|發現)\s*(?:了\s*)?[1-9]\d*\s*(?:个|個|项|項)?\s*(?:问题|問題|缺陷|风险|風險)|(?:存在|检出|檢出)\s*(?:明显|可执行|阻塞|严重|高风险)?\s*(?:问题|問題|缺陷|风险|風險)|found\s+[1-9]\d*\s+(?:issues?|problems?)|[1-9]\d*\s+(?:issues?|problems?)\s+(?:found|detected)|(?:critical|high[-\s]?risk|blocking)\s+(?:issue|problem)|(?:严重|高风险|阻塞)\s*(?:问题|問題|缺陷|风险|風險))/iu;
 const MISSING_CONTEXT_REQUEST_RE =
-  /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?diff|fetch_more_context|(?:cannot|can't|unable\s+to)\s+(?:access|read|inspect|verify).*(?:full\s+)?(?:repo|repository|source|code|context)|无法(?:获取|访问|读取|查看|验证).*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|缺少.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|需要.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|请提供.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|获取.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源))/iu;
+  /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?(?:diff|source|context)|fetch_more_context|(?:cannot|can't|unable\s+to)\s+(?:access|read|inspect|verify).*(?:full\s+)?(?:repo|repository|source|code|context)|无法(?:获取|访问|读取|查看|验证).*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|缺少.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|需要.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|请提供.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|获取.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源))/iu;
 const NO_REVIEWABLE_CODE_RE =
   /(?:no\s+(?:reviewable\s+)?(?:code|changes?)\s+to\s+review|nothing\s+to\s+review|empty\s+file|file\s+is\s+empty|文件为空|空文件|内容为空|无代码可(?:审查|评审)|无(?:可|需|需要)?(?:审查|评审)(?:的)?(?:代码|内容)|没有(?:可|需要)?(?:审查|评审)(?:的)?(?:代码|内容))/iu;
 
@@ -3410,20 +3410,6 @@ function buildContextFollowUpPrompt(
   }
 
   return sections.join("\n");
-}
-
-function buildFallbackReviewSummary(
-  reviewEvent: ReviewEvent,
-  changedPaths: readonly string[],
-): string {
-  const target = reviewEvent.headSha
-    ? `${reviewEvent.repoRef}@${reviewEvent.headSha}`
-    : reviewEvent.repoRef;
-  return [
-    `AICR review completed for ${target}.`,
-    `Changed files analyzed: ${changedPaths.length}.`,
-    "The model did not return a valid final review payload after a format-repair retry; no actionable problems were published.",
-  ].join("\n");
 }
 
 function toExtraContextRequest(
@@ -4699,96 +4685,85 @@ async function executeReviewInRunDirs(
   );
   accumulateCompletion(completion);
   let lastAgentResult = completion.agentResult;
-  const rawModelOutput = completion.llmResult.content;
-  const allowNaturalLanguageSummary = completion.agentResult === undefined;
-  const toolExecution = await collectCompletionOutputs(
-    completion,
-    tools,
-    collector,
-    { allowNaturalLanguageSummary },
-  );
+  let execution = await collectCompletionOutputs(completion, tools, collector, {
+    allowNaturalLanguageSummary: completion.agentResult === undefined,
+  });
   let outputState = collector.snapshot();
-  const initialNoActionSkipReason =
-    completion.agentResult &&
-    !hasFinalReviewOutput(outputState) &&
-    toolExecution.toolCallCount === 0
-      ? classifyUnstructuredNoActionableOutput(rawModelOutput)
-      : undefined;
-  const summaryOnlyProblemClaim =
-    summaryOnlyClaimsActionableProblems(outputState);
-  // Context requests are only satisfied after the round that asked for them,
-  // so problems reported alongside pending fetches were produced without the
-  // fetched content and must be re-verified in a follow-up pass.
-  const reportedProblemsPendingContext =
-    outputState.problems.length > 0 &&
-    hasFetchedContextResponses(toolExecution);
-  const contextNeedsFinalPass =
-    reportedProblemsPendingContext ||
-    (outputState.problems.length === 0 &&
-      (toolExecution.contextResponses.length > 0 ||
-        toolExecution.invalidContextRequestCount > 0));
-  const missingContextRequest = outputRequestsMissingContext(outputState);
-  const shouldRepairModelOutput =
-    !initialNoActionSkipReason &&
-    (summaryOnlyProblemClaim ||
-      contextNeedsFinalPass ||
-      missingContextRequest ||
-      (!hasFinalReviewOutput(outputState) &&
-        (toolExecution.toolCallCount === 0 ||
-          toolExecution.invalidReviewOutputCount > 0)));
+  let agentFollowUps = 0;
+  let directAttempts = completion.agentResult ? 0 : 1;
+  let usedDirectFallback = false;
+  const fetchedContext: ContextToolResponse[] = [];
 
-  if (
-    !initialNoActionSkipReason &&
-    !hasFinalReviewOutput(outputState) &&
-    toolExecution.toolCallCount === 0
-  ) {
-    const truncatedOutput =
-      rawModelOutput.length > 500
-        ? `${rawModelOutput.slice(0, 500)}... (${rawModelOutput.length} chars total)`
-        : rawModelOutput;
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        msg: "model output produced no parseable review payload",
-        headSha: context.reviewEvent.headSha,
-        toolCallCount: toolExecution.toolCallCount,
-        reviewOutputCount: toolExecution.reviewOutputCount,
-        outputLength: rawModelOutput.length,
-        outputPreview: truncatedOutput,
-        ...(completion.agentResult
-          ? {
-              agentExitCode: completion.agentResult.exitCode,
-              agentDurationMs: completion.agentResult.durationMs,
-              agentStderrLength: completion.agentResult.stderr.length,
-              agentStderrPreview:
-                completion.agentResult.stderr.length > 200
-                  ? `${completion.agentResult.stderr.slice(0, 200)}...`
-                  : completion.agentResult.stderr,
-            }
-          : {}),
-      }),
-    );
-  }
+  // Every completion, including the final agent pass and direct fallback, must
+  // pass the same finality checks. Context fetched after a completion cannot
+  // verify the findings emitted by that completion.
+  for (;;) {
+    const summaryOnlyProblemClaim =
+      summaryOnlyClaimsActionableProblems(outputState);
+    const missingContextRequest = outputRequestsMissingContext(outputState);
+    const fetchedNewContext = hasFetchedContextResponses(execution);
+    const contextNeedsFinalPass =
+      fetchedNewContext ||
+      (outputState.problems.length === 0 &&
+        execution.contextResponses.length > 0 &&
+        directAttempts < 3);
+    const reportedProblemsPendingContext =
+      outputState.problems.length > 0 && fetchedNewContext;
 
-  if (initialNoActionSkipReason) {
-    collector.skip({ reason: initialNoActionSkipReason });
-    outputState = collector.snapshot();
-  } else if (shouldRepairModelOutput) {
     if (
-      summaryOnlyProblemClaim ||
-      contextNeedsFinalPass ||
-      missingContextRequest
+      !contextNeedsFinalPass &&
+      !summaryOnlyProblemClaim &&
+      !missingContextRequest
     ) {
-      collector.clearReviewOutputs();
+      const noActionSkipReason =
+        completion.agentResult || usedDirectFallback
+          ? classifyNoActionableReviewResult(
+              outputState,
+              completion.llmResult.content,
+            )
+          : undefined;
+      if (noActionSkipReason) {
+        collector.clearReviewOutputs();
+        collector.skip({ reason: noActionSkipReason });
+        outputState = collector.snapshot();
+      }
+      if (hasFinalReviewOutput(outputState)) break;
     }
 
-    completion = await requestReviewCompletion(
-      scopedTree.rootDir,
-      llmSystemPrompt,
-      options,
-      {
-        previousOutput: completion.llmResult.content,
-        prompt: buildContextFollowUpPrompt(changedPaths, toolExecution, {
+    if (
+      agentFollowUps === 0 &&
+      directAttempts <= 1 &&
+      execution.toolCallCount === 0
+    ) {
+      const rawModelOutput = completion.llmResult.content;
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "model output produced no parseable review payload",
+          headSha: context.reviewEvent.headSha,
+          toolCallCount: execution.toolCallCount,
+          reviewOutputCount: execution.reviewOutputCount,
+          outputLength: rawModelOutput.length,
+          outputPreview:
+            rawModelOutput.length > 500
+              ? `${rawModelOutput.slice(0, 500)}... (${rawModelOutput.length} chars total)`
+              : rawModelOutput,
+        }),
+      );
+    }
+
+    fetchedContext.push(...execution.contextResponses);
+    const followUp: ReviewCompletionFollowUp = {
+      previousOutput: completion.llmResult.content,
+      // Each attempt starts a fresh conversation. Keep earlier fetched context
+      // across later requests and the agent -> direct-LLM transition.
+      prompt: buildContextFollowUpPrompt(
+        changedPaths,
+        {
+          ...execution,
+          contextResponses: fetchedContext,
+        },
+        {
           ...(summaryOnlyProblemClaim
             ? { summaryOnlyClaimsProblems: true }
             : {}),
@@ -4796,131 +4771,73 @@ async function executeReviewInRunDirs(
           ...(reportedProblemsPendingContext
             ? { reportedProblemsPendingContext: true }
             : {}),
-        }),
-      },
-      bundleContext,
-      contextRepoMounts,
-      runDirs,
-      containmentRoot,
-      tgrepHandle,
-    );
-    accumulateCompletion(completion);
-    if (completion.agentResult) {
-      lastAgentResult = completion.agentResult;
-    }
-    const repairExecution = await collectCompletionOutputs(
-      completion,
-      tools,
-      collector,
-      {
-        allowNaturalLanguageSummary: completion.agentResult === undefined,
-      },
-    );
-    outputState = collector.snapshot();
+        },
+      ),
+    };
+    collector.clearReviewOutputs();
 
-    const repairProblemsPendingContext =
-      outputState.problems.length > 0 &&
-      hasFetchedContextResponses(repairExecution);
-    if (
-      repairProblemsPendingContext ||
-      (outputState.problems.length === 0 &&
-        repairExecution.contextResponses.length > 0)
-    ) {
-      collector.clearReviewOutputs();
+    // Retain one agent format repair, or two follow-ups for context gathering.
+    // Direct repair has its own bounded context loop (at most three calls).
+    const agentFollowUpLimit = contextNeedsFinalPass ? 2 : 1;
+    if (completion.agentResult && agentFollowUps < agentFollowUpLimit) {
+      agentFollowUps += 1;
       completion = await requestReviewCompletion(
         scopedTree.rootDir,
         llmSystemPrompt,
         options,
-        {
-          previousOutput: completion.llmResult.content,
-          prompt: buildContextFollowUpPrompt(changedPaths, repairExecution, {
-            ...(repairProblemsPendingContext
-              ? { reportedProblemsPendingContext: true }
-              : {}),
-          }),
-        },
+        followUp,
         bundleContext,
         contextRepoMounts,
         runDirs,
         containmentRoot,
         tgrepHandle,
       );
-      accumulateCompletion(completion);
-      if (completion.agentResult) {
-        lastAgentResult = completion.agentResult;
+    } else {
+      if (directAttempts >= 3) {
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "review output incomplete after bounded follow-ups",
+            headSha: context.reviewEvent.headSha,
+            triggerName: context.reviewEvent.triggerName,
+            workspaceId: context.reviewEvent.workspaceId,
+            agentFollowUps,
+            directAttempts,
+            contextNeedsFinalPass,
+            summaryOnlyProblemClaim,
+            missingContextRequest,
+          }),
+        );
+        throw new Error(
+          "AICR review incomplete: no verified final review payload after bounded context/format follow-ups.",
+        );
       }
-      await collectCompletionOutputs(completion, tools, collector, {
-        allowNaturalLanguageSummary: completion.agentResult === undefined,
-      });
-      outputState = collector.snapshot();
-    }
-
-    const repairNoActionSkipReason = completion.agentResult
-      ? classifyNoActionableReviewResult(
-          outputState,
-          completion.llmResult.content,
-        )
-      : undefined;
-    if (repairNoActionSkipReason) {
-      collector.clearReviewOutputs();
-      collector.skip({ reason: repairNoActionSkipReason });
-      outputState = collector.snapshot();
-    } else if (!hasFinalReviewOutput(outputState) && completion.agentResult) {
-      console.warn(
-        JSON.stringify({
-          level: "warn",
-          msg: "agent repair produced no parseable review payload; retrying with direct LLM",
-          headSha: context.reviewEvent.headSha,
-          triggerName: context.reviewEvent.triggerName,
-          workspaceId: context.reviewEvent.workspaceId,
-          agentExitCode: completion.agentResult.exitCode,
-          agentDurationMs: completion.agentResult.durationMs,
-        }),
-      );
+      if (completion.agentResult) {
+        usedDirectFallback = true;
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            msg: "agent repair produced no parseable review payload; retrying with direct LLM",
+            headSha: context.reviewEvent.headSha,
+            triggerName: context.reviewEvent.triggerName,
+            workspaceId: context.reviewEvent.workspaceId,
+            agentExitCode: completion.agentResult.exitCode,
+            agentDurationMs: completion.agentResult.durationMs,
+          }),
+        );
+      }
+      directAttempts += 1;
       completion = await requestDirectLlmCompletion(
         llmSystemPrompt,
         options,
-        {
-          previousOutput: completion.llmResult.content,
-          prompt: buildContextFollowUpPrompt(changedPaths, repairExecution),
-        },
+        followUp,
         bundleContext.progress,
       );
-      accumulateCompletion(completion);
-      await collectCompletionOutputs(completion, tools, collector, {
-        allowNaturalLanguageSummary: true,
-      });
-      outputState = collector.snapshot();
-
-      const directNoActionSkipReason = classifyNoActionableReviewResult(
-        outputState,
-        completion.llmResult.content,
-      );
-      if (directNoActionSkipReason) {
-        collector.clearReviewOutputs();
-        collector.skip({ reason: directNoActionSkipReason });
-        outputState = collector.snapshot();
-      }
     }
-
-    if (summaryOnlyClaimsActionableProblems(outputState)) {
-      collector.clearReviewOutputs();
-      collector.publishSummary({
-        markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths),
-      });
-      outputState = collector.snapshot();
-    } else if (!hasFinalReviewOutput(outputState)) {
-      collector.publishSummary({
-        markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths),
-      });
-      outputState = collector.snapshot();
-    }
-  } else if (
-    !hasFinalReviewOutput(outputState) &&
-    toolExecution.toolCallCount === 0
-  ) {
-    collector.publishSummary({
-      markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths),
+    accumulateCompletion(completion);
+    if (completion.agentResult) lastAgentResult = completion.agentResult;
+    execution = await collectCompletionOutputs(completion, tools, collector, {
+      allowNaturalLanguageSummary: completion.agentResult === undefined,
     });
     outputState = collector.snapshot();
   }

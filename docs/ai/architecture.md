@@ -728,7 +728,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 如果 Agent 结构化修复后的自由文本明确表示“无问题 / 无可审查代码”，orchestrator 会归一为 `aicr.skip`，避免把格式修复失败的 fallback 文案发布到 IM；若仍无法解析且不属于无问题语义，则改走直连 LLM 修复兜底。
 - Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出渠道规范并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
 - Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码、`aicr.fetch_more_context` 补拉具体路径，或 `aicr.try_blame` 请求 VCS 归因”的流程，并在拿到上下文后要求最终结构化输出。
-- 同一轮既产出 problem 又有待满足的上下文请求时（例如问题报告同时列出“待 VCS 拉取后复核”事项），orchestrator 在该轮结束后执行补拉并强制再跑一轮 follow-up pass：清除临时的 problems/summary，把拉到的内容回灌 prompt，要求逐条复核并重新输出最终 problems，不得把“待确认”原文直接发布结案。仅存在失败（非法或仓库中不存在）的上下文请求时不触发复核轮；follow-up pass 自身再次申请并成功拉到上下文时，同样再补一轮（单次编排最多三轮）。
+- 任一轮成功补取上下文后，problems、summary 和 skip 均视为临时结果；orchestrator 清除这些结果，把累计获取的源码、归因和元数据回灌后要求逐条复核。最后一轮 Agent 和直连 LLM 回退遵守相同规则。Agent 格式修复最多一次，上下文续审最多两次；仍未完成则转直连 LLM，直连阶段最多三次调用。只有失败的上下文请求不使已确认的问题失效。次数耗尽仍无经过复核的最终输出时抛出错误，不发布成功摘要、不保存发布检查点、不执行托管问题对账；触发器沿用独立错误通知路径。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
 - 复合输出 publisher 必须隔离单通道发布失败：某个 channel（例如 GitHub issue API 403）失败时记录 `DispatchResult.status=failed` 和告警日志，继续尝试后续 channel；只有成功发布的 dispatch 才使 run 状态成为 `published`，若全部 dispatch 都失败则 run 以 `skipped/output_dispatch_failed` 结束，而不是把触发器升级为 `review_orchestration_failed`。

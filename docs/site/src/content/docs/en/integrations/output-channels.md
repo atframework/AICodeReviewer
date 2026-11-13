@@ -54,6 +54,9 @@ If the agent cannot produce structured output, AICR triggers a structured
 repair pass and, if that still fails, falls back to a direct LLM call.
 Prose that says "no actionable problems" or "no reviewable code" is normalized
 to `aicr.skip`, not published as a fallback message.
+Context requests require verification after their results are returned, including
+in direct fallback. If bounded retries cannot produce verified final output,
+the review fails before report publication and managed-issue reconciliation.
 :::
 
 ## Problem schema

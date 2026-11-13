@@ -102,6 +102,129 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it.each(["json", "mcp"])("continues %s context requests through the last agent pass and direct fallback", async (transport) => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-final-context-"));
+    const publishSummary = vi.fn(async () => ({ channel: "test", status: "published" as const, raw: {} }));
+    const analyzed = vi.fn();
+    let agentCalls = 0;
+    let directCalls = 0;
+    const requestedPaths: string[] = [];
+    const problem = {
+      file: "src/app.ts", line: 2, severity: "high", category: "correctness",
+      message: "Provisional finding pending verification.",
+    };
+    try {
+      await writeWorkspaceFile(root, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const result = await runReviewOrchestration(
+        { reviewEvent: createReviewEventFixture(), provider: "p4", eventName: "change-commit", payload: {} },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}", sourceRootResolver: () => root, model,
+          vcs: {
+            ...createVcs(root),
+            async fetchExtraContext(request) {
+              expect(request.revision).toBe("head");
+              requestedPaths.push(request.path);
+              return { path: request.path, content: `verified source for ${request.path}` };
+            },
+          },
+          agentAdapter: {
+            kind: "kilo", async detect() { return { available: true, binary: "kilo" }; },
+            buildCommand() { return ["kilo", "run", "--auto"]; },
+            async materializeConfig(_model, workingDir) { return { configFiles: new Map(), envVars: {}, workingDir }; },
+          },
+          sandbox: {
+            kind: "native",
+            async materializeFs(layout) {
+              await mkdir(layout.agentDir, { recursive: true });
+              await mkdir(layout.tmpDir, { recursive: true });
+              return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+            },
+            async spawn(options) {
+              agentCalls += 1;
+              for (let prior = 1; prior < agentCalls; prior++) {
+                expect(options.stdin).toContain(`verified source for src/agent-${prior}.ts`);
+              }
+              const request = { path: `src/agent-${agentCalls}.ts`, reason: "Verify the related contract." };
+              if (transport === "mcp") {
+                await writeFile(join(options.cwd, ".aicr-output-state.json"), JSON.stringify({
+                  problems: agentCalls === 3 ? [problem] : [], summaries: [], contextRequests: [request],
+                }));
+              }
+              return {
+                exitCode: 0, stderr: "", timedOut: false, durationMs: 10,
+                stdout: transport === "mcp" ? "" : JSON.stringify({ toolCalls: [
+                  { name: "aicr.fetch_more_context", input: request },
+                  ...(agentCalls === 3 ? [{ name: "aicr.report_problem", input: problem }] : []),
+                ] }),
+              };
+            },
+            async teardown() {},
+          },
+          llm: { async complete(input) {
+            directCalls += 1;
+            expect(publishSummary).not.toHaveBeenCalled();
+            expect(analyzed).not.toHaveBeenCalled();
+            const followUp = input.messages[2]?.content ?? "";
+            for (const path of requestedPaths) expect(followUp).toContain(`verified source for ${path}`);
+            const content = directCalls < 3 ? { toolCalls: [
+              { name: "aicr.fetch_more_context", input: { path: `src/direct-${directCalls}.ts`, reason: "Check the final dependency." } },
+              ...(directCalls === 1
+                ? [{ name: "aicr.skip", input: { reason: "lgtm" } }]
+                : [{ name: "aicr.report_problem", input: problem }]),
+            ] } : { problems: [{ ...problem, message: "Confirmed against all fetched dependencies." }], summary: "Verified review." };
+            return { providerId: model.providerId, modelId: model.modelId, content: JSON.stringify(content), raw: {} };
+          } },
+          onAnalysisComplete: analyzed,
+          outputPublisher: { publishesProblems: false, reconcilesManagedIssues: true, publishSummary },
+        },
+      );
+      expect(agentCalls).toBe(3);
+      expect(directCalls).toBe(3);
+      expect(requestedPaths).toEqual(["src/agent-1.ts", "src/agent-2.ts", "src/agent-3.ts", "src/direct-1.ts", "src/direct-2.ts"]);
+      expect(result).toMatchObject({ status: "published", problemCount: 1, summaryCount: 1 });
+      expect(result.outputState.problems[0]?.message).toBe("Confirmed against all fetched dependencies.");
+      expect(publishSummary).toHaveBeenCalledTimes(1);
+      expect(analyzed).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["context", "summary-claim", "missing-context"])("fails closed when %s never produces verified final output", async (mode) => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-incomplete-"));
+    const publishSummary = vi.fn();
+    const publishProblem = vi.fn();
+    const analyzed = vi.fn();
+    let calls = 0;
+    try {
+      await writeWorkspaceFile(root, "src/app.ts", "const ok = true;\n");
+      await expect(runReviewOrchestration(
+        { reviewEvent: createReviewEventFixture(), provider: "p4", eventName: "change-commit", payload: {} },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}", sourceRootResolver: () => root, model, vcs: createVcs(root),
+          llm: { async complete() {
+            calls += 1;
+            const content = mode === "context" ? { toolCalls: [
+              { name: "aicr.fetch_more_context", input: { path: "src/app.ts", reason: "Need to verify." } },
+              { name: "aicr.report_problem", input: { file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "Unverified finding." } },
+            ] } : { summary: mode === "summary-claim" ? "Found 1 critical issue." : "Please provide the source context." };
+            return { providerId: model.providerId, modelId: model.modelId, content: JSON.stringify(content), raw: {} };
+          } },
+          onAnalysisComplete: analyzed,
+          outputPublisher: { reconcilesManagedIssues: true, publishProblem, publishSummary },
+        },
+      )).rejects.toThrow("AICR review incomplete");
+      expect(calls).toBe(3);
+      expect(publishSummary).not.toHaveBeenCalled();
+      expect(publishProblem).not.toHaveBeenCalled();
+      expect(analyzed).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(["aicr.search_code", "aicr-output_aicr_search_code", "pi_aicr_search_code"])(
     "returns %s results in a follow-up before final output", async (toolName) => {
     await mkdir("build/tmp", { recursive: true });
@@ -5018,7 +5141,7 @@ describe("runReviewOrchestration error paths", () => {
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
-            content: JSON.stringify({ problems: [] }),
+            content: JSON.stringify({ problems: [], summary: "No actionable problems found." }),
             raw: {},
           };
         },
@@ -5056,7 +5179,7 @@ describe("runReviewOrchestration error paths", () => {
       expect(result.problemCount).toBe(0);
       expect(result.dispatchCount).toBe(1);
       expect(summaryCalls).toHaveLength(1);
-      expect(summaryCalls[0]?.summary).toContain("AICR review completed");
+      expect(summaryCalls[0]?.summary).toBe("No actionable problems found.");
       expect(summaryCalls[0]?.problems).toEqual([]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -5073,7 +5196,7 @@ describe("runReviewOrchestration error paths", () => {
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
-            content: JSON.stringify({ problems: [] }),
+            content: JSON.stringify({ problems: [], summary: "No actionable problems found." }),
             raw: {},
           };
         },
@@ -6939,7 +7062,7 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("publishes a generated summary when format repair still has no final review output", async () => {
+  it("fails without publishing when format repair still has no final review output", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-fallback-summary-"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -6961,7 +7084,7 @@ describe("runReviewOrchestration error paths", () => {
         },
       };
 
-      const result = await runReviewOrchestration(
+      await expect(runReviewOrchestration(
         {
           reviewEvent: createReviewEventFixture(),
           payload: {},
@@ -6985,12 +7108,9 @@ describe("runReviewOrchestration error paths", () => {
             },
           },
         },
-      );
+      )).rejects.toThrow("AICR review incomplete");
 
-      expect(result.status).toBe("published");
-      expect(result.dispatchCount).toBe(1);
-      expect(summaryCalls[0]).toContain("AICR review completed for owent/example@head");
-      expect(summaryCalls[0]).toContain("Changed files analyzed: 1");
+      expect(summaryCalls).toEqual([]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid review output tool call"));
     } finally {
       warnSpy.mockRestore();

@@ -222,7 +222,7 @@ commit 评审的来源与目标为同一仓库和分支；PR/MR 则保留请求�
 3. 通过 VCS 适配器的 `fetchExtraContext` 执行记录的 `aicr.fetch_more_context` 请求。
 4. 在支持时通过 VCS 适配器的 `fetchAttribution` 执行记录的 `aicr.try_blame` 请求。
 5. 通过本次评审的宿主 handler 和 Git/SVN/P4 适配器执行元数据查询。
-6. 把获取到的内容、归因及元数据回灌，跑一次最终 follow-up pass，然后发布结果。
+6. 把累计获取的内容、归因及元数据回灌到有次数上限的续审，包括直连 LLM 回退。与成功请求同轮输出的结果必须经后续复核才能发布；次数耗尽时，评审在发布和托管问题对账前失败。
 
 :::caution[容器 workdir 必须是 `/workspace/agent`]
 Docker/Podman 沙箱 run 必须把容器 workdir 设为可写的 agent 挂载。否则 agent spawn 的 MCP server 会把 `.aicr-output-state.json` 写到镜像 workdir（如 `/app`）下，orchestrator 就会漏掉结构化结果。参见[常见问题](/zh-cn/troubleshooting/)。

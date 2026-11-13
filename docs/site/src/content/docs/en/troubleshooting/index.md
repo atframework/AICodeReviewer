@@ -74,13 +74,18 @@ has no parseable AICR tool payload, AICR asks the agent for a bounded
 structured repair pass. If the repair output is still prose but clearly says
 there are no actionable problems or no reviewable code, AICR normalizes it to
 a skip (`lgtm` / `no_reviewable_code`) instead of publishing a fallback
-error summary. Otherwise it falls back to a direct LLM repair call.
+error summary. Otherwise it falls back to direct LLM repair. Successful context
+requests require another verification pass, including requests in the last agent
+pass or direct fallback. Earlier fetched context remains available. The agent has
+one format repair or up to two context follow-ups; the direct stage allows up to
+three calls. Exhaustion without verified final output fails the review before
+publication or managed-issue reconciliation.
 
-**Fix:** this is expected behavior, not a bug — it prevents interim reasoning
-from leaking into IM cards and ensures problem locations come from
-`aicr.report_problem`. If you expected problems, verify the agent has the
-context it needs: it should request files through `aicr.fetch_more_context`
-or inspect already-materialized source with read-only shell tools. See
+**Fix:** check the failure log and whether the requested VCS paths can be read.
+A context request is an intermediate step, not a completed review or an LGTM.
+The agent should request files through `aicr.fetch_more_context` or inspect
+already-materialized source with read-only shell tools. Retry the review after
+resolving missing context or model-output failures. See
 [MCP tools](/en/integrations/mcp-tools/).
 
 ## Context overflow (`AgentContextOverflowError`)

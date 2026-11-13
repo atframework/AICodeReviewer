@@ -46,9 +46,9 @@ outputs:
 
 **症状：** agent 只产出自然语言散文；AICR 日志显示结构化修复尝试；IM channel 始终收不到 problem 报告。
 
-**诊断：** agent 自由文本 stdout 永远不是最终报告。当 stdout 中无可解析的 AICR tool payload 时，AICR 会要求 agent 做一次有界结构化修复。如果修复输出仍是散文但明确表示无问题或无可评审代码，AICR 会归一化为跳过（`lgtm` / `no_reviewable_code`），而不是发布 fallback 错误 summary。否则会回退到直连 LLM 修复调用。
+**诊断：** agent 自由文本 stdout 永远不是最终报告。当 stdout 中无可解析的 AICR tool payload 时，AICR 会要求 agent 做一次有界结构化修复。如果修复输出仍是散文但明确表示无问题或无可评审代码，AICR 会归一化为跳过（`lgtm` / `no_reviewable_code`），而不是发布 fallback 错误 summary。否则会回退到直连 LLM 修复。成功补取上下文后必须续审，包括最后一轮 Agent 和直连回退中的请求；之前获取的上下文会继续回灌。Agent 最多一次格式修复或两次上下文续审，直连阶段最多三次调用。次数耗尽仍无经过复核的最终输出时，评审在发布和托管问题对账前失败。
 
-**修复：** 这是预期行为，不是 bug——它防止中间思考泄露到 IM 卡片，并确保 problem 位置来自 `aicr.report_problem`。如果你预期有问题，请确认 agent 拿到了所需上下文：它应通过 `aicr.fetch_more_context` 请求文件，或用只读 shell 工具检查已物化的源码。参见 [MCP 工具](/zh-cn/integrations/mcp-tools/)。
+**修复：** 检查失败日志及请求的 VCS 路径是否可读。上下文请求是中间步骤，不能作为审查完成或 LGTM 的依据。Agent 应通过 `aicr.fetch_more_context` 请求文件，或用只读 shell 工具检查已物化的源码。解决缺失上下文或模型输出异常后重新评审。参见 [MCP 工具](/zh-cn/integrations/mcp-tools/)。
 
 ## 上下文溢出（`AgentContextOverflowError`）
 

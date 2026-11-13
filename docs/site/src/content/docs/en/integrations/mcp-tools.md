@@ -280,8 +280,10 @@ orchestrator:
    `fetchAttribution` when supported.
 5. Executes review-data requests through the current review's host handler
    and Git/SVN/P4 adapter.
-6. Runs a final follow-up pass with the fetched content/attribution/metadata fed back
-   in, then publishes results.
+6. Feeds cumulative fetched content/attribution/metadata into bounded follow-ups,
+   including direct LLM fallback. Outputs emitted alongside successful requests
+   remain provisional until verified in a later pass. Exhaustion fails the review
+   before publication or managed-issue reconciliation.
 
 :::caution[Container workdir must be `/workspace/agent`]
 Docker/Podman sandbox runs must set the container workdir to the writable
