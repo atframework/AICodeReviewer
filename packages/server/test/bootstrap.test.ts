@@ -3230,6 +3230,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
       } as Partial<AppConfig>);
       const resolutionAnalyzer = vi.fn(async () => new Set(["fp-old"]));
       const resolutionAnalyzerFactory = vi.fn(() => resolutionAnalyzer);
+      const materializeSourceFile = vi.fn(async () => {});
       const resolver = createOutputPublisherResolverFromConfig(config, { resolutionAnalyzerFactory });
       const publisher = await resolver({
         reviewEvent: {
@@ -3244,7 +3245,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
         payload: { pull_request: { number: 77 } },
         provider: "gitea",
         eventName: "pull_request",
-      }, { sourceRoot: "D:\\scoped\\source" });
+      }, { sourceRoot: "D:\\scoped\\source", materializeSourceFile });
 
       assertSummaryPublisher(publisher);
       await publisher.publishSummary("", [], {
@@ -3252,7 +3253,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
         bypassNoProblemsPolicy: true,
       });
 
-      expect(resolutionAnalyzerFactory).toHaveBeenCalledWith("D:\\scoped\\source", expect.any(Object));
+      expect(resolutionAnalyzerFactory).toHaveBeenCalledWith("D:\\scoped\\source", expect.any(Object), materializeSourceFile);
       expect(resolutionAnalyzer).toHaveBeenCalledOnce();
       const patchCall = calls.find((call) => call.init?.method === "PATCH");
       expect(JSON.parse(patchCall?.init?.body ?? "{}").body).toContain("Resolved (1)");

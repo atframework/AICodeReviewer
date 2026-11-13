@@ -184,7 +184,10 @@ export interface ReviewSummaryPublishOptions {
 
 export type ReviewOutputPublisherResolver = (
   context: ReviewOrchestrationContext,
-  runtime?: { readonly sourceRoot: string },
+  runtime?: {
+    readonly sourceRoot: string;
+    readonly materializeSourceFile?: (file: string) => Promise<void>;
+  },
 ) => Promise<ReviewOutputPublisher | undefined>;
 
 export type ReviewOrchestrationProvider = ReviewProvider;
@@ -4279,6 +4282,17 @@ async function executeReviewInRunDirs(
   );
   diff = commitPolicy.diff;
   changedPaths = [...commitPolicy.files];
+  const materializeSourceFile = async (file: string): Promise<void> => {
+    context.signal?.throwIfAborted();
+    if (!range.headRevision) throw new Error("Resolution source requires a pinned revision.");
+    const destination = resolve(scopedTree.rootDir, file);
+    if (!isWithinRoot(resolve(scopedTree.rootDir), destination)
+      || !isWithinRoot(await realpath(scopedTree.rootDir), await realpathContaining(destination))) {
+      throw new Error("Resolution source escapes the review source directory.");
+    }
+    await vcs.fetchExtraContext({ path: file, revision: range.headRevision, reason: "Verify a previously reported problem against current source." }, { ...workspaceRef, sourceDir: scopedTree.rootDir });
+    context.signal?.throwIfAborted();
+  };
   if (options.resumePublication) {
     // P1 publication recovery: the analysis output is already persisted in the
     // batch checkpoint, so the LLM/agent phase is skipped entirely. The VCS
@@ -4288,6 +4302,7 @@ async function executeReviewInRunDirs(
     return finalizeReviewRun({
       context,
       options,
+      materializeSourceFile,
       liveRun,
       runMetricsAccumulator: createReviewRunMetricsAccumulator(),
       completion: {
@@ -4913,6 +4928,7 @@ async function executeReviewInRunDirs(
   return finalizeReviewRun({
     context,
     options,
+    materializeSourceFile,
     liveRun,
     runMetricsAccumulator,
     completion,
@@ -5134,6 +5150,7 @@ export function summarizeReviewOrchestrationForWebhook(
 }
 
 interface FinalizeReviewRunParams {
+  readonly materializeSourceFile: (file: string) => Promise<void>;
   readonly context: ReviewOrchestrationContext;
   readonly options: ServerReviewOrchestrationOptions;
   readonly liveRun: LiveRunHandle | undefined;
@@ -5165,6 +5182,7 @@ async function finalizeReviewRun(
   const {
     context,
     options,
+    materializeSourceFile,
     liveRun,
     runMetricsAccumulator,
     completion,
@@ -5219,6 +5237,7 @@ async function finalizeReviewRun(
     options.outputPublisher ??
     (await options.outputPublisherResolver?.(context, {
       sourceRoot: scopedTree.rootDir,
+      materializeSourceFile,
     }));
 
   if (!options.dryRun && outputPublisher) {

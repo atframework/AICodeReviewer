@@ -44,6 +44,8 @@ export interface ProblemResolutionAnalyzerOptions {
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
   readonly sourceRoot: string;
+  /** Materialize an unchanged file from the review's pinned VCS revision. */
+  readonly materializeSourceFile?: ((file: string) => Promise<void>) | undefined;
   readonly maxSourceChars?: number;
   readonly logContext?: { readonly runId?: string | undefined; readonly workspaceId?: string | undefined; readonly headSha?: string | undefined };
 }
@@ -95,7 +97,7 @@ function resolveCandidatePath(sourceRoot: string, file: string): string | undefi
   return rel && !rel.startsWith("..") && !isAbsolute(rel) ? candidate : undefined;
 }
 
-function buildNumberedSourceContext(content: string, line: number, maxChars: number): string {
+function buildNumberedSourceContext(content: string, line: number, maxChars: number): string | undefined {
   const lines = content.replace(/\r\n?/gu, "\n").split("\n");
   const render = (start: number, end: number): string => lines
     .slice(start, end)
@@ -111,25 +113,51 @@ function buildNumberedSourceContext(content: string, line: number, maxChars: num
   }
 
   const target = Math.max(0, Math.min(lines.length - 1, Math.trunc(line) - 1));
-  const start = Math.max(0, target - SOURCE_CONTEXT_RADIUS);
-  const end = Math.min(lines.length, target + SOURCE_CONTEXT_RADIUS + 1);
-  const window = render(start, end);
-  if (window.length <= maxChars) return window;
-  return window.slice(0, maxChars);
+  let start = target;
+  let end = target + 1;
+  let size = render(start, end).length;
+  // Never present a truncated diagnostic line as sufficient source evidence.
+  if (size > maxChars) return undefined;
+  let before = true;
+  let after = true;
+  for (let distance = 1; distance <= SOURCE_CONTEXT_RADIUS; distance += 1) {
+    if (before && start > 0) {
+      const extra = render(start - 1, start).length + 1;
+      if (size + extra <= maxChars) { start -= 1; size += extra; }
+      else before = false;
+    }
+    if (after && end < lines.length) {
+      const extra = render(end, end + 1).length + 1;
+      if (size + extra <= maxChars) { end += 1; size += extra; }
+      else after = false;
+    }
+  }
+  return render(start, end);
 }
 
 async function materializeCandidate(
   sourceRoot: string,
   problem: ReviewProblem,
   maxSourceChars: number,
+  materializeSourceFile: ProblemResolutionAnalyzerOptions["materializeSourceFile"],
 ): Promise<Record<string, unknown> | undefined> {
   const sourcePath = resolveCandidatePath(sourceRoot, problem.file);
   if (!sourcePath) return undefined;
   try {
-    const [realRoot, realSourcePath] = await Promise.all([realpath(sourceRoot), realpath(sourcePath)]);
+    const realRoot = await realpath(sourceRoot);
+    let realSourcePath: string;
+    try {
+      realSourcePath = await realpath(sourcePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !materializeSourceFile) throw error;
+      await materializeSourceFile(problem.file.replace(/\\/gu, "/"));
+      realSourcePath = await realpath(sourcePath);
+    }
     const realRelative = relative(realRoot, realSourcePath);
     if (!realRelative || realRelative.startsWith("..") || isAbsolute(realRelative)) return undefined;
     const content = await readFile(realSourcePath, "utf8");
+    const currentSource = buildNumberedSourceContext(content, problem.line, maxSourceChars);
+    if (currentSource === undefined) return undefined;
     return {
       fingerprint: problem.fingerprint,
       severity: problem.severity,
@@ -139,7 +167,7 @@ async function materializeCandidate(
       ...(problem.endLine !== undefined ? { endLine: problem.endLine } : {}),
       message: problem.message.slice(0, MAX_DIAGNOSTIC_CHARS),
       ...(problem.suggestion ? { suggestion: problem.suggestion.slice(0, MAX_SUGGESTION_CHARS) } : {}),
-      currentSource: buildNumberedSourceContext(content, problem.line, maxSourceChars),
+      currentSource,
     };
   } catch {
     return undefined;
@@ -151,6 +179,15 @@ export function createProblemResolutionAnalyzer(
 ): ProblemResolutionAnalyzer {
   const decisions = new Map<string, boolean>();
   const maxSourceChars = Math.max(1_000, options.maxSourceChars ?? DEFAULT_MAX_SOURCE_CHARS);
+  const sourceLoads = new Map<string, Promise<void>>();
+  const materializeSourceFile = options.materializeSourceFile ? (file: string): Promise<void> => {
+    let pending = sourceLoads.get(file);
+    if (!pending) {
+      pending = options.materializeSourceFile!(file);
+      sourceLoads.set(file, pending);
+    }
+    return pending;
+  } : undefined;
 
   return async (problems) => {
     const outcomes = new Map<string, string>();
@@ -168,7 +205,7 @@ export function createProblemResolutionAnalyzer(
       Math.floor(maxSourceChars / Math.max(1, unresolved.length)),
     );
     const materialized = (await Promise.all(
-      unresolved.map((problem) => materializeCandidate(options.sourceRoot, problem, perCandidateSourceChars)),
+      unresolved.map((problem) => materializeCandidate(options.sourceRoot, problem, perCandidateSourceChars, materializeSourceFile)),
     )).filter((candidate): candidate is Record<string, unknown> => candidate !== undefined);
 
     for (const problem of unresolved) {

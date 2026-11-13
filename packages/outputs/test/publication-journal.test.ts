@@ -142,6 +142,58 @@ describe("remote publication journal", () => {
     expect(JSON.stringify(f.saved())).not.toContain("private-token");
   });
 
+  it("journals WeCom reports and both mobile reminders separately and reuses confirmed sends after restart", async () => {
+    const f = fixture();
+    const fetch = vi.fn<FetchLike>().mockResolvedValue(reply({ errcode: 0 }));
+    const work = async () => {
+      const dispatcher = createWeComBotDispatcher({ webhookUrl: "https://im.test/hook", mentionedMobileList: ["13800000000"], fetch });
+      await dispatcher.publishAggregatedProblems([], "Report");
+      return dispatcher.publishTextReminder("Check report", { mentionedMobileList: ["13900000000"] });
+    };
+    await f.journal().run("out", "summary:0", work);
+    await f.journal().run("out", "summary:0", work);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body!).msgtype)).toEqual(["markdown", "text", "text"]);
+    expect(f.saved()).toHaveLength(3);
+    expect(f.saved().every(operation => operation.status === "confirmed")).toBe(true);
+  });
+
+  it("reuses a legacy confirmed WeCom report before sending its missing reminder", async () => {
+    const f = fixture();
+    const fetch = vi.fn<FetchLike>().mockResolvedValue(reply({ errcode: 0 }));
+    await f.journal().run("out", "summary:0", () => publicationFetch(fetch, "webhook")("https://im.test/hook", {
+      method: "POST", body: JSON.stringify({ msgtype: "markdown", markdown: { content: "Report" } }),
+    }));
+    await f.journal().run("out", "summary:0", () => createWeComBotDispatcher({ webhookUrl: "https://im.test/hook", mentionedMobileList: ["13800000000"], fetch })
+      .publishAggregatedProblems([], "Report"));
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body!).msgtype)).toEqual(["markdown", "text"]);
+    expect(f.saved()).toHaveLength(2);
+  });
+
+  it("does not resend a WeCom reminder whose remote outcome is unknown", async () => {
+    const f = fixture();
+    const fetch = vi.fn<FetchLike>().mockResolvedValueOnce(reply({ errcode: 0 })).mockRejectedValue(new Error("lost reminder response"));
+    const work = () => createWeComBotDispatcher({ webhookUrl: "https://im.test/hook", mentionedMobileList: ["13800000000"], fetch })
+      .publishAggregatedProblems([], "Report");
+    await expect(f.journal().run("out", "summary:0", work)).rejects.toThrow("lost reminder response");
+    await expect(f.journal().run("out", "summary:0", work)).rejects.toThrow("publisher_cannot_reconcile");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(f.saved().map(operation => operation.status)).toEqual(["confirmed", "unknown"]);
+  });
+
+  it("blocks changes to a confirmed WeCom report or reminder", async () => {
+    const f = fixture();
+    const fetch = vi.fn<FetchLike>().mockResolvedValue(reply({ errcode: 0 }));
+    const dispatcher = createWeComBotDispatcher({ webhookUrl: "https://im.test/hook", fetch });
+    const work = (report: string, reminder: string) => async () => {
+      await dispatcher.publishAggregatedProblems([], report);
+      return dispatcher.publishTextReminder(reminder);
+    };
+    await f.journal().run("out", "summary:0", work("Report", "Reminder"));
+    await expect(f.journal().run("out", "summary:0", work("Changed", "Reminder"))).rejects.toThrow("request_changed_after_confirmed_write");
+    await expect(f.journal().run("out", "summary:0", work("Report", "Changed"))).rejects.toThrow("request_changed_after_confirmed_write");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("Feishu UUID remains stable across restart and expires conservatively", async () => {
     const f = fixture();
     const uuids: string[] = [];

@@ -6038,12 +6038,12 @@ export interface WeComBotDispatcher {
 }
 
 export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDispatcher {
-	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "webhook");
+	const fetchImpl = options.fetch ?? defaultFetch();
 	const channel = options.channelName ?? "wecom_bot";
 	const mobiles = options.mentionedMobileList ?? [];
 
-	const postWebhook = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
-		const response = await fetchImpl(options.webhookUrl, {
+	const postWebhook = async (body: Record<string, unknown>, identity?: string): Promise<Record<string, unknown>> => {
+		const response = await publicationFetch(fetchImpl, "wecom_bot", identity)(options.webhookUrl, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(body),
@@ -6104,7 +6104,7 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 						content: "Code review report published; mentioned members please check.",
 						mentioned_mobile_list: [...mobiles],
 					},
-				});
+				}, "configured-mobile-reminder");
 				return { channel, status: "published", raw: { report: raw, reminder } };
 			}
 			return { channel, status: "published", raw };
@@ -6117,7 +6117,7 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 			const text: Record<string, unknown> = { content };
 			if (reminderOptions?.mentionedMobileList?.length) text.mentioned_mobile_list = [...reminderOptions.mentionedMobileList];
 			if (reminderOptions?.mentionedList?.length) text.mentioned_list = [...reminderOptions.mentionedList];
-			const raw = await postWebhook({ msgtype: "text", text: text as { content: string } });
+			const raw = await postWebhook({ msgtype: "text", text: text as { content: string } }, "text-reminder");
 			return { channel, status: "published" as const, raw };
 		},
 	};

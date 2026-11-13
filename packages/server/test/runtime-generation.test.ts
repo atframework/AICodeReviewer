@@ -329,9 +329,13 @@ describe("runtime config generation integration (bootstrap)", () => {
     const run = await options.reviewOrchestration!.optionsResolver!(context);
     const sourceRoot = run.sourceRootResolver!(event);
     mkdirSync(sourceRoot, { recursive: true });
-    writeFileSync(join(sourceRoot, "auth.ts"), "return failure;\n");
-    const publisher = await run.outputPublisherResolver!(context, { sourceRoot });
+    const materializeSourceFile = vi.fn(async (file: string) => {
+      expect(file).toBe("auth.ts");
+      writeFileSync(join(sourceRoot, file), "return failure;\n");
+    });
+    const publisher = await run.outputPublisherResolver!(context, { sourceRoot, materializeSourceFile });
     await publisher!.publishSummary!("Summary", [], { reviewedFiles: ["auth.ts"] });
+    expect(materializeSourceFile).toHaveBeenCalledOnce();
     expect(modelRequests).toHaveLength(1);
     expect(modelRequests[0]?.model).toBe("triage-model");
     expect(writes.some(write => write.body.state === "closed")).toBe(false);

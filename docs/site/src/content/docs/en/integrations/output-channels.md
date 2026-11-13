@@ -133,6 +133,10 @@ issues across reviews. Key behaviors:
   verification, a review that touches unrelated files or finds nothing will
   **not** mark previously-reported problems as resolved. Each managed-issue
   body embeds `aicr:file=<path>` so the file is recoverable.
+  Missing candidate files are fetched at the review's pinned VCS revision,
+  including files outside the diff. Unavailable or deleted files stay open.
+  Source excerpts retain the complete diagnostic line within their budget;
+  if that line cannot fit, the finding stays open.
 - **Recent-issue cap.** Reconciliation lists only open issues (`state=open`),
   capped by `review.problem_issue.max_recent_issues` (default 30, range 1–200,
   overridable per workspace). Fingerprints outside the recent window are not

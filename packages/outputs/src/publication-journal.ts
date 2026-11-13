@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { RemotePublicationOperation } from "@aicr/core";
 import type { FetchLike, ResponseLike } from "./index.js";
 
-type Provider = "github" | "gitea" | "gitlab" | "feishu" | "wecom_app" | "webhook" | "slack_app" | "discord_bot" | "telegram_bot";
+type Provider = "github" | "gitea" | "gitlab" | "feishu" | "wecom_app" | "wecom_bot" | "webhook" | "slack_app" | "discord_bot" | "telegram_bot";
 type Operation = RemotePublicationOperation;
 type Request = NonNullable<Parameters<FetchLike>[1]>;
 
@@ -264,13 +264,13 @@ export class PublicationJournal {
       throw new PublicationReconciliationError("publisher_previously_rejected");
     }
     // One message per logical send: a confirmed write blocks changed bodies.
-    // Chunked WeCom application reports deliberately issue several parts, so
-    // for wecom_app only a changed body under the SAME part identity blocks;
+    // WeCom application parts and bot reminders have separate send identities;
+    // only a changed body under the SAME identity blocks for these providers.
     // Feishu/webhook keep the strict one-message-per-call rule.
-    const blocksConfirmed = (op: Operation): boolean => provider === "wecom_app"
+    const blocksConfirmed = (op: Operation): boolean => provider === "wecom_app" || provider === "wecom_bot"
       ? (op.identity ?? undefined) === (identity ?? undefined)
       : true;
-    if (["feishu", "webhook", "wecom_app", "slack_app", "discord_bot", "telegram_bot"].includes(provider)
+    if (["feishu", "webhook", "wecom_app", "wecom_bot", "slack_app", "discord_bot", "telegram_bot"].includes(provider)
       && [...this.operations.values()].some(op => op.channel === channel && op.call === call && op.status === "confirmed"
         && blocksConfirmed(op))) {
       throw new PublicationReconciliationError("request_changed_after_confirmed_write");

@@ -110,6 +110,9 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
   由触及无关文件的提交触发的评审——或什么都没发现的评审——**不会**
   把之前报告的每个 problem 都标记为已解决。每个托管 issue 正文嵌入
   `aicr:file=<path>`，以便恢复文件归属。
+  候选文件未在本轮目录中时，按评审锁定的 VCS 提交补取，包括差异之外的文件。
+  文件已删除或无法读取时保留开放状态。源码片段在预算内保留完整的问题行；
+  问题行本身超出预算时也保留开放状态。
 - **最近 issue 上限。** 对账只列出仍处于 open 状态的 issue（`state=open`），上限由
   `review.problem_issue.max_recent_issues` 控制（默认 30，范围 1–200，可按 workspace 覆盖）。
   最近窗口之外的 fingerprint 不会在该 run 去重或关闭。

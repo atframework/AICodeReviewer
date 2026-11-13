@@ -2,6 +2,10 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
+Managed issue verification fetches missing candidate files at the reviewed VCS
+revision. WeCom bot reports and mobile reminders retain separate publication
+receipts during recovery. These behaviors require no additional configuration.
+
 Use [slack-app.yaml](slack-app.yaml), [discord-bot.yaml](discord-bot.yaml) or
 [telegram-bot.yaml](telegram-bot.yaml) for Bot API reports. Replace synthetic IDs
 and set the token environment variable; merge your existing VCS/LLM configuration

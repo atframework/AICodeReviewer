@@ -1594,6 +1594,7 @@ export interface OutputPublisherConfigOptions {
   readonly resolutionAnalyzerFactory?: (
     sourceRoot: string,
     context: ReviewOrchestrationContext,
+    materializeSourceFile?: (file: string) => Promise<void>,
   ) => ProblemResolutionAnalyzer;
   readonly cardActionIssuer?: CardActionIssuerOptions | undefined;
 }
@@ -4497,6 +4498,7 @@ export function createOutputPublisherResolverFromConfig(
     const resolutionAnalyzer = options.resolutionAnalyzerFactory?.(
       runtime?.sourceRoot ?? baseDir,
       context,
+      runtime?.materializeSourceFile,
     );
     // Construct the model client only after directory rules leave an unmatched author.
     let identityGuesser: ChannelAuthorGuesser | undefined;
@@ -5941,7 +5943,7 @@ async function bootstrapServerAppCore(
                 if (Number.isFinite(cost) && cost > 0) runSpend += cost;
               },
             }),
-          resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => {
+          resolutionAnalyzerFactory: (sourceRoot, analyzerContext, materializeSourceFile) => {
             const triageRoute = getModelRouteFor(
               generation,
               resolveAnalysisSelection(
@@ -5955,6 +5957,7 @@ async function bootstrapServerAppCore(
               ...triageRoute,
               llm: budgetedClient(triageRoute.llm),
               sourceRoot,
+              materializeSourceFile,
               logContext: {
                 runId: analyzerContext.runId,
                 workspaceId: analyzerContext.reviewEvent.workspaceId,
@@ -6109,10 +6112,11 @@ async function bootstrapServerAppCore(
             },
           }
         : {}),
-      resolutionAnalyzerFactory: (sourceRoot, context) =>
+      resolutionAnalyzerFactory: (sourceRoot, context, materializeSourceFile) =>
         createProblemResolutionAnalyzer({
           ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
           sourceRoot,
+          materializeSourceFile,
           logContext: {
             runId: context.runId,
             workspaceId: context.reviewEvent.workspaceId,

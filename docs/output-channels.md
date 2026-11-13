@@ -436,6 +436,12 @@ workspaces:
 
 The `gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint becomes a resolution candidate when the current review covers its file and no longer reports it; on a genuine empty review (including `lgtm`-classified runs) with lifecycle analysis active, every still-open stored fingerprint becomes a candidate instead. A candidate is resolved only when the lifecycle model explicitly confirms the fix against current source.
 
+Missing candidate files are fetched through the VCS adapter at the review's pinned
+revision, even when they are outside the current diff. Files are loaded once per
+review and checked within its source directory. Deleted or unavailable files
+remain unresolved. Bounded source excerpts retain the complete diagnostic line
+and nearby lines; a diagnostic line that cannot fit keeps the finding open.
+
 By default, one review is combined into a single issue (`issue_mode: consolidated`). `per_problem` creates one issue per finding. Consolidated scopes are target-aware: pushes key by `headSha`, PR/MR reviews key by pull number (falling back to `headSha`), and other targets use the repository scope.
 
 After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue. Reviewed-and-missing fingerprints go through model verification — on a genuine empty review with lifecycle analysis active, every stored fingerprint does — while unreviewed or unconfirmed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope race duplicates are still cleaned up deterministically because that is identity reconciliation, not a claim that a code finding was fixed. `per_commit` scopes are independent and never enter this cross-scope pass.

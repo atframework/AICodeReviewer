@@ -727,7 +727,7 @@ outputs:
     #   mention_author: false                       # enable only with platform identity mappings/directory
     #   mention_fallback: skip                      # "all" = mention everyone, "skip" = no mention if author not found
     #   no_problems: { action: suppress }
-    #   # mentioned_mobile_list: ["+86-13800138000"] # optional: @ specific users by phone number
+    #   # mentioned_mobile_list: ["+86-13800138000"] # optional: bounded text reminder with its own publication receipt
     #   # member_directory:                         # file contents: example/wecom-members.yaml
     #   #   source: file
     #   #   path: ./private/wecom-members.yaml

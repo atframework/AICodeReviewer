@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -26,6 +26,7 @@ import {
   type ReviewSummaryPublishOptions,
 } from "../src/review-orchestrator.js";
 import { createLiveRunRegistry } from "../src/live-runs.js";
+import { createProblemResolutionAnalyzer } from "../src/problem-resolution.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -5358,6 +5359,56 @@ describe("runReviewOrchestration error paths", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("verifies unchanged findings using the pinned revision instead of the shared working tree", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/resolution-source-"));
+    const repository = join(root, "repository");
+    let approved: ReadonlySet<string> = new Set();
+    try {
+      await mkdir(repository);
+      await runGit(repository, ["init"]);
+      await writeWorkspaceFile(repository, "src/app.ts", "const value = 1;\n");
+      await writeWorkspaceFile(repository, "auth.ts", "if (!user) return false; // FIXED_AT_HEAD\n");
+      await commitAll(repository, "Test", "test@example.com", "base");
+      const revision = async () => (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" })).stdout.trim();
+      const baseSha = await revision();
+      await writeWorkspaceFile(repository, "src/app.ts", "const value = 2;\n");
+      await commitAll(repository, "Test", "test@example.com", "head");
+      const headSha = await revision();
+      await writeWorkspaceFile(repository, "auth.ts", "return true; // FUTURE_UNSAFE_SOURCE\n");
+      await commitAll(repository, "Test", "test@example.com", "future");
+      const llm: ChatCompletionClient = { complete: async input => ({
+        providerId: "test", modelId: "test", raw: {},
+        content: input.messages[0]!.content.includes("previously reported code review problems")
+          ? (() => {
+            expect(input.messages[1]!.content).toContain("FIXED_AT_HEAD");
+            expect(input.messages[1]!.content).not.toContain("FUTURE_UNSAFE_SOURCE");
+            return JSON.stringify({ decisions: [{ fingerprint: "old", resolved: true, reason: "The guard exists at the reviewed revision." }] });
+          })()
+          : JSON.stringify({ toolCalls: [{ name: "aicr.skip", input: { reason: "lgtm" } }] }),
+      }) };
+      await runReviewOrchestration({ reviewEvent: { ...createReviewEventFixture(), baseSha, headSha }, payload: {}, provider: "gitea", eventName: "pull_request" }, {
+        baseSystemPrompt: "{{TASK_CONTEXT}}", sourceRootResolver: () => repository,
+        vcs: createGitVcsAdapter({ repositoryDir: repository }), model, llm, dryRun: false,
+        outputPublisherResolver: async (_context, runtime) => {
+          expect(existsSync(join(runtime!.sourceRoot, "auth.ts"))).toBe(false);
+          await expect(runtime!.materializeSourceFile!("../outside.ts")).rejects.toThrow("escapes");
+          const outside = join(root, "outside");
+          await mkdir(outside);
+          await symlink(outside, join(runtime!.sourceRoot, "escape"), process.platform === "win32" ? "junction" : "dir");
+          await expect(runtime!.materializeSourceFile!("escape/new.ts")).rejects.toThrow("escapes");
+          expect(existsSync(join(outside, "new.ts"))).toBe(false);
+          const analyze = createProblemResolutionAnalyzer({ sourceRoot: runtime!.sourceRoot, materializeSourceFile: runtime!.materializeSourceFile, model, llm });
+          return { reconcilesManagedIssues: true, publishSummary: async () => {
+            approved = await analyze([{ file: "auth.ts", line: 1, fingerprint: "old", severity: "high", category: "correctness", message: "Missing authentication guard." }]);
+            return { channel: "test", status: "published" };
+          } };
+        },
+      });
+      expect(approved).toEqual(new Set(["old"]));
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it("uses outputPublisherResolver for per-event publishing", async () => {

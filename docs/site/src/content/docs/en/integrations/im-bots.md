@@ -351,6 +351,10 @@ paths reuse an in-memory UUID only for the token retry, without restart recovery
 
 ## WeCom (企业微信)
 
+The Markdown report and mobile text reminders have separate publication receipts.
+Recovery reuses confirmed sends. A reminder with an unknown delivery outcome
+requires inspection before another send.
+
 ### 1. Create a group bot
 
 1. Open the target group → **Group Settings** → **Group Bots** → **Add Bot**

@@ -143,6 +143,62 @@ describe("createProblemResolutionAnalyzer", () => {
     expect(prompt).not.toContain("fp-outside");
   });
 
+  it("loads unchanged candidate files once before semantic verification and keeps failed loads open", async () => {
+    const sourceRoot = await createSourceRoot();
+    const materializeSourceFile = vi.fn(async (file: string) => {
+      if (file !== "unchanged.ts") throw new Error("not available at this revision");
+      await writeFile(join(sourceRoot, file), "if (!user) return false;\nreturn true;\n");
+    });
+    const complete = vi.fn<ChatCompletionClient["complete"]>(async input => ({
+      providerId: "triage-provider", modelId: "triage-model", raw: {},
+      content: JSON.stringify({ decisions: JSON.parse(input.messages[1]!.content).candidates.map((candidate: { fingerprint: string }) => ({
+        fingerprint: candidate.fingerprint, resolved: true, reason: "The guard is present.",
+      })) }),
+    }));
+    const analyzer = createProblemResolutionAnalyzer({ sourceRoot, model: testModel, llm: { complete }, materializeSourceFile });
+    const base = { file: "unchanged.ts", line: 1, severity: "high" as const, category: "correctness", message: "Missing guard." };
+    expect(await analyzer([
+      { ...base, fingerprint: "one" }, { ...base, fingerprint: "two" },
+      { ...base, file: "deleted.ts", fingerprint: "deleted" },
+      { ...base, file: "../outside.ts", fingerprint: "outside" },
+    ])).toEqual(new Set(["one", "two"]));
+    expect(materializeSourceFile.mock.calls.map(([file]) => file).sort()).toEqual(["deleted.ts", "unchanged.ts"]);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete.mock.calls[0]![0].messages[1]!.content).toContain("if (!user) return false");
+  });
+
+  it("keeps the diagnostic line inside each source budget when verifying multiple large files", async () => {
+    const sourceRoot = await createSourceRoot();
+    await writeFile(join(sourceRoot, "large.ts"), Array.from({ length: 1000 }, (_, i) =>
+      i === 799 ? "if (!user) return false; // ORIGINAL_LOCATION" : `// ${"x".repeat(100)}`,
+    ).join("\n"));
+    const complete = vi.fn<ChatCompletionClient["complete"]>(async input => {
+      const candidates = JSON.parse(input.messages[1]!.content).candidates as { fingerprint: string; currentSource: string }[];
+      for (const candidate of candidates) {
+        expect(candidate.currentSource).toContain("800: if (!user) return false; // ORIGINAL_LOCATION");
+        expect(candidate.currentSource.length).toBeLessThanOrEqual(8000);
+      }
+      return { providerId: "triage-provider", modelId: "triage-model", raw: {},
+        content: JSON.stringify({ decisions: candidates.map(candidate => ({ fingerprint: candidate.fingerprint, resolved: true, reason: "Guard present." })) }) };
+    });
+    const candidates = Array.from({ length: 6 }, (_, i) => ({
+      file: "large.ts", line: 800, fingerprint: `fp-${i}`, severity: "high" as const, category: "correctness", message: "Missing guard.",
+    }));
+    expect(await createProblemResolutionAnalyzer({ sourceRoot, model: testModel, llm: { complete } })(candidates))
+      .toEqual(new Set(candidates.map(candidate => candidate.fingerprint)));
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("retains a candidate when its diagnostic line alone exceeds the source budget", async () => {
+    const sourceRoot = await createSourceRoot();
+    await writeFile(join(sourceRoot, "long.ts"), "x".repeat(2000));
+    const complete = vi.fn<ChatCompletionClient["complete"]>();
+    expect(await createProblemResolutionAnalyzer({ sourceRoot, model: testModel, llm: { complete }, maxSourceChars: 1000 })([
+      { file: "long.ts", line: 1, fingerprint: "long", severity: "high", category: "correctness", message: "Missing guard." },
+    ])).toEqual(new Set());
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it.each(["false", "missing"])("rechecks a %s verdict once and preserves earlier approvals", async (firstVerdict) => {
     const sourceRoot = await createSourceRoot();
     await writeFile(join(sourceRoot, "auth.ts"), "if (valid) return success;\nreturn failure;\n");
