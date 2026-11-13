@@ -140,6 +140,12 @@ file-only 可以发送报告；干净结果默认使用 `publish_if_summary`，�
 CRLF 与正文多余空行会归一化；内部审查标记不显示，代码示例内容保留。
 实体及嵌套规则见 [Telegram 格式说明](https://core.telegram.org/bots/api#formatting-options)。
 
+### 报告效果
+
+[![Telegram 中的 AICR 报告：审查目标、问题说明与代码引用](/images/integrations/telegram-report-zh-cn.png)](/images/integrations/telegram-report-zh-cn.png)
+
+点击图片查看原图。
+
 ## 启用命令
 
 按仓库选择报告时，旧路由可用 `outputs.routes.rules[].match.repo_ref` 与 `trigger`、`target_kind` 取交集。

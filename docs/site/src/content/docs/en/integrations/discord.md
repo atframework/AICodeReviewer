@@ -65,6 +65,12 @@ while code fences, language labels and content are preserved. Custom templates r
 messages that exceed the total budget include a truncation notice.
 See [Discord's message formatting reference](https://docs.discord.com/developers/reference#message-formatting).
 
+### Report example
+
+[![AICR report in Discord with a problem location, a full-report link and an author mention](/images/integrations/discord-report-en.png)](/images/integrations/discord-report-en.png)
+
+Open the image for full resolution.
+
 ## Enable commands
 
 To select reports for specific repositories with legacy routes, use `outputs.routes.rules[].match.repo_ref` together with `trigger` and `target_kind`. It matches the exact, case-sensitive repository reference. Put these rules before broader rules and keep the existing channel lists when appending the Bot output. A matching legacy route takes precedence over workspace output lists. See [configuration fields](/en/reference/config-fields/).

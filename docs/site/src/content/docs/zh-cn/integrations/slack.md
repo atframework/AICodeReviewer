@@ -115,6 +115,12 @@ Slack 使用自己的 `mrkdwn`：标题和严重级别转为单星号加粗，�
 CRLF 与正文多余空行会归一化；内部审查标记不显示，代码示例中的同类文本保留。
 自定义模板仍按上述优先级生效。平台语法见 [Slack 格式说明](https://docs.slack.dev/messaging/formatting-message-text/)。
 
+### 报告效果
+
+[![Slack 中的 AICR 报告：审查目标、问题说明与代码引用](/images/integrations/slack-report-zh-cn.png)](/images/integrations/slack-report-zh-cn.png)
+
+点击图片查看原图。
+
 ## 启用命令
 
 按仓库选择报告时，旧路由可用 `outputs.routes.rules[].match.repo_ref` 与 `trigger`、`target_kind` 取交集。

@@ -132,6 +132,12 @@ outputs:
       issue_link_card: full   # brief | titles (default) | full
 ```
 
+### 8. Report example
+
+[![AICR card in Feishu with a problem location, a full-report link and an author mention](/images/integrations/feishu-report-en.png)](/images/integrations/feishu-report-en.png)
+
+Open the image for full resolution.
+
 ## Feishu custom application
 
 Use `feishu_app` to send reports as a custom application's bot. Enable the bot
@@ -417,6 +423,12 @@ truncated, with a notice; the native mention remains. Feishu webhook requests
 are bounded at **20 KiB** and application card requests at **30 KiB**, including
 JSON escaping and request fields. Report links, mentions and card buttons remain.
 WeCom application reports split into 2048-byte parts.
+
+### 6. Report example
+
+[![AICR report in WeCom with review details, problem descriptions and code references](/images/integrations/wecom-report-en.png)](/images/integrations/wecom-report-en.png)
+
+Open the image for full resolution.
 
 ## External member directory (file)
 

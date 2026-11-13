@@ -142,6 +142,12 @@ overlapping style and code entities. CRLF and excess prose spacing are normalize
 are hidden outside code examples, whose content is preserved.
 See [Telegram's formatting and entity rules](https://core.telegram.org/bots/api#formatting-options).
 
+### Report example
+
+[![AICR report in Telegram with a problem location and a full-report link](/images/integrations/telegram-report-en.png)](/images/integrations/telegram-report-en.png)
+
+Open the image for full resolution.
+
 ## Enable commands
 
 To select reports for specific repositories with legacy routes, use `outputs.routes.rules[].match.repo_ref` together with `trigger` and `target_kind`. It matches the exact, case-sensitive repository reference. Put these rules before broader rules and keep the existing channel lists when appending the Bot output. A matching legacy route takes precedence over workspace output lists. See [configuration fields](/en/reference/config-fields/).

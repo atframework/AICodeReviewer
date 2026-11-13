@@ -114,6 +114,12 @@ and fence language labels are removed while code content is preserved.
 CRLF and excess prose spacing are normalized. Internal review markers are hidden outside code examples.
 Custom templates retain the priority described above. See [Slack's formatting reference](https://docs.slack.dev/messaging/formatting-message-text/).
 
+### Report example
+
+[![AICR report in Slack with problem locations and a full-report link](/images/integrations/slack-report-en.png)](/images/integrations/slack-report-en.png)
+
+Open the image for full resolution.
+
 ## Enable commands
 
 To select reports for specific repositories with legacy routes, use `outputs.routes.rules[].match.repo_ref` together with `trigger` and `target_kind`. It matches the exact, case-sensitive repository reference. Put these rules before broader rules and keep the existing channel lists when appending the Bot output. A matching legacy route takes precedence over workspace output lists. See [configuration fields](/en/reference/config-fields/).

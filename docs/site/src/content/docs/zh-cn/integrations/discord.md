@@ -64,6 +64,12 @@ CRLF 与正文多余空行会归一化；内部审查标记不显示，代码围
 自定义模板仍按上述优先级生效；消息达到总预算时显示截断提示。
 平台语法见 [Discord 消息格式](https://docs.discord.com/developers/reference#message-formatting)。
 
+### 报告效果
+
+[![Discord 中的 AICR 报告：问题位置、完整报告链接与链接预览](/images/integrations/discord-report-zh-cn.png)](/images/integrations/discord-report-zh-cn.png)
+
+点击图片查看原图。
+
 ## 启用命令
 
 按仓库选择报告时，旧路由可用 `outputs.routes.rules[].match.repo_ref` 与 `trigger`、`target_kind` 取交集。

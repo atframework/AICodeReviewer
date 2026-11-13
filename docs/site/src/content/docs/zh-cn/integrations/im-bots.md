@@ -123,6 +123,12 @@ outputs:
       issue_link_card: full   # brief | titles（默认）| full
 ```
 
+### 8. 报告效果
+
+[![飞书中的 AICR 卡片：审查目标、问题说明、代码引用与作者提醒](/images/integrations/feishu-report-zh-cn.png)](/images/integrations/feishu-report-zh-cn.png)
+
+点击图片查看原图。
+
 ## 飞书自建应用
 
 使用 `feishu_app` 以自建应用机器人身份发送报告。启用机器人能力、发布应用，
@@ -357,6 +363,12 @@ outputs:
 **4096 个 UTF-8 字节**，仅超限时裁剪正文并注明，原生提醒保留。飞书 webhook 请求上限
 为 **20 KiB**，应用卡片请求为 **30 KiB**，预算包含 JSON 转义与请求字段；报告链接、
 提醒和卡片按钮保留。企业微信应用报告按 2048 字节分片。
+
+### 6. 报告效果
+
+[![企业微信中的 AICR 报告：问题说明、代码引用与独立的作者提醒](/images/integrations/wecom-report-zh-cn.png)](/images/integrations/wecom-report-zh-cn.png)
+
+点击图片查看原图。
 
 ## 外部成员目录（文件）
 
