@@ -1,123 +1,151 @@
-# Writing Guidance: De-AI Wording
+# Writing guidance
 
-Read before editing prose in docs, site pages, examples, prompts, or release
-notes. Applies to both public locales and to AI-facing text. Verify facts
-first; this file only covers wording.
+Apply to repository prose in both public locales and AI-facing documents.
+Match the reader, task, language and existing author voice. Clear, accurate
+writing is the goal; words, punctuation and detector scores do not establish
+authorship. Source scope and verification dates live in the
+[authoring record](../../../../docs/ai/sources/authoring.md#editorial-guidance).
 
-## Current behavior only
+## Revision workflow
 
-- State what the code does now. What a behavior replaced, how older versions
-  worked, and staged notes like "v1 supports X, v2 will add Y" belong to
-  `CHANGELOG.md`, `docs/ai/milestones/`, or a migration guide.
-- Delete superseded paragraphs instead of keeping them for context; git holds
-  the history.
-- Stable API and version identifiers stay: API paths (`bot/v2/hook`),
-  schema values (`legacy_v1`/`isolated_v2`, config document versions),
-  dependency versions, console UI names (版本管理与发布).
-- Unfinished capability goes to the roadmap section in `docs/ai/index.md`; reference docs do not announce it.
+1. Identify the reader, purpose and facts that must survive the edit. Separate
+   verified behavior, inference and unknowns; invent no sources, measurements,
+   experiences or successful checks.
+2. Correct facts and reasoning, then organization, then grammar and wording.
+   Put decisions first in decision notes; retain useful intermediate steps in
+   derivations, tutorials and investigations. Do not force three points,
+   equal-length sections or a summary after every paragraph.
+3. Name the object, action, conditions and result. Keep one name per concept.
+   Replace abstract praise with supported behavior, not an invented benchmark.
+4. Preserve supported author judgment, doubt, first person and register.
+   Do not flatten every text into a neutral report or add fictional anecdotes,
+   slang, emotion or deliberate errors to imitate a person.
+5. Compare the revision with the original for semantic changes and repeated
+   patterns across nearby headings, captions and navigation. Change only the
+   affected passages; stop or revert when another pass adds no clear benefit.
 
-## English wording
+## Current behavior
 
-Banned on site pages, enforced by
-`docs/site/scripts/validate-bilingual-consistency.mjs`: delve, leverage,
-seamless, robust, streamline, unlock, elevate, empower, cutting-edge,
-game-changer, realm, journey, crucial, vital, comprehensive, utilize,
-facilitate, effortless(ly).
+- Describe what the implementation does now. Superseded behavior and staged
+  history belong in `CHANGELOG.md`, milestones or migration documentation.
+- Preserve stable API/version identifiers and console UI names. Unfinished
+  capabilities belong in the roadmap in `docs/ai/index.md`.
+- Distinguish implementation, build checks, synthetic tests and real-service
+  acceptance. Unverified, missing a real sample and checked-but-failed are
+  different states; none means unsupported without further evidence.
 
-Banned in human review: tapestry, testament, pivotal, landscape (abstract),
-navigate (figurative), underscore/highlight (verb), intricate, meticulous,
-foster, garner, showcase, vibrant, bolster, align with, deep dive, valuable,
-key (adjective), quietly (manner adverb), sentence-initial
-Additionally/Moreover/Furthermore, overused ensure, patronizing simply.
-Technical senses stay: gate a release, highlight a line, a robustness
-property.
+## Headings and entry labels
 
-Sentence patterns:
+- Use a noun or noun phrase, optionally with a concrete modifier, for document,
+  section and product-card headings: `IM 集成示例` / `IM integration examples`,
+  rather than the sentence `在团队群聊中查看评审结果`. This noun-heading convention
+  is a repository preference, not a universal research finding. Body sentences
+  still need clear verbs.
+- Name the subject directly. Avoid sentence headings, questions, invitations,
+  slogans and `从……到……` / `From … to …` or `先……再……` / `First … then …`
+  coverage slogans. Preserve actual ranges and execution order in the body.
+- Keep headings short and parallel at the same level. Use sentence case in
+  English, no decorative emoji or final period, and no forced line breaks for
+  responsive layouts. Check both languages at their actual display widths.
+- Labels identify the destination or action: `快速上手` for that guide,
+  `查看完整截图` for the full image. Buttons can use action verbs. Keep names
+  consistent and merge duplicate destinations with identical actions; retain
+  genuinely different operations. Do not imply an unverified action.
+- Protect anchors when headings change; update affected links or retain an
+  explicit anchor. Proper names, quoted headings and literal UI labels retain
+  their required wording.
 
-- `not X but Y`, `not just X`: state the point directly.
-- Forced triads: use as many items as the meaning has.
-- False ranges: `from X to Y` only when both ends are real and the same kind.
-- Rider clauses: cut trailing `highlighting` / `underscoring` / `ensuring`
-  phrases that add no fact.
-- Copula avoidance: prefer is/are/has over serves as, boasts, features.
-- Synonym cycling: one thing, one name.
-- Stacked hedges: keep one qualifier, and only with evidence.
-- Vague attribution: name the source or cut the claim.
-- Staged openers (`Let's dive in`, `Whether you're ...`, `In today's ...`)
-  and one-line closers (`That is the real win.`): remove.
-- Sales language (boasts, renowned, groundbreaking): state what the thing is.
-- Dashes: prefer comma, colon, or period; keep a dash only for a real break.
+## Semantic preservation
 
-Structure:
+- Preserve negation, conditions, quantities, units, range endpoints, ordering,
+  causality, modality and verification status. `MUST`, `should` and `may` are not
+  interchangeable. Three total attempts include the first call, leaving at most
+  two retries.
+- Preserve identifiers, config keys, environment variables, paths, protocol
+  text, quotations and executable examples. Investigate functional defects
+  separately from wording fixes.
+- Keep limits and uncertainty that affect the conclusion. Never turn
+  correlation into causation, an observation into a guarantee, or a completed
+  operation into a successful one without support.
+- Preserve accurate technical terms and supported criticism. Translate according
+  to each language's syntax while retaining technical meaning. Do not rotate
+  cache, copy, replica and view as synonyms.
 
-- No filler openings, section previews, or per-section summaries.
-- Bold carries information (field names, UI labels); a decorative bold-label
-  list is not a prose substitute.
-- Sentence-case headings; no emoji or decorative arrows.
+## Wording review
 
-## 中文用词
+Review these patterns in context; they are not automatic replacement rules:
 
-机器强制（站点页面，脚本同上）：强大、高效、灵活、便捷、丰富、完善、智能、
-优雅、无缝、轻松、极大地、显著、至关重要、赋能、助力、打造、抓手。
+- Empty openings, writing previews, canned conclusions and assistant chatter.
+  Remove content that adds no fact, relationship, condition or useful action.
+- Repeated sentence starts, nominalizations, nested modifiers and trailing
+  `enabling` / `ensuring` / `highlighting` clauses. Restore a clear subject and
+  supported relationship without producing disconnected fragments. Necessary
+  transitions and passive constructions remain valid.
+- `不是 A，而是 B` / `not X but Y`: retain real correction, distinction and
+  exclusion; remove a contrast invented only for emphasis. Simplifying
+  `不仅 A，而且 B` / `not only X but also Y` must preserve both facts.
+- Unmeasured praise and vague attribution. State supported capabilities and
+  identify the source of a claim; do not invent a benchmark to replace an adjective.
+- Synonym cycling, stacked hedges, forced triads and decorative bold-label lists.
+  Use paragraphs for reasoning, lists for parallel items or steps, and tables
+  for comparisons or field mappings.
+- Punctuation used for artificial emphasis. Choose commas, colons, parentheses
+  and dashes for their actual function; no punctuation quota or random sentence
+  variation makes a text more human.
 
-人工审：核心（作修饰语）、全方位、深层次、系统性（空用时）、彻底、完美、
-极致、落地（隐喻义）、进行（冗余）、非常/十分/特别（冗余）、
-首先/其次/再次/最后（机械排序）、综上（所述）、总而言之、总的来说、
-值得注意的是、需要指出的是。
+### Project style checks
 
-句式：
+The existing site validator rejects the following wording as project style,
+not as proof of AI authorship. Keep its checks intact; do not expand a lint
+finding into a global replacement or silently weaken the gate. Quotations,
+identifiers and accurate technical senses need contextual review.
 
-- “不是 A，而是 B”“不仅……还……”“既……又……” 改为直接陈述；指令性的
-  “要 X，不要 Y” 保留。
-- 删 “通过 X，你可以 Y”、“让/使……更加……”。
-- 删每节总结、章节预告（“本节将……”、“如前所述”）和空洞开头。
-- 不用形容词代替证据：写具体值、路径和行为。
-- 避免英式中文：少用被动和长定语，按中文习惯用主动短句。
-- 虚假范围：“从 X 到 Y” 仅在两端同类且真实覆盖时使用。
+English: delve, leverage, seamless, robust, streamline, unlock, elevate,
+empower, cutting-edge, game-changer, realm, journey, crucial, vital,
+comprehensive, utilize, facilitate, effortless(ly).
 
-结构：
+中文：强大、高效、灵活、便捷、丰富、完善、智能、优雅、无缝、轻松、极大地、
+显著、至关重要、赋能、助力、打造、抓手。
 
-- 先说结论，一段一事。
-- 列表和表格承载规范信息（字段、默认值、命令）；装饰性的
-  “加粗标签：描述” 列表不作正文。
-- 不为自然感引入口语梗、表情或营销比喻。
+Other cues such as tapestry, pivotal, landscape, foster, moreover, 核心、
+全方位、落地、进行 and 综上所述 require contextual review, not a second
+automatic ban list. A useful summary, accurate term or real transition can remain.
 
-## 中文技术术语
+## Technical terminology
 
-整份强制性设计用“规范”，接口行为和兼容边界用“约定”，字段限制与处理顺序用“规则”，
-外部服务格式用“协议”，完成条件用“验收标准”。不要把软件设计文档、开发计划或测试要求统称
-“合同”；只有确实描述法律协议时才使用该词。
-“夹具”指测试数据时改用“测试数据”“测试样本”或“样本数据”；只有真正的 setup/teardown
-脚手架才保留“测试夹具”，沿用英文时写 fixture。
-已被代码、工具或现有引用使用的英文文件名、技能标识和 API 名称保持原样，修改面向读者的标题与正文。
-任务恢复用“重新排队”，定时器按动作使用“设置定时器”“启动定时器”或“恢复定时器”，
-避免将英文 arm/re-arm 直译为军事用语。代码标识、原始日志及协议原文保持原样。
+Software documents use 规范 for a specification, 约定 for interface behavior,
+规则 for field constraints, 协议 for external formats and 验收标准 for acceptance.
+Reserve 合同 for its legal meaning, quotations or existing identifiers.
+Static fixture input is 测试数据 or 样本; retain fixture for actual test setup.
+Describe timer operations as 设置、重启 or 再次注册 according to the interface.
 
-## 里程碑归档
+For abstract terms such as 预算、水位、兜底、证据 or 门槛, identify the actual
+quantity, threshold, fallback action, source, test result or prerequisite.
+Preserve defined financial budgets, stream watermarks and other exact terms.
+Distinguish retries from total attempts, deadlines from durations, and accepted,
+committed, persisted and acknowledged states.
 
-简述问题和解决方式，必要时链接稳定规范；保留影响结论的失败、跳过和验收范围。
-删除被评审项目的目录结构、业务内容、仓库与人员标识、具体运行编号，以及操作过程、
-测试清单和重复实现说明。详细日志放在 `build/logs/`，过程可由 Git 历史追溯。
+## Visual examples
 
-## Exceptions
+- State what a screenshot demonstrates. Keep text readable at its rendered size,
+  crop unused margins or select an excerpt, and preserve aspect ratio. Avoid a
+  fixed-height frame that leaves a short image above a large blank area. Auto
+  margins can move that blank area above the image without solving it. For
+  equal-height rows, use matching crop ratios and shared caption/image/action
+  tracks; verify their adjacency as well as the card height. Inspect mobile and
+  desktop views, not source dimensions alone.
+- Disclose excerpts and provide the full image or a detail view when needed.
+  Preserve diagnostic text; distinguish real screenshots, rendered outputs and
+  illustrations. Never fabricate a successful run.
+- Captions, alternative text, labels and targets must agree. Content takes
+  priority over decorative symmetry; screenshots need not have equal heights.
+  The site's [report gallery](../../../../docs/site/src/components/IntegrationGallery.astro)
+  uses content-specific crop coordinates and links to full originals.
 
-- Quotes, error messages, and proper names keep their original wording.
-- `CHANGELOG.md` and milestones describe past changes. Milestones follow the
-  concise archive rules above; editing prose must preserve factual conclusions
-  and material validation limits.
-- A watched phrase inside a discussion of that phrase is exempt.
+## Milestones
 
-## Sources
-
-Checked 2026-09-21:
-
-- Wikipedia, "Signs of AI writing" (WikiProject AI Cleanup):
-  <https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing>
-- blader/humanizer SKILL.md, executable form of the pattern list:
-  <https://github.com/blader/humanizer>
-- Towards AI editing guide, structure before vocabulary:
-  <https://www.louisbouchard.ai/ai-editing/>
-- 科普中国《为什么AI写的文章，总有一股“AI味”？》:
-  <https://news.sciencenet.cn/htmlnews/2025/10/553334.shtm>
-- 36氪《消除“罪证”：给写作去除“AI味”的不完全手册（2026版）》:
-  <https://www.36kr.com/p/3824601267196037>
+Briefly state the problem and solution and link stable specifications. Retain
+material validation failures, skips and scope limits. Omit reviewed-project
+details, identities, operation logs and duplicate implementation descriptions.
+Preserve historical dates, versions, commands and factual conclusions when
+editing validation records. Version control retains the editing history.

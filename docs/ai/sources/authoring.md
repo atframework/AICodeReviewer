@@ -69,3 +69,46 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `last_checked`: 2026-09-12
 - `next_review`: 2026-12-12
 - `update_trigger`: Instruction loading, skill metadata, reference routing or prompt-authoring changes.
+
+## Editorial guidance
+
+- Local input: the user-supplied *AI 写作规范：准确、自然，保留作者声音*,
+  with source checks dated 2026-10-06. Reviewed its short rules, heading and
+  entry-label guidance, technical safeguards, visual examples and update method.
+  The portable repository rules do not require access to the user's notebook.
+- Sources checked on 2026-11-13:
+  - [Google: Voice and tone](https://developers.google.com/style/tone), page
+    updated 2026-05-27: direct, useful technical prose; repeated openings,
+    fragmented sentences and unsupported ease claims need review.
+  - [Microsoft: Headings](https://learn.microsoft.com/en-us/style-guide/scannable-content/headings):
+    short, specific, parallel headings and responsive line breaks. Its general
+    guide permits task-oriented verbs; this repository's noun-phrase heading
+    rule is the user's stricter editorial preference.
+  - [Wikipedia: Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing):
+    reviewed caveats and current/historical indicators. This changing community
+    advice is descriptive, not policy or an authorship test; individual words,
+    punctuation and templates are not sufficient evidence of provenance.
+  - [Sourati et al.: The shrinking landscape of linguistic diversity](https://pubmed.ncbi.nlm.nih.gov/42637911/),
+    Nature Human Behaviour, 2026: read the indexed author abstract. Its findings
+    motivate preserving author differences during editing; the paywalled
+    methods were not reviewed and its effect sizes are not repository targets.
+  - [Shan et al.: AI Writers Have a Consistent Stylometric Footprint, but AI Editors Do Not](https://arxiv.org/abs/2608.27855v2),
+    version 2, 2026-09-22: read the abstract distinguishing generation from
+    editing. No blanket detector threshold or cross-language word list follows.
+    Publication status was not independently verified beyond this arXiv version.
+  - [Morgenstern et al.: Contextuality and Contradictions](https://arxiv.org/abs/2611.08704v1),
+    preprint, 2026-11-05: read the abstract about contextual and contradictory
+    AI identifications among Wikipedia editors and students. This is recent
+    exploratory evidence, not a universal technical-writing specification.
+- Decision: use task-aware revision, semantic comparison and author-voice
+  preservation in the shared writing guide. Treat wording patterns as review
+  cues; retain the existing site style checks without changing their gates.
+  Noun headings and content-shaped screenshot previews are explicit project
+  choices, not experimentally established guarantees.
+- Validation limits: local source, link, metadata, rendering and repository
+  checks do not establish a model-quality improvement. No controlled multi-model
+  writing comparison, reader blind evaluation or detector benchmark was run.
+- `last_checked`: 2026-11-13
+- `next_review`: 2027-02-13
+- `update_trigger`: Repeated loss of meaning or author voice, new language or
+  genre, changed official editorial guidance, or materially different research.

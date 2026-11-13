@@ -5,7 +5,7 @@ description: "Verify facts and edit clear bilingual repository Markdown, includi
 
 # Docs Writing Style
 
-## Verify before writing
+## Fact verification
 
 1. List the fields, defaults, commands, paths and behavior claims being changed.
 2. Check schema (`packages/core/src/config.ts`), wiring (server bootstrap), then
@@ -19,17 +19,21 @@ description: "Verify facts and edit clear bilingual repository Markdown, includi
    criterion according to the behavior being described.
    For terminology-only localization, inspect the parallel locale and leave its
    wording intact when it already conveys the same behavior.
-4. Run the repository Markdown gate. For site edits run its applicable checks
+4. Compare the revision with the original for negation, conditions, quantities,
+   technical identifiers, author judgment and validation status. Apply the
+   linked guidance to headings, entry labels and screenshots as well as prose;
+   inspect affected nearby text rather than rewriting the whole document.
+5. Run the repository Markdown gate. For site edits run its applicable checks
    from [the baseline](../../../docs/ai/AGENTS.repository-baseline.md).
 
 ## Wording
 
 Apply [writing guidance](../ai-agent-maintenance/references/writing-guidance.md):
-current-version-only statements, the banned word lists for both locales,
-sentence patterns, structure rules, and the exceptions for technical
-specifications and change records.
+current behavior, noun-phrase headings, semantic preservation, author voice,
+contextual wording review and visual examples. Keep one owner for these rules;
+do not copy the full guide into runtime prompts or client bridges.
 
-The unambiguous subset is enforced by
+The existing project-style subset is enforced by
 `docs/site/scripts/validate-bilingual-consistency.mjs`; context-dependent wording
 still needs review. Milestones briefly state the problem and solution; preserve
 material validation failures, skips, and scope limits. Remove reviewed-project

@@ -6,7 +6,7 @@ user-invocable: false
 
 # AI Agent Maintenance
 
-## Research and choose the surface
+## Instruction ownership
 
 1. Inventory current instructions, skills, references, runtime prompt builders,
    and their callers. Start with `git status`/`git diff`; preserve unrelated edits.
@@ -21,7 +21,7 @@ user-invocable: false
    narratives. Retain non-obvious invariants, failure boundaries, and source/test
    pointers. Do not copy complete schemas, CLI manuals, or deployment runbooks.
 
-## Keep discovery and loading cheap
+## Context routing
 
 - Descriptions name the task and a useful exclusion; directory and frontmatter
   `name` match. Preserve existing invocation metadata. Do not add proprietary
@@ -43,9 +43,9 @@ user-invocable: false
   [Windows reference](../modern-cli-toolkit/references/powershell-for-agents.md).
 - Prose in prompts, skills, bridges, and docs follows
   [writing guidance](references/writing-guidance.md): current-version-only
-  statements and the de-AI wording rules live there.
+  statements, heading conventions, semantic checks and editorial rules live there.
 
-## Validate the resulting reading path
+## Validation
 
 - Run the real repository Markdown gate after the final edit; verify it discovers
   new references. Check YAML metadata, local links, moved anchors, and duplicate

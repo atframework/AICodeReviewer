@@ -42,11 +42,10 @@ import IntegrationGallery from "../../../components/IntegrationGallery.astro";
 agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机器人。agent 的
 自由文本 stdout 不会作为正式报告。
 
-## 在团队群聊中查看评审结果
+## IM 集成示例
 
-评审完成后，团队可以在群聊中收到带代码上下文的问题说明、带作者提醒的报告卡片，
-或链接到完整报告的简要通知。下方提供各 IM 的接入指南；点击截图可查看完整原图，
-长报告在预览中展示开头部分。
+五种 IM 的实际报告节选，包含问题说明、代码引用、作者提醒和详情链接。
+预览按消息内容裁剪，点击截图可查看未经修改的完整原图。
 
 <IntegrationGallery
   guidesLabel="IM 接入指南"
@@ -60,22 +59,14 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
   ]}
   cards={[
     {
-      platform: "企业微信",
-      label: "问题详情",
-      description: "在群聊报告中查看问题说明、文件位置和引用的代码。",
-      src: "/images/integrations/wecom-report-zh-cn.png",
-      alt: "企业微信中的 AICR 报告：严重级别、问题说明、代码引用与作者提醒",
-      width: 2909,
-      height: 1193,
-    },
-    {
       platform: "Discord",
       label: "摘要通知",
-      description: "简要列出问题，附上 issue 中的完整报告链接。",
+      description: "完整报告链接与 issue 预览卡片。",
       src: "/images/integrations/discord-report-zh-cn.png",
-      alt: "Discord 中的 AICR 通知：问题位置、完整报告链接与链接预览",
+      alt: "Discord 中的 AICR 通知节选：完整报告链接与 issue 预览卡片",
       width: 2817,
       height: 878,
+      crop: { left: 103, top: 245, width: 648, height: 405 },
     },
     {
       platform: "飞书",
@@ -85,11 +76,42 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
       alt: "飞书中的 AICR 卡片：审查目标、问题说明、代码引用与作者提醒",
       width: 998,
       height: 1519,
+      crop: { left: 75, top: 55, width: 912, height: 570 },
+    },
+    {
+      platform: "Telegram",
+      label: "评审通知",
+      description: "Bot 消息中的严重级别、问题详情和代码引用。",
+      src: "/images/integrations/telegram-report-zh-cn.png",
+      alt: "Telegram 中的 AICR 报告：严重级别、问题说明与代码引用",
+      width: 1549,
+      height: 1029,
+      crop: { left: 82, top: 350, width: 1040, height: 650 },
+    },
+    {
+      platform: "企业微信",
+      label: "问题详情",
+      description: "在群聊报告中查看问题说明、文件位置和引用的代码。",
+      src: "/images/integrations/wecom-report-zh-cn.png",
+      alt: "企业微信中的 AICR 报告：严重级别、问题说明、代码引用与作者提醒",
+      width: 2909,
+      height: 1193,
+      crop: { left: 9, top: 40, width: 1440, height: 900 },
+    },
+    {
+      platform: "Slack",
+      label: "问题详情",
+      description: "频道报告中的审查目标、问题说明与代码引用。",
+      src: "/images/integrations/slack-report-zh-cn.png",
+      alt: "Slack 中的 AICR 报告：审查目标、问题说明与代码引用",
+      width: 2219,
+      height: 946,
+      crop: { left: 68, top: 32, width: 1200, height: 750 },
     },
   ]}
 />
 
-## AICR 做什么
+## 产品能力
 
 <CardGrid>
   <Card title="结构化报告规范" icon="approve-check-circle">
@@ -141,7 +163,7 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
 
 </Steps>
 
-## 核心特性
+## 功能特性
 
 - **多 VCS 接入。** GitHub、Gitea、Forgejo、GitLab 通过 webhook
   接入；Perforce (P4) 和 Subversion (SVN) 通过 trigger 端点接入。全部归一为同一个

@@ -7,6 +7,7 @@ interface ReportPreview {
   alt: string;
   width: number;
   height: number;
+  crop?: { left: number; top: number; width: number; height: number };
 }
 
 interface Props {
@@ -26,7 +27,15 @@ const { cards, guides, guidesLabel, openLabel } = Astro.props;
     </ul>
   </nav>
   <div class="report-grid">
-    {cards.map((card) => (
+    {cards.map((card) => {
+      const crop = card.crop ?? { left: 0, top: 0, width: card.width, height: card.height };
+      const previewStyle = [
+        `aspect-ratio: ${crop.width} / ${crop.height}`,
+        `--image-width: ${card.width / crop.width * 100}%`,
+        `--image-left: ${-crop.left / crop.width * 100}%`,
+        `--image-top: ${-crop.top / crop.height * 100}%`,
+      ].join('; ');
+      return (
       <figure class="report-card">
         <figcaption>
           <div class="report-heading">
@@ -36,7 +45,7 @@ const { cards, guides, guidesLabel, openLabel } = Astro.props;
           <p>{card.description}</p>
         </figcaption>
         <a class="report-link" href={card.src} aria-label={`${card.platform}: ${openLabel}`}>
-          <span class="report-preview">
+          <span class="report-preview" style={previewStyle}>
             <img
               src={card.src}
               alt={card.alt}
@@ -51,7 +60,8 @@ const { cards, guides, guidesLabel, openLabel } = Astro.props;
           </span>
         </a>
       </figure>
-    ))}
+      );
+    })}
   </div>
 </div>
 
@@ -98,8 +108,11 @@ const { cards, guides, guidesLabel, openLabel } = Astro.props;
   }
 
   .report-card {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 3;
+    row-gap: 0;
+    box-sizing: border-box;
     min-width: 0;
     margin: 0;
     overflow: hidden;
@@ -140,23 +153,29 @@ const { cards, guides, guidesLabel, openLabel } = Astro.props;
   }
 
   .report-link {
-    display: block;
-    margin-top: auto;
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span 2;
+    row-gap: 0;
     color: var(--sl-color-white);
     text-decoration: none;
   }
 
   .report-preview {
     display: block;
+    position: relative;
     overflow: hidden;
-    aspect-ratio: 16 / 9;
     border-block: 1px solid var(--sl-color-gray-5);
     background: #1b1d20;
   }
 
   .report-preview img {
     display: block;
-    width: 100%;
+    position: absolute;
+    top: var(--image-top);
+    left: var(--image-left);
+    width: var(--image-width);
+    max-width: none;
     height: auto;
     margin: 0;
   }
@@ -180,9 +199,33 @@ const { cards, guides, guidesLabel, openLabel } = Astro.props;
     outline-offset: -3px;
   }
 
-  @media (min-width: 64rem) {
+  @media (min-width: 48rem) {
     .report-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .report-card {
+      grid-column: span 2;
+    }
+
+    .report-card:last-child:nth-child(odd) {
+      grid-column: 2 / span 2;
+    }
+  }
+
+  @media (min-width: 72rem) {
+    .report-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .report-card,
+    .report-card:last-child:nth-child(odd) {
+      grid-column: span 2;
+    }
+
+    .report-card:nth-child(4),
+    .report-card:last-child:nth-child(5) {
+      grid-column: span 3;
     }
   }
 </style>

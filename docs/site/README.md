@@ -118,10 +118,14 @@ ships with Starlight (no extra integration needed); those components do **not**
 render in plain `.md` (they leak as literal tags). `validate-public-content.mjs`
 scans both `.md` and `.mdx`.
 
-Both landing pages use `src/components/IntegrationGallery.astro` for three
-localized report previews and links to all five IM setup guides. The gallery
-uses three columns from 64rem and stacks below that width. Equal-height image
-frames show the start of long reports; each preview links to the unmodified
+Both landing pages use `src/components/IntegrationGallery.astro` for five
+localized report previews and IM setup links. Cards flow by row: one per row
+below 48rem, two from 48rem, and three above two wider cards from 72rem.
+Incomplete rows are centered. CSS subgrid aligns each row's captions, image
+frames and full-image links. Every preview uses an 8:5 crop, so equal-height
+cards need no spacer above or below the image.
+Per-image crop coordinates select a message excerpt without
+adding empty space or distorting the image; each preview links to the unmodified
 full-size image. Styles are scoped to the component, images load lazily with
 explicit dimensions, and the gallery needs no client-side JavaScript. Check
 both locales and themes on mobile and wide screens, including keyboard focus,

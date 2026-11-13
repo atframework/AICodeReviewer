@@ -8,7 +8,7 @@ records from primary sources and mark unavailable claims unverified.
 
 | Change | Source records |
 | --- | --- |
-| AGENTS, skill descriptions, progressive disclosure, review prompt design | [Authoring](sources/authoring.md) |
+| AGENTS, skill descriptions, progressive disclosure, review prompt design, editorial guidance | [Authoring](sources/authoring.md) |
 | Claude/Copilot editor instructions, optional client bridges | [Clients](sources/clients.md) |
 | Kilo/Zoo, OpenCode or Copilot CLI flags/config/skills | [CLI adapters](sources/cli-adapters.md) |
 | pi/omp models, MCP, trust, events or search | [pi family](sources/pi-family.md) |
